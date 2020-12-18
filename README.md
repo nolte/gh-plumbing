@@ -11,3 +11,7 @@ probot                                                            | git         
 
 
 For More Inforation take a look to the GH Page, [gh-plumbing](http://nolte.github.io/gh-plumbing).
+
+## Links
+
+* [nolte/cookiecutter-gh-project](https://github.com/nolte/cookiecutter-gh-project) for templating.
