@@ -1,0 +1,8 @@
+---
+_extends: gh-plumbing:.github/commons-settings.yml
+
+repository:
+  name: gh-plumbing
+  description: Github Project plumbing
+  homepage: https://nolte.github.io/gh-plumbing/
+  topics: github, plumbing

@@ -1,0 +1,20 @@
+name: Release Deliver to Master
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish_docs:
+    name: "Publish the the Release to Master"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v2.3.2
+      - name: Merge Tag -> Master
+        uses: devmasx/merge-branch@v1.3.1
+        with:
+          type: now
+          from_branch: ${{ github.event.ref }}
+          target_branch: master
+          github_token: ${{ github.token }}

@@ -1,0 +1,19 @@
+name: Release Deliver Docs
+
+on:
+  release:
+    types: [published]
+jobs:
+  publish_docs:
+    name: "Publish the HTML Documentation"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v2.3.2
+
+      # TODO add feature toogle for mkdocs and hugo
+      - name: Deploy docs
+        uses: mhausenblas/mkdocs-deploy-gh-pages@1.16
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CONFIG_FILE: mkdocs.yml

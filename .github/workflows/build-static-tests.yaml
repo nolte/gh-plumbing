@@ -1,0 +1,15 @@
+name: CI Static Tests
+
+on:
+  push:
+jobs:
+  static:
+    name: "Static CI Tests"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v2.3.2
+
+      - uses: actions/setup-python@v2
+
+      - uses: pre-commit/action@v2.0.0

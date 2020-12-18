@@ -1,0 +1,100 @@
+---
+# These settings are synced to GitHub by https://probot.github.io/apps/settings/
+repository:
+
+  # Either `true` to make the repository private, or `false` to make it public.
+  private: false
+
+  # Either `true` to enable issues for this repository, `false` to disable them.
+  has_issues: true
+
+  # Either `true` to enable projects for this repository, or `false` to disable them.
+  # If projects are disabled for the organization, passing `true` will cause an API error.
+  has_projects: true
+
+  # Either `true` to enable the wiki for this repository, `false` to disable it.
+  has_wiki: true
+
+  has_pages: true
+
+  # Either `true` to enable downloads for this repository, `false` to disable them.
+  has_downloads: true
+
+  # Updates the default branch for this repository.
+  default_branch: develop
+
+  # Either `true` to allow squash-merging pull requests, or `false` to prevent
+  # squash-merging.
+  allow_squash_merge: true
+
+  # Either `true` to allow merging pull requests with a merge commit, or `false`
+  # to prevent merging pull requests with merge commits.
+  allow_merge_commit: true
+
+  # Either `true` to allow rebase-merging pull requests, or `false` to prevent
+  # rebase-merging.
+  allow_rebase_merge: true
+
+  delete_branch_on_merge: true
+
+# Labels: define labels for Issues and Pull Requests
+labels:
+  - name: bug
+    color: "#CC0000"
+    description: An issue with the system.
+
+  - name: enhancement
+    color: "#336699"
+    description: New functionality.
+
+  - name: chore
+    color: "#6e70ef"
+    description: Maintenance
+
+  - name: question
+    color: "#3ffc8a"
+    description: User question
+
+  - name: documentations
+    color: "#caa7e8"
+    description: Update documentation
+
+  - name: cicd
+    color: "#fbca04"
+    description: ci/cd process functionality.
+
+  - name: project-config
+    color: "#ed979d"
+    description: Change GitHub project config, keep a extra eye on merge.
+
+  - name: breaking-change
+    color: "#fc415d"
+    description: Planed braking provider change.
+
+  - name: duplicate
+    color: "#cfd3d7"
+    description: This issue or pull request already exists.
+
+  - name: dependencies
+    color: "#0366d6"
+    description: Pull requests that update a dependency file.
+
+  - name: wontfix
+    color: "#ffffff"
+    description: ""
+
+branches:
+  - name: master
+    protection:
+      required_pull_request_reviews: null
+      required_status_checks: null
+      enforce_admins: true
+      restrictions: null
+  - name: develop
+    protection:
+      required_pull_request_reviews: null
+      required_status_checks:
+        strict: true
+        contexts:
+          - "Static CI Tests"
+      restrictions: null
