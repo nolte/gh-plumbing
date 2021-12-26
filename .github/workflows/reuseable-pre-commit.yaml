@@ -1,0 +1,16 @@
+name: CI Static Tests
+
+on:
+  workflow_call:
+
+jobs:
+  static:
+    name: "Static CI Tests"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v2.4.0
+
+      - uses: actions/setup-python@v2
+
+      - uses: pre-commit/action@v2.0.3

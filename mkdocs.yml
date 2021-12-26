@@ -1,10 +1,15 @@
 site_name: Github Plumping (Shared Probot Configs)
 theme:
-  name: 'material'
+  name: material
 docs_dir: docs/
 repo_name: 'nolte/gh-plumbing'
 repo_url: 'https://github.com/nolte/gh-plumbing'
+plugins:
+  - include-markdown
 markdown_extensions:
+  - pymdownx.inlinehilite:
+  - pymdownx.superfences:
+  - pymdownx.highlight:
   - toc:
       permalink: True
 extra_css:
