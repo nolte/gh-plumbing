@@ -3,6 +3,6 @@ on:
 
 jobs:
   static:
-    uses: nolte/gh-plumbing/.github/workflows/reuseable-pre-commit.yaml@feature/reusing-workflows
+    uses: nolte/gh-plumbing/.github/workflows/reuseable-pre-commit.yaml@develop
   security:
-    uses: nolte/gh-plumbing/.github/workflows/reuseable-trivy.yaml@feature/reusing-workflows
+    uses: nolte/gh-plumbing/.github/workflows/reuseable-trivy.yaml@develop
