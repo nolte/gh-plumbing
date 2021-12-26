@@ -1,4 +1,0 @@
----
-# These settings are synced to GitHub by https://probot.github.io/apps/stale/
-
-_extends: gh-plumbing:.github/commons-stale.yml
