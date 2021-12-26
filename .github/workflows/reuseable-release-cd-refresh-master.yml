@@ -7,6 +7,10 @@ on:
         required: false
         default: ${{ github.event.ref }}
         type: string
+      target_branch:
+        required: false
+        default: master
+        type: string
     secrets:
       token:
         required: true
@@ -23,5 +27,5 @@ jobs:
         with:
           type: now
           from_branch: ${{ inputs.from_branch }}
-          target_branch: master
+          target_branch: ${{ inputs.target_branch }}
           github_token: ${{ secrets.token }}
