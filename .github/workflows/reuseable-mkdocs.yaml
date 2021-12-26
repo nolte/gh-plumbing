@@ -1,0 +1,21 @@
+name: Release Deliver Docs
+
+on:
+  workflow_call:
+    secrets:
+      token:
+        required: true
+
+jobs:
+  publish_docs:
+    name: "Publish the HTML Documentation"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v2.4.0
+
+      # TODO add feature toogle for mkdocs and hugo
+      - name: Deploy docs
+        uses: mhausenblas/mkdocs-deploy-gh-pages@1.24
+        env:
+          token: ${{ secrets.token }}
