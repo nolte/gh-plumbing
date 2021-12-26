@@ -2,6 +2,12 @@ name: Release Deliver Docs
 
 on:
   workflow_call:
+    inputs:
+      requirements:
+        description: 'path of the requirements dependencies file'
+        required: false
+        default: "./requirements-dev.txt"
+        type: string
     secrets:
       token:
         required: true
@@ -14,8 +20,8 @@ jobs:
       - name: Checkout master
         uses: actions/checkout@v2.4.0
 
-      # TODO add feature toogle for mkdocs and hugo
       - name: Deploy docs
         uses: mhausenblas/mkdocs-deploy-gh-pages@1.24
         env:
-          token: ${{ secrets.token }}
+          GITHUB_TOKEN: ${{ secrets.token  }}
+          REQUIREMENTS: ${{ inputs.requirements }}
