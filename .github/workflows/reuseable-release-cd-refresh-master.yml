@@ -1,0 +1,31 @@
+name: Release Deliver to Master
+
+on:
+  workflow_call:
+    inputs:
+      from_branch:
+        required: false
+        default: ${{ github.event.ref }}
+        type: string
+      target_branch:
+        required: false
+        default: master
+        type: string
+    secrets:
+      token:
+        required: true
+
+jobs:
+  refresh_presentation_branch:
+    name: "Publish the the Release to Master"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v2.4.0
+      - name: Merge Tag -> Master
+        uses: devmasx/merge-branch@1.4.0
+        with:
+          type: now
+          from_branch: ${{ inputs.from_branch }}
+          target_branch: ${{ inputs.target_branch }}
+          github_token: ${{ secrets.token }}
