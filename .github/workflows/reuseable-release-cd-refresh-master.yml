@@ -2,7 +2,7 @@ name: Release Deliver to Master
 
 on:
   workflow_call:
-    input:
+    inputs:
       from_branch:
         required: false
         default: ${{ github.event.ref }}
