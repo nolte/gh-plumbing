@@ -13,9 +13,6 @@ on:
         required: false
         default: "docs"
         type: string
-    secrets:
-      token:
-        required: true
 
 jobs:
   publish_docs:
