@@ -13,6 +13,7 @@ Used for deduplicate the CI/CD Boilerplate-Code. Like [Workflow](https://docs.gi
 | ```reuseable-pre-commit.yaml```     | call [pre-commit](https://pre-commit.com/) for executing a set of Static Tests.                                                                              |
 | ```reuseable-release-drafter.yml``` | Will be use [release-drafter/release-drafter](https://github.com/release-drafter/release-drafter) for updating the current "Draft" Release with a Changelog. |
 | ```reuseable-trivy.yaml```          | Scan the GitRepo by using [aquasecurity/trivy-action](https://github.com/aquasecurity/trivy-action).                                                         |
+| ```reuseable-automerge.yaml```      | Using [pascalgn/automerge-action](https://github.com/pascalgn/automerge-action) for better Merge Request handling.                                           |
 <!--td-workflows-end-->
 
 ## Probot Config
