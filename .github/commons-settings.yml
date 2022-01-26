@@ -37,6 +37,8 @@ repository:
 
   delete_branch_on_merge: true
 
+
+# <!--td-commons-settings-labels-start-->
 # Labels: define labels for Issues and Pull Requests
 labels:
   - name: bug
@@ -82,6 +84,12 @@ labels:
   - name: wontfix
     color: "#ffffff"
     description: ""
+
+  - name: automerge
+    color: "#19F700"
+    description: "Allow automatic Merge."
+
+# <!--td-commons-settings-labels-end-->
 
 branches:
   - name: master
