@@ -49,3 +49,32 @@ repository:
 #### Labelling
 
 For Handle PR and Issue Labels we use [boring-cyborg](https://probot.github.io/apps/boring-cyborg/) for setting labels by Existing roles, like changes at `./docs` allways get the Label `documentations`.
+
+##### Usage
+
+```yaml
+{%
+   include "../.github/boring-cyborg.yml"
+%}
+```
+
+##### Labelling Rules
+
+```yaml
+{%
+   include "../.github/commons-boring-cyborg.yml"
+   start="# <!--td-commons-settings-labels-start-->"
+   end="# <!--td-commons-settings-labels-end-->"
+%}
+```
+
+##### Existing Labels
+
+```yaml
+{%
+   include "../.github/commons-settings.yml"
+   start="# <!--td-commons-settings-labels-start-->"
+   end="# <!--td-commons-settings-labels-end-->"
+%}
+```
+The labels will be preconfigured by use the [Settings](#project-settings) Github Application.

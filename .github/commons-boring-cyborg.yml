@@ -1,4 +1,5 @@
 ---
+# <!--td-commons-settings-labels-start-->
 labelPRBasedOnFilePath:
   cicd:
     - .github/workflows/**
@@ -11,3 +12,4 @@ labelPRBasedOnFilePath:
     - mkdocs.yml
     - .github/ISSUE_TEMPLATE/**
     - .github/pull_request_template.md
+# <!--td-commons-settings-labels-end-->
