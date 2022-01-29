@@ -1,0 +1,25 @@
+name: Release Deliver Docs
+
+on:
+  workflow_call:
+    inputs:
+      molecule_working_dir:
+        description: 'The Molecule Working Directory'
+        type: string
+      molecule_args:
+        description: 'Molecule Extra Arguments'
+        type: string
+
+jobs:
+  molecule:
+    name: "Ansible Molecule Tests"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v2.4.0
+
+      - name: Start ansible molecule Based Tests
+        uses: gofrolist/molecule-action@v2
+        with:
+          molecule_working_dir: ${{ inputs.molecule_working_dir }}
+          molecule_args: ${{ inputs.molecule_args }}
