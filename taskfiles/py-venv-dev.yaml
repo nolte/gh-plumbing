@@ -1,0 +1,11 @@
+# https://taskfile.dev
+
+version: '3'
+
+vars:
+  PYTHON_VENV_DIR: "{{.PYTHON_VENVS_BASEDIR}}/development"
+
+tasks:
+  venv-usage:
+    cmds:
+      - source {{.PYTHON_VENV_DIR}}/bin/activate
