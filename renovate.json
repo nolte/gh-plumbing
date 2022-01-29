@@ -1,6 +1,6 @@
 {
   "extends": [
-    "config:base"
+    "github>nolte/gh-plumbing/renovate-configs:common"
   ],
   "pip_requirements": {
     "fileMatch": ["requirements.*.txt"]

@@ -1,0 +1,24 @@
+# https://taskfile.dev
+
+version: '3'
+
+vars:
+  PYTHON_VENVS_BASEDIR: ~/.vens/
+
+includes:
+  py-dev: ./taskfiles/py-venv-dev.yaml
+
+tasks:
+  pre-commit:
+    desc: Start Precommit
+    deps: ["py-dev:venv-usage"]
+    cmds:
+      - pre-commit run -a
+    silent: true
+
+  mkdocs:
+    desc: Start the Mkdocs, for development
+    deps: ["py-dev:venv-usage"]
+    cmds:
+      - mkdocs serve -a localhost:8001
+    silent: true
