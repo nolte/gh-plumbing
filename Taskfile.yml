@@ -11,14 +11,14 @@ includes:
 tasks:
   pre-commit:
     desc: Start Precommit
-    deps: [py-dev:venv-usage]
+    deps: ["py-dev:venv-usage"]
     cmds:
       - pre-commit run -a
     silent: true
 
   mkdocs:
     desc: Start the Mkdocs, for development
-    deps: [py-dev:venv-usage]
+    deps: ["py-dev:venv-usage"]
     cmds:
       - mkdocs serve -a localhost:8001
     silent: true
