@@ -11,16 +11,18 @@ Used for deduplicate the CI/CD Boilerplate-Code. Like [Workflow](https://docs.gi
 ## Workflows
 
 <!--td-workflows-start-->
-| Workflow                                      | description                                                                                                                                                       |
-|-----------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| ```reuseable-automerge.yaml```                | Using [pascalgn/automerge-action](https://github.com/pascalgn/automerge-action) for better Merge Request handling.                                                |
-| ```reuseable-mkdocs.yaml```                   | Publish a [mkdocs](https://www.mkdocs.org/) based Documentation as [Github Page](https://pages.github.com/).                                                      |
-| ```reuseable-pre-commit.yaml```               | Call [pre-commit](https://pre-commit.com/) for a minimal static tests set, like liter etc.                                                                        |
-| ```reuseable-release-cd-refresh-master.yml``` | Refresh the current master branch, with the Revision from the Latest published Release, so the master/main branch will be present the `latest` Released version.  |
-| ```reuseable-release-drafter.yml```           | Will be use [release-drafter/release-drafter](https://github.com/release-drafter/release-drafter) for updating the current "Draft" Release with a Changelog.      |
-| ```reuseable-sphinx.yaml```                   | Build and Publish a [Sphinx](https://www.sphinx-doc.org/en/master) Documentation as [Github Page](https://pages.github.com/).                                     |
-| ```reuseable-stale.yaml```                    | Mark old or inactive issues and close then, used [actions/stale](https://github.com/actions/stale) for this work.                                                 |
-| ```reuseable-trivy.yaml```                    | Scan the GitRepo by using [aquasecurity/trivy-action](https://github.com/aquasecurity/trivy-action).                                                              |
+| Workflow                                      | description                                                                                                                                                      |
+|-----------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| ```reuseable-ansible-galaxy-push.yaml```      | Using [robertdebock/galaxy-action](https://github.com/robertdebock/galaxy-action) for publish a Ansible Role to [Ansible Galxy](https://galaxy.ansible.com/).    |
+| ```reuseable-ansible-molecule.yaml```         | Start a simple Molecule test run by using the [gofrolist/molecule-action](https://github.com/gofrolist/molecule-action) action.                                  |
+| ```reuseable-automerge.yaml```                | Using [pascalgn/automerge-action](https://github.com/pascalgn/automerge-action) for better Merge Request handling.                                               |
+| ```reuseable-mkdocs.yaml```                   | Publish a [mkdocs](https://www.mkdocs.org/) based Documentation as [Github Page](https://pages.github.com/).                                                     |
+| ```reuseable-pre-commit.yaml```               | Call [pre-commit](https://pre-commit.com/) for a minimal static tests set, like liter etc.                                                                       |
+| ```reuseable-release-cd-refresh-master.yml``` | Refresh the current master branch, with the Revision from the Latest published Release, so the master/main branch will be present the `latest` Released version. |
+| ```reuseable-release-drafter.yml```           | Will be use [release-drafter/release-drafter](https://github.com/release-drafter/release-drafter) for updating the current "Draft" Release with a Changelog.     |
+| ```reuseable-sphinx.yaml```                   | Build and Publish a [Sphinx](https://www.sphinx-doc.org/en/master) Documentation as [Github Page](https://pages.github.com/).                                    |
+| ```reuseable-stale.yaml```                    | Mark old or inactive issues and close then, used [actions/stale](https://github.com/actions/stale) for this work.                                                |
+| ```reuseable-trivy.yaml```                    | Scan the GitRepo by using [aquasecurity/trivy-action](https://github.com/aquasecurity/trivy-action).                                                             |
 <!--td-workflows-end-->
 
 ## Probot Config
