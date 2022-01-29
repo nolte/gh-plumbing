@@ -1,5 +1,9 @@
 # Plumbing
 
+[![Github Project Stars](https://img.shields.io/github/stars/nolte/gh-plumbing.svg?label=Stars&style=social)](https://github.com/nolte/gh-plumbing) [![Github Issue Tracking](https://img.shields.io/github/issues-raw/nolte/gh-plumbing.svg)](https://github.com/nolte/gh-plumbing) [![Github LatestRelease](https://img.shields.io/github/release/nolte/gh-plumbing.svg)](https://github.com/nolte/gh-plumbing) [![.github/workflows/build-static-tests.yaml](https://github.com/nolte/gh-plumbing/actions/workflows/build-static-tests.yaml/badge.svg)](https://github.com/nolte/gh-plumbing/actions/workflows/build-static-tests.yaml) [![.github/workflows/release-cd-deliver-docs.yml](https://github.com/nolte/gh-plumbing/actions/workflows/release-cd-deliver-docs.yml/badge.svg)](https://github.com/nolte/gh-plumbing/actions/workflows/release-cd-deliver-docs.yml)
+
+---
+
 <!--intro-start-->
 Used for deduplicate the CI/CD Boilerplate-Code. Like [Workflow](https://docs.github.com/en/actions) and [Github App](https://docs.github.com/en/developers/apps/getting-started-with-apps/about-apps) configurations.
 <!--intro-end-->
@@ -39,10 +43,25 @@ For More Inforation take a look to the GH Page, [gh-plumbing](http://nolte.githu
 <!--development-intro-start-->
 We use the [asdf](https://asdf-vm.com/) Packagemanager.
 
-
 ```sh
 asdf install
+```
 
+### Worflows
+
+For local testing you can use [nektos/act](https://github.com/nektos/act), run the GitHub Actions locally.
+
+```sh
+act --job=static
+```
+
+will be start the [![.github/workflows/build-static-tests.yaml](https://github.com/nolte/gh-plumbing/actions/workflows/build-static-tests.yaml/badge.svg)](https://github.com/nolte/gh-plumbing/actions/workflows/build-static-tests.yaml) at your local system. 
+
+**For the Moment blocked by [#826](https://github.com/nektos/act/issues/826)**.
+
+### Documentation
+
+```sh
 virtualenv ~/.vens/development
 
 source ~/.vens/development/bin/activate
