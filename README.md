@@ -55,7 +55,7 @@ For local testing you can use [nektos/act](https://github.com/nektos/act), run t
 act --job=static
 ```
 
-will be start the [![.github/workflows/build-static-tests.yaml](https://github.com/nolte/gh-plumbing/actions/workflows/build-static-tests.yaml/badge.svg)](https://github.com/nolte/gh-plumbing/actions/workflows/build-static-tests.yaml) at your local system. 
+will be start the [![.github/workflows/build-static-tests.yaml](https://github.com/nolte/gh-plumbing/actions/workflows/build-static-tests.yaml/badge.svg)](https://github.com/nolte/gh-plumbing/actions/workflows/build-static-tests.yaml) at your local system.
 
 **For the Moment blocked by [#826](https://github.com/nektos/act/issues/826)**.
 
