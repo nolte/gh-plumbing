@@ -89,6 +89,10 @@ labels:
     color: "#19F700"
     description: "Allow automatic Merge."
 
+  - name: project-config
+    color: "#ed979d"
+    description: "GitHub Project Configuration change."
+
 # <!--td-commons-settings-labels-end-->
 
 branches:
