@@ -8,4 +8,4 @@ permissions:
 
 jobs:
   dependency-review:
-    uses: nolte/gh-plumbing/.github/workflows/reuseable-dependency-review.yaml.yaml@develop
+    uses: nolte/gh-plumbing/.github/workflows/reuseable-dependency-review.yaml@develop
