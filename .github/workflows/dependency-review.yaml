@@ -1,0 +1,11 @@
+name: Dependency Review
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    uses: nolte/gh-plumbing/.github/workflows/reuseable-dependency-review.yaml.yaml@develop
