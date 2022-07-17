@@ -20,5 +20,5 @@ jobs:
         id: chain-bench
         uses: aquasecurity/chain-bench-action@v1.0.0
         with:
-          repository-url: ${{ input.repository-url }}
+          repository-url: ${{ inputs.repository-url }}
           GITHUB_TOKEN: ${{ secrets.token }}
