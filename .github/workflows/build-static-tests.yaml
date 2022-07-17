@@ -6,3 +6,7 @@ jobs:
     uses: nolte/gh-plumbing/.github/workflows/reuseable-pre-commit.yaml@develop
   security:
     uses: nolte/gh-plumbing/.github/workflows/reuseable-trivy.yaml@develop
+  chain-bench:
+    uses: nolte/gh-plumbing/.github/workflows/reuseable-chain-bench.yaml@develop
+    secrets:
+      token: ${{ secrets.GITHUB_TOKEN }}

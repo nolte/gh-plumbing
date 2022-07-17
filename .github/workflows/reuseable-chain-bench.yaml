@@ -1,0 +1,24 @@
+name: Chain Bench
+
+on:
+  workflow_call:
+    secrets:
+      token:
+        required: true
+    inputs:
+      repository-url:
+        description: 'Respository url'
+        required: false
+        default: "${{ github.server_url }}/${{ github.repository }}"
+        type: string
+jobs:
+  static:
+    name: "Chain Bench"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Chain Bench
+        id: chain-bench
+        uses: aquasecurity/chain-bench-action@v1.0.0
+        with:
+          repository-url: ${{ inputs.repository-url }}
+          github-token: ${{ secrets.token }}
