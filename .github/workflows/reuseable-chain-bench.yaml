@@ -6,7 +6,7 @@ on:
       token:
         required: true
     inputs:
-      repo_url:
+      repository-url:
         description: 'Respository url'
         required: false
         default: "${{ github.server_url }}/${{ github.repository }}"
@@ -20,5 +20,5 @@ jobs:
         id: chain-bench
         uses: aquasecurity/chain-bench-action@v1.0.0
         with:
-          repository-url:
+          repository-url: ${{ input.repository-url }}
           GITHUB_TOKEN: ${{ secrets.token }}
