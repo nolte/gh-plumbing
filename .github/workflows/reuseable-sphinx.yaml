@@ -27,7 +27,7 @@ jobs:
     name: "Publish the HTML Documentation"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3.0.2
+      - uses: actions/checkout@v3.1.0
 
       - uses: actions/setup-python@v4
         with:
