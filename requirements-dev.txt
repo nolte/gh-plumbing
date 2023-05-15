@@ -1,5 +1,5 @@
 mkdocs-include-markdown-plugin==4.0.4
-mkdocs-material==9.1.8
+mkdocs-material==9.1.12
 mkdocs==1.4.3
 pre-commit==3.2.2
 pymdown-extensions==10.0
