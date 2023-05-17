@@ -6,6 +6,10 @@ on:
       token:
         required: true
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   automerge:
     runs-on: ubuntu-latest
