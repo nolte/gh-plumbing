@@ -23,6 +23,7 @@ Used for deduplicate the CI/CD Boilerplate-Code. Like [Workflow](https://docs.gi
 | ```reuseable-sphinx.yaml```                   | Build and Publish a [Sphinx](https://www.sphinx-doc.org/en/master) Documentation as [Github Page](https://pages.github.com/).                                    |
 | ```reuseable-stale.yaml```                    | Mark old or inactive issues and close then, used [actions/stale](https://github.com/actions/stale) for this work.                                                |
 | ```reuseable-trivy.yaml```                    | Scan the GitRepo by using [aquasecurity/trivy-action](https://github.com/aquasecurity/trivy-action).                                                             |
+| ```reuseable-tf-lint.yaml```                  | Use [terraform-linters/setup-tflint](https://github.com/terraform-linters/setup-tflint) for Lint terraform sources.                                              |
 <!--td-workflows-end-->
 
 ## Probot Config
