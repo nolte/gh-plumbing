@@ -4,6 +4,21 @@ on:
 
 jobs:
   refresh_presentation_branch:
-    uses: nolte/gh-plumbing/.github/workflows/reuseable-release-cd-refresh-master.yml@develop
+    uses: nolte/gh-plumbing/.github/workflows/reusable-release-cd-refresh-master.yml@develop
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}
+
+  archive:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@master
+    - uses: vimtor/action-zip@v1.1
+      with:
+        files: .github/styles/ .vale.ini
+        dest: result.zip
+
+    - name: Upload Release
+      uses: ncipollo/release-action@v1.12.0
+      with:
+          artifacts: "vale-styles.zip"
+          token: ${{ secrets.GITHUB_TOKEN }}
