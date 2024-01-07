@@ -14,7 +14,7 @@ jobs:
     - uses: actions/checkout@master
     - uses: vimtor/action-zip@v1.1
       with:
-        files: .github/styles .vale.ini
+        files: .github/styles/ .vale.ini
         dest: vale-styles.zip
         recursive: false
 
