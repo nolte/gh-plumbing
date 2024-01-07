@@ -9,4 +9,4 @@ This part of the Documentation will be describe the [reusing-workflows](https://
    end="<!--td-workflows-end-->"
 %}
 
-The Reusable workflows are prefixed with ```.github/workflows/reuseable-*.yml```.
+The Reusable workflows are prefixed with ```.github/workflows/reusable-*.yml```.
