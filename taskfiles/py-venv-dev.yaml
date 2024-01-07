@@ -3,9 +3,13 @@
 version: '3'
 
 vars:
-  PYTHON_VENV_DIR: "{{.PYTHON_VENVS_BASEDIR}}/development"
+  PYTHON_VENV_DIR: "{{.PYTHON_VENVS_BASEDIR}}/docs"
 
 tasks:
   venv-usage:
     cmds:
-      - source {{.PYTHON_VENV_DIR}}/bin/activate
+      - |
+        bash -c "
+        source {{.PYTHON_VENV_DIR}}/bin/activate && \
+            mkdocs serve -a localhost:8001
+        "

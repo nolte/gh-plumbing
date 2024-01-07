@@ -1,4 +1,4 @@
-# Shared Probot Configs
+# Shared Probot Configuration
 
 
 {%
@@ -13,10 +13,10 @@ Example:
 _extends: gh-plumbing:.github/boring-cyborg.yml
 ```
 
-The Reuseable configurations are prefixed with ```.github/commons-*.yml```.
+The Reusable configurations are prefixed with ```.github/commons-*.yml```.
 
 
-### Shared Configs
+### Shared Configuration
 
 {%
    include-markdown "../README.md"
@@ -26,7 +26,7 @@ The Reuseable configurations are prefixed with ```.github/commons-*.yml```.
 
 #### Project Settings
 
-For Central Project Configuration we use the [settings](https://probot.github.io/apps/settings/) Github App.
+For Central Project Configuration we use the [settings](https://probot.github.io/apps/settings/) GitHub App.
 
 This Applications will be handle:
 
@@ -48,7 +48,7 @@ repository:
 
 #### Labelling
 
-For Handle PR and Issue Labels we use [boring-cyborg](https://probot.github.io/apps/boring-cyborg/) for setting labels by Existing roles, like changes at `./docs` allways get the Label `documentations`.
+For Handle PR and Issue Labels we use [boring-cyborg](https://probot.github.io/apps/boring-cyborg/) for setting labels by Existing roles, like changes at `./docs` always get the Label `documentations`.
 
 ##### Usage
 
@@ -77,4 +77,4 @@ For Handle PR and Issue Labels we use [boring-cyborg](https://probot.github.io/a
    end="# <!--td-commons-settings-labels-end-->"
 %}
 ```
-The labels will be preconfigured by use the [Settings](#project-settings) Github Application.
+The labels will be pre-configured by use the [Settings](#project-settings) GitHub Application.
