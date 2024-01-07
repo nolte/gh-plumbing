@@ -4,6 +4,6 @@ on:
 
 jobs:
   stale:
-    uses: nolte/gh-plumbing/.github/workflows/reuseable-stale.yaml@develop
+    uses: nolte/gh-plumbing/.github/workflows/reusable-stale.yaml@develop
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}
