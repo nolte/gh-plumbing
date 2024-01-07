@@ -27,11 +27,12 @@ Used for minimize duplicate the CI/CD Boilerplate-Code. Like [Workflows (GitHub 
 
 <!--td-workflows-end-->
 
-## Probot Configuration
+
+## Probot configuration
 
 <!--probot-intro-start-->
 Collection of common Configurations for Project Management and CI/CD.  
-For Using in other GitHub Projects, having a reusable set of Probot Configuration Repository, more informations at [probot.github.io](https://probot.github.io/docs/best-practices/#configuration).
+For Using in other GitHub Projects, having a reusable set of Probot Configuration Repository, more information at [probot.github.io](https://probot.github.io/docs/best-practices/#configuration).
 <!--probot-intro-end-->
 
 <!--td-probot-apps-start-->
@@ -43,12 +44,12 @@ For Using in other GitHub Projects, having a reusable set of Probot Configuratio
 | [settings](https://probot.github.io/apps/settings/)               | [probot/settings](https://github.com/probot/settings)                       | Configure GitHub Projects by Source.                                                                                |
 <!--td-probot-apps-end-->
 
-For More Inforation take a look to the GH Page, [gh-plumbing](http://nolte.github.io/gh-plumbing).
+For More information take a look to the GH Page, [gh-plumbing](http://nolte.github.io/gh-plumbing).
 
 ## Development
 
 <!--development-intro-start-->
-We use the [asdf](https://asdf-vm.com/) package manager.
+Use the [asdf](https://asdf-vm.com/) package manager.
 
 ```sh
 asdf install
@@ -62,7 +63,7 @@ For local testing you can use [nektos/act](https://github.com/nektos/act), run t
 act push -j static -W .github/workflows/build-static-tests.yaml
 ```
 
-will be start the [![.github/workflows/build-static-tests.yaml](https://github.com/nolte/gh-plumbing/actions/workflows/build-static-tests.yaml/badge.svg)](https://github.com/nolte/gh-plumbing/actions/workflows/build-static-tests.yaml) at your local system.
+Will be start the [![.github/workflows/build-static-tests.yaml](https://github.com/nolte/gh-plumbing/actions/workflows/build-static-tests.yaml/badge.svg)](https://github.com/nolte/gh-plumbing/actions/workflows/build-static-tests.yaml) at your system.
 
 
 ### Documentation
@@ -81,7 +82,7 @@ Open [localhost:8001](http://localhost:8001/) for take a look to the latest docu
 
 ### Task
 
-We use [go-task/task](https://github.com/go-task/task) as alias tooling.
+Use [go-task/task](https://github.com/go-task/task) as pre-configured command sets.
 
 ```sh
 task -l  

@@ -1,4 +1,4 @@
-# Shared Configurations
+# Shared configurations
 
 {%
    include-markdown "../README.md"
