@@ -15,7 +15,7 @@ jobs:
     - uses: vimtor/action-zip@v1.1
       with:
         files: .github/styles/ .vale.ini
-        dest: result.zip
+        dest: vale-styles.zip
 
     - name: Upload Release
       uses: ncipollo/release-action@v1.12.0
