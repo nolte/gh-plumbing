@@ -7,20 +7,3 @@ jobs:
     uses: nolte/gh-plumbing/.github/workflows/reusable-release-cd-refresh-master.yml@develop
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}
-
-  archive:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@master
-    - uses: vimtor/action-zip@v1.1
-      with:
-        files: .github/styles/Vocab/technical/accept.txt .vale.ini
-        dest: vale-styles.zip
-        recursive: false
-
-    - name: Upload Release
-      uses: ncipollo/release-action@v1.13.0
-      with:
-          artifacts: "vale-styles.zip"
-          token: ${{ secrets.GITHUB_TOKEN }}
-          allowUpdates: true

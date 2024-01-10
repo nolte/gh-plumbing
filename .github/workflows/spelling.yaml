@@ -1,0 +1,11 @@
+name: Spelling Check
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  spelling:
+    uses: nolte/gh-plumbing/.github/workflows/reusable-spelling-vale.yaml@develop

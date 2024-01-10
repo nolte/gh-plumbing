@@ -1,2 +1,7 @@
 site
-.github/styles/Microsoft
+
+.github/styles/*
+!.github/styles/Vocab/
+
+.github/styles/Vocab/*
+!.github/styles/Vocab/Technical
