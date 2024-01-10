@@ -1,7 +1,5 @@
 site
 
 .github/styles/*
-!.github/styles/Vocab/
+!.github/styles/config/
 
-.github/styles/Vocab/*
-!.github/styles/Vocab/Technical
