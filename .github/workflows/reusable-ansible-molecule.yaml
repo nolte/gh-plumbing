@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@v4.1.1
 
       - name: Start ansible molecule Based Tests
-        uses: gofrolist/molecule-action@v2.6.10
+        uses: gofrolist/molecule-action@v2.6.12
         with:
           molecule_working_dir: ${{ inputs.molecule_working_dir }}
           molecule_args: ${{ inputs.molecule_args }}

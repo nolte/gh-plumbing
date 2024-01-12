@@ -1,6 +1,0 @@
-Ansible
-asdf
-mkdocs
-Probot
-probot
-zsh

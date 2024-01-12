@@ -1,2 +1,4 @@
 site
-.github/styles/Microsoft
+
+.github/styles/*
+!.github/styles/.keep
