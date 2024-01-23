@@ -88,9 +88,12 @@ Use [go-task/task](https://github.com/go-task/task) as pre-configured command se
 task -l  
 
 task: Available tasks for this project:
-* mkdocs:       Start the Mkdocs, for development
-* pre-commit:   Start Precommit
+* mkdocs:start:             mkdocs serve docs
+* pre-commit:install:       install pre-commit into current project
+* pre-commit:start:         run pre-commit with all files
+
 ```
+shared tasks from [nolte/taskfiles](https://github.com/nolte/taskfiles)
 
 ## Links
 

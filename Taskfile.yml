@@ -3,26 +3,14 @@
 version: '3'
 
 vars:
-  PYTHON_VENVS_BASEDIR: ~/.venvs/
-
-  PYTHON_BIN: python3
-  VENVS: .venvs/
+  TASK_COLLECTION_BASE: https://raw.githubusercontent.com/nolte/taskfiles/fix/py-var-names/src
 
 includes:
-  py-dev: ./taskfiles/py-venv-dev.yaml
+  mkdocs: "{{.TASK_COLLECTION_BASE}}/taskfile-include-mkdocs.yaml"
+  pre-commit: "{{.TASK_COLLECTION_BASE}}/taskfile-include-pre-commit.yaml"
 
 tasks:
-  pre-commit:
-    desc: Start Precommit
-    deps: ["py-dev:venv-usage"]
+  default:
     cmds:
-      - pre-commit run -a
+    - task -l
     silent: true
-
-  mkdocs:
-    desc: Start the Mkdocs, for development
-    #deps: ["py-dev:venv-usage"]
-    cmds:
-        - task: py-dev:venv-usage
-      #- mkdocs serve -a localhost:8001
-    silent: false
