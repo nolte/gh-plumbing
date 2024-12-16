@@ -16,10 +16,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout master
-        uses: actions/checkout@v4.1.1
+        uses: actions/checkout@v4.2.2
 
       - name: Start ansible molecule Based Tests
-        uses: gofrolist/molecule-action@v2.7.7
+        uses: gofrolist/molecule-action@v2.7.45
         with:
           molecule_working_dir: ${{ inputs.molecule_working_dir }}
           molecule_args: ${{ inputs.molecule_args }}
