@@ -32,7 +32,7 @@
 
     ---
 
-    Shared Probot configurations consumed via `_extends:` — settings, labelling, release notes.
+    Shared Probot configurations consumed via `_extends:`—settings, labelling, release notes.
 
     [:octicons-arrow-right-24: Probot configurations](probot/index.md)
 
@@ -74,4 +74,4 @@
     ```
 
 !!! tip "Pinning strategy"
-    Reference `@develop` for the latest changes or pin to a release tag (for example `@v1.1.8`) for stability. The `master` branch is auto-refreshed on every published release.
+    Reference `@develop` for the latest changes or pin to a release tag (for example `@v1.1.8`) for stability. The `master` branch refreshes automatically on every published release.

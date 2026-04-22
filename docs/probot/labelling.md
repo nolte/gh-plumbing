@@ -1,6 +1,6 @@
 # Labelling
 
-Auto-labels PRs and issues using [boring-cyborg](https://probot.github.io/apps/boring-cyborg/). Changes under `./docs`, for example, automatically receive the `documentations` label.
+Automatically labels PRs and issues using [boring-cyborg](https://probot.github.io/apps/boring-cyborg/). Changes under `./docs`, for example, receive the `documentations` label.
 
 ---
 

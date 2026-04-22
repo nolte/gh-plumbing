@@ -1,9 +1,9 @@
 # Static tests
 
-Runs a minimal static analysis bundle against every push — fast feedback, no external services.
+Runs a minimal static analysis bundle against every push—fast feedback, no external services.
 
-- [`pre-commit/action`](https://github.com/pre-commit/action) — runs hooks defined in `.pre-commit-config.yaml`
-- [`zbeekman/EditorConfig-Action`](https://github.com/zbeekman/EditorConfig-Action) — enforces `.editorconfig` rules
+- [`pre-commit/action`](https://github.com/pre-commit/action)—runs hooks defined in `.pre-commit-config.yaml`
+- [`zbeekman/EditorConfig-Action`](https://github.com/zbeekman/EditorConfig-Action)—enforces `.editorconfig` rules
 
 ---
 
@@ -19,7 +19,7 @@ jobs:
 ```
 
 !!! tip "Required status check"
-    Combine the workflow with a branch-protection rule that requires the `static / Static CI Tests` check — see [Settings](../probot/settings.md).
+    Combine the workflow with a branch-protection rule that requires the `static / Static CI Tests` check—see [Settings](../probot/settings.md).
 
 ---
 

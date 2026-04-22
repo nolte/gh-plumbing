@@ -22,7 +22,7 @@ jobs:
 ```
 
 !!! note "GitHub Pages"
-    Ensure the target repository declares `has_pages: true`. The shared Probot settings already include this — see [Settings](../probot/settings.md).
+    Ensure the target repository declares `has_pages: true`. The shared Probot settings already include this—see [Settings](../probot/settings.md).
 
 ---
 

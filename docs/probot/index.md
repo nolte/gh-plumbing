@@ -32,7 +32,7 @@ _extends: gh-plumbing:.github/commons-<name>.yml
 
     ---
 
-    Repository metadata, branch protection, labels — synced from `commons-settings.yml`.
+    Repository metadata, branch protection, labels—synced from `commons-settings.yml`.
 
     [:octicons-arrow-right-24: Settings](settings.md)
 
@@ -40,7 +40,7 @@ _extends: gh-plumbing:.github/commons-<name>.yml
 
     ---
 
-    Auto-labels PRs and issues via `boring-cyborg` using path and title rules.
+    Automatically labels PRs and issues via `boring-cyborg` using path and title rules.
 
     [:octicons-arrow-right-24: Labelling](labelling.md)
 

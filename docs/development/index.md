@@ -64,4 +64,4 @@ act push -j static -W .github/workflows/build-static-tests.yaml
 [Vale](https://vale.sh/) lints Markdown files in CI via `reusable-spelling-vale.yaml`. Rules live in `.vale.ini` and styles under `.github/styles/`.
 
 !!! info "CLAUDE.md is excluded"
-    `CLAUDE.md` carries LLM context, not end-user documentation — Vale explicitly skips it.
+    `CLAUDE.md` carries LLM context, not end-user documentation—Vale explicitly skips it.
