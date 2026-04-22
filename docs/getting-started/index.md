@@ -16,19 +16,19 @@
 
     [:octicons-arrow-right-24: Workflow catalog](../workflows/index.md)
 
--   :material-robot: **Probot config**
+-   :material-robot: **Probot configuration**
 
     ---
 
     Extend a shared `commons-*.yml` via `_extends:` — no workflow changes required.
 
-    [:octicons-arrow-right-24: Probot configs](../probot/index.md)
+    [:octicons-arrow-right-24: Probot configuration](../probot/index.md)
 
 -   :material-update: **Renovate preset**
 
     ---
 
-    Reference the shared preset in `renovate.json` to inherit labels and base config.
+    Reference the shared preset in `renovate.json` to inherit labels and base configuration.
 
     [:octicons-arrow-right-24: See preset](#renovate-preset)
 
@@ -48,7 +48,7 @@ jobs:
 ```
 
 !!! note "Reference selection"
-    - `@develop` — always tracks the latest changes; recommended for internal repos that follow this project closely.
+    - `@develop` — always tracks the latest changes; recommended for internal repositories that follow this project closely.
     - `@vX.Y.Z` — pins to a released version; recommended when you need reproducibility.
     - `master` is auto-refreshed on every published release and mirrors the latest release tag.
 
@@ -65,7 +65,7 @@ repository:
   topics: example, demo
 ```
 
-The `_extends:` key is resolved by the [Probot Settings App](https://probot.github.io/apps/settings/). Local keys override inherited values.
+The [Probot Settings App](https://probot.github.io/apps/settings/) resolves the `_extends:` key. Local keys override inherited values.
 
 ---
 

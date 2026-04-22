@@ -26,7 +26,7 @@ Auto-labels PRs and issues using [boring-cyborg](https://probot.github.io/apps/b
 
 ## Label palette
 
-Labels are defined in `commons-settings.yml` and applied by the [Settings App](settings.md).
+`commons-settings.yml` declares the label palette; the [Settings App](settings.md) applies it.
 
 ```yaml
 {%

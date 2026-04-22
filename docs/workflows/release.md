@@ -1,10 +1,10 @@
 # Release
 
-Release handling is split across two workflows and one Probot config.
+Release handling spans two workflows and one Probot configuration.
 
 - **`reusable-release-drafter.yml`** — maintains the draft release with a generated changelog as PRs land.
 - **`reusable-release-cd-refresh-master.yml`** — merges the published release tag into `master` so `master` always tracks the latest release.
-- **`_extends: gh-plumbing:.github/commons-release-drafter.yml`** — shared release-drafter categorization config.
+- **`_extends: gh-plumbing:.github/commons-release-drafter.yml`** — shared release-drafter categorization configuration.
 
 ---
 
@@ -32,7 +32,7 @@ _extends: gh-plumbing:.github/commons-release-drafter.yml
 ```
 
 !!! tip "Categorization"
-    Release-drafter buckets PRs by label. Labels are shared through [commons-settings](../probot/settings.md) and applied by [boring-cyborg](../probot/labelling.md).
+    Release-drafter buckets PRs by label. [commons-settings](../probot/settings.md) declares the shared label palette; [boring-cyborg](../probot/labelling.md) applies the labels to each PR.
 
 ---
 
@@ -73,7 +73,7 @@ jobs:
     %}
     ```
 
-=== "Release drafter Probot config"
+=== "Release drafter Probot configuration"
 
     ```yaml
     {%

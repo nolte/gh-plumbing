@@ -6,7 +6,7 @@
    end="<!--probot-intro-end-->"
 %}
 
-Consumers reference the shared configs via the `_extends:` key:
+Consumers reference the shared configurations via the `_extends:` key:
 
 ```yaml
 _extends: gh-plumbing:.github/commons-<name>.yml
@@ -47,4 +47,4 @@ _extends: gh-plumbing:.github/commons-<name>.yml
 </div>
 
 !!! note "Release drafter"
-    The release-drafter Probot config is documented next to its workflow — see [Workflows → Release](../workflows/release.md).
+    The [Workflows → Release](../workflows/release.md) page documents the release-drafter Probot configuration next to its workflow.

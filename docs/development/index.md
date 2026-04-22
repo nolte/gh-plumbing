@@ -4,7 +4,7 @@ Local development setup for contributing to `gh-plumbing` itself.
 
 ---
 
-## Toolchain
+## Tooling
 
 The project pins its tools with [asdf](https://asdf-vm.com/) (`.tool-versions`).
 
@@ -18,7 +18,7 @@ This installs `act`, `python`, and `task` at the pinned versions.
 
 ## Common tasks
 
-Task definitions are composed from the shared [nolte/taskfiles](https://github.com/nolte/taskfiles) collection.
+The shared [nolte/taskfiles](https://github.com/nolte/taskfiles) collection provides the task definitions.
 
 ```sh
 task -l
@@ -61,7 +61,7 @@ act push -j static -W .github/workflows/build-static-tests.yaml
 
 ## Prose linting
 
-Markdown files are linted with [Vale](https://vale.sh/) in CI via `reusable-spelling-vale.yaml`. Rules live in `.vale.ini` and styles under `.github/styles/`.
+[Vale](https://vale.sh/) lints Markdown files in CI via `reusable-spelling-vale.yaml`. Rules live in `.vale.ini` and styles under `.github/styles/`.
 
 !!! info "CLAUDE.md is excluded"
-    `CLAUDE.md` is LLM context, not end-user documentation, and is explicitly excluded from Vale rules.
+    `CLAUDE.md` carries LLM context, not end-user documentation — Vale explicitly skips it.

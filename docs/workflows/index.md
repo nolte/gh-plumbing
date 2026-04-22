@@ -1,6 +1,6 @@
 # Workflows
 
-Reusable GitHub Actions workflows live under `.github/workflows/reusable-*.y{a}ml` and are consumed via:
+Reusable GitHub Actions workflows live under `.github/workflows/reusable-*.y{a}ml`. Consumers reference them via:
 
 ```yaml
 uses: nolte/gh-plumbing/.github/workflows/reusable-<name>.yaml@develop
@@ -49,4 +49,4 @@ uses: nolte/gh-plumbing/.github/workflows/reusable-<name>.yaml@develop
 </div>
 
 !!! info "Conventions"
-    Every reusable workflow accepts its inputs via `workflow_call.inputs`. Secrets are passed explicitly — this repo never reads ambient organization secrets.
+    Every reusable workflow accepts its inputs via `workflow_call.inputs`. Callers pass secrets explicitly — this repository never reads ambient organization secrets.

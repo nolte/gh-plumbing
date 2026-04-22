@@ -1,4 +1,4 @@
-# GitHub Plumbing
+# Overview
 
 {%
    include-markdown "../README.md"
@@ -34,7 +34,7 @@
 
     Shared Probot configurations consumed via `_extends:` — settings, labelling, release notes.
 
-    [:octicons-arrow-right-24: Probot configs](probot/index.md)
+    [:octicons-arrow-right-24: Probot configurations](probot/index.md)
 
 -   :material-wrench: **Development**
 
@@ -48,7 +48,7 @@
 
 ---
 
-## How consumers reference this repo
+## How consumers reference this repository
 
 === "Reusable workflow"
 
