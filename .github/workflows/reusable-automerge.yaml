@@ -18,3 +18,10 @@ jobs:
         uses: pascalgn/automerge-action@v0.16.4
         env:
           GITHUB_TOKEN: ${{ secrets.token  }}
+          # Match the repo-level `allow_squash_merge: true` +
+          # `allow_merge_commit: false` convention declared by
+          # commons-settings.yml. Without this override the action
+          # defaults to MERGE_METHOD=merge, which GitHub rejects because
+          # merge commits are disabled, and the action exits 0 without
+          # actually merging — a silent no-op that looks green in CI.
+          MERGE_METHOD: squash
