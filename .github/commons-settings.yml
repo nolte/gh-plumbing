@@ -53,6 +53,18 @@ labels:
     color: "#6e70ef"
     description: Maintenance
 
+  - name: fix
+    color: "#d73a4a"
+    description: Conventional Commits type `fix` — bug fix.
+
+  - name: feat
+    color: "#a2eeef"
+    description: Conventional Commits type `feat` — new feature.
+
+  - name: docs
+    color: "#0075ca"
+    description: Conventional Commits type `docs` — documentation or spec change.
+
   - name: question
     color: "#3ffc8a"
     description: User question
@@ -89,9 +101,21 @@ labels:
     color: "#19F700"
     description: "Allow automatic Merge."
 
-  - name: project-config
-    color: "#ed979d"
-    description: "GitHub Project Configuration change."
+  - name: spec
+    color: "#c5def5"
+    description: Touches files under `spec/`.
+
+  - name: skills
+    color: "#bfdadc"
+    description: Touches files under `skills/`.
+
+  - name: agents
+    color: "#c2e0c6"
+    description: Touches files under `agents/`.
+
+  - name: claude-code
+    color: "#ffd33d"
+    description: Touches Claude Code integration (`.claude/`, `.claude-plugin/`, `CLAUDE.md`).
 
 # <!--td-commons-settings-labels-end-->
 
