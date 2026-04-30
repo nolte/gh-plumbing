@@ -2,9 +2,9 @@
 
 Release handling spans two workflows and one Probot configuration.
 
-- **`reusable-release-drafter.yml`**—maintains the draft release with a generated changelog as PRs land.
-- **`reusable-release-cd-refresh-master.yml`**—merges the published release tag into `master` so `master` always tracks the latest release.
-- **`_extends: gh-plumbing:.github/commons-release-drafter.yml`**—shared release-drafter categorization configuration.
+- **`reusable-release-drafter.yml`** maintains the draft release with a generated changelog as PRs land.
+- **`reusable-release-cd-refresh-master.yml`** merges the published release tag into `master` so `master` always tracks the latest release.
+- **`_extends: gh-plumbing:.github/commons-release-drafter.yml`** provides shared release-drafter categorization.
 
 ---
 

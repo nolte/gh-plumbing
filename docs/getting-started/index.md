@@ -20,7 +20,7 @@
 
     ---
 
-    Extend a shared `commons-*.yml` via `_extends:`—no workflow changes required.
+    Extend a shared `commons-*.yml` via `_extends:` without workflow changes.
 
     [:octicons-arrow-right-24: Probot configuration](../probot/index.md)
 
@@ -48,8 +48,8 @@ jobs:
 ```
 
 !!! note "Reference selection"
-    - `@develop`—always tracks the latest changes; recommended for internal repositories that follow this project closely.
-    - `@vX.Y.Z`—pins to a released version; recommended when you need reproducibility.
+    - `@develop` always tracks the latest changes; recommended for internal repositories that follow this project closely.
+    - `@vX.Y.Z` pins to a released version; recommended when you need reproducibility.
     - `master` refreshes automatically on every published release and mirrors the latest release tag.
 
 ---

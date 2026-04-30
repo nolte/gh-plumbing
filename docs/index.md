@@ -32,7 +32,7 @@
 
     ---
 
-    Shared Probot configurations consumed via `_extends:`—settings, labelling, release notes.
+    Shared Probot configurations consumed via `_extends:` for settings, labelling, and release notes.
 
     [:octicons-arrow-right-24: Probot configurations](probot/index.md)
 

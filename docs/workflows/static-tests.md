@@ -1,9 +1,9 @@
 # Static tests
 
-Runs a minimal static analysis bundle against every push—fast feedback, no external services.
+Runs a minimal static analysis bundle on every push to give fast feedback without external services.
 
-- [`pre-commit/action`](https://github.com/pre-commit/action)—runs hooks defined in `.pre-commit-config.yaml`
-- [`zbeekman/EditorConfig-Action`](https://github.com/zbeekman/EditorConfig-Action)—enforces `.editorconfig` rules
+- [`pre-commit/action`](https://github.com/pre-commit/action) runs hooks defined in `.pre-commit-config.yaml`
+- [`zbeekman/EditorConfig-Action`](https://github.com/zbeekman/EditorConfig-Action) enforces `.editorconfig` rules
 
 ---
 
