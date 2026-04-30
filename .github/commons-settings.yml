@@ -23,17 +23,22 @@ repository:
   # Updates the default branch for this repository.
   default_branch: develop
 
+  # Merge strategy: squash-merge only.
+  # Forcing a single linear-history strategy keeps `develop` clean and makes
+  # release-drafter / Conventional-Commits parsing predictable across all
+  # repositories that extend these commons.
+
   # Either `true` to allow squash-merging pull requests, or `false` to prevent
   # squash-merging.
   allow_squash_merge: true
 
   # Either `true` to allow merging pull requests with a merge commit, or `false`
   # to prevent merging pull requests with merge commits.
-  allow_merge_commit: true
+  allow_merge_commit: false
 
   # Either `true` to allow rebase-merging pull requests, or `false` to prevent
   # rebase-merging.
-  allow_rebase_merge: true
+  allow_rebase_merge: false
 
   delete_branch_on_merge: true
 
