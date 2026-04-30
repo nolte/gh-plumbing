@@ -1,16 +1,104 @@
-site_name: Github Plumping (Shared Probot Configs)
+site_name: GitHub Plumbing
+site_description: Reusable GitHub Actions workflows and shared Probot configurations
+site_url: https://nolte.github.io/gh-plumbing/
+repo_name: nolte/gh-plumbing
+repo_url: https://github.com/nolte/gh-plumbing
+edit_uri: edit/develop/docs/
+
+docs_dir: docs/
+
 theme:
   name: material
-docs_dir: docs/
-repo_name: 'nolte/gh-plumbing'
-repo_url: 'https://github.com/nolte/gh-plumbing'
-plugins:
-  - include-markdown
-markdown_extensions:
-  - pymdownx.inlinehilite:
-  - pymdownx.superfences:
-  - pymdownx.highlight:
-  - toc:
-      permalink: True
+  language: en
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.path
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/github
+
 extra_css:
-  - css/overwrite.css
+  - stylesheets/extra.css
+
+plugins:
+  - search
+  - include-markdown
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.snippets:
+      auto_append:
+        - docs/includes/abbreviations.md
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+
+not_in_nav: |
+  /includes/*
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - getting-started/index.md
+  - Workflows:
+      - workflows/index.md
+      - Static tests: workflows/static-tests.md
+      - Documentation: workflows/documentation.md
+      - Release: workflows/release.md
+  - Probot:
+      - probot/index.md
+      - Settings: probot/settings.md
+      - Labelling: probot/labelling.md
+  - Development:
+      - development/index.md

@@ -12,4 +12,6 @@ labelPRBasedOnFilePath:
     - mkdocs.yml
     - .github/ISSUE_TEMPLATE/**
     - .github/pull_request_template.md
+  spec:
+    - spec/**
 # <!--td-commons-settings-labels-end-->
