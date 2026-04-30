@@ -117,10 +117,6 @@ labels:
     color: "#ffd33d"
     description: Touches Claude Code integration (`.claude/`, `.claude-plugin/`, `CLAUDE.md`).
 
-  - name: spec
-    color: "#0e8a7f"
-    description: Change to a specification under `spec/`.
-
 # <!--td-commons-settings-labels-end-->
 
 branches:
