@@ -27,8 +27,10 @@ jobs:
           start_marker='<!-- release-skill-layer:project-context-start -->'
           end_marker='<!-- release-skill-layer:project-context-end -->'
 
+          # gh release list on the runner CLI does not expose targetCommitish;
+          # we only need tagName here, the restore step re-resolves the active draft.
           draft=$(gh release list --repo "$REPO" \
-            --json isDraft,tagName,targetCommitish \
+            --json isDraft,tagName \
             --jq '[.[] | select(.isDraft == true)] | .[0]')
 
           if [[ -z "$draft" || "$draft" == "null" ]]; then
