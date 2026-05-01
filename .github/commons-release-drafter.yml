@@ -17,6 +17,14 @@ categories:
       - "cicd"
       - "dependencies"
 
+autolabeler:
+  - label: "release"
+    title:
+      - '/^chore\(release\):/'
+
+exclude-labels:
+  - "release"
+
 template: |
   ## Changes
 

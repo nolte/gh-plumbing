@@ -117,6 +117,10 @@ labels:
     color: "#ffd33d"
     description: Touches Claude Code integration (`.claude/`, `.claude-plugin/`, `CLAUDE.md`).
 
+  - name: release
+    color: "#5319e7"
+    description: "Conventional Commits subject `chore(release): <tag>` — version-alignment PR; excluded from release-drafter changelog."
+
 # <!--td-commons-settings-labels-end-->
 
 branches:
