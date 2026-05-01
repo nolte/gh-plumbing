@@ -47,7 +47,9 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          drafts=$(gh release list --json isDraft,tagName,targetCommitish --jq '[.[] | select(.isDraft == true)]')
+          # gh release list on the runner CLI does not expose targetCommitish;
+          # resolve the target via gh release view per matching tag.
+          drafts=$(gh release list --json isDraft,tagName --jq '[.[] | select(.isDraft == true)]')
           total=$(echo "$drafts" | jq 'length')
 
           if [[ "$total" == "0" ]]; then
@@ -60,7 +62,7 @@ jobs:
 
           if [[ "$match_count" == "0" ]]; then
             echo "::error::No draft release with tag '$TAG'. Open drafts:"
-            echo "$drafts" | jq -r '.[] | "  - \(.tagName) (target: \(.targetCommitish))"' >&2
+            echo "$drafts" | jq -r '.[] | "  - \(.tagName)"' >&2
             exit 1
           fi
 
@@ -69,7 +71,7 @@ jobs:
             exit 1
           fi
 
-          target=$(echo "$match" | jq -r '.[0].targetCommitish')
+          target=$(gh release view "$TAG" --json targetCommitish --jq .targetCommitish)
           if [[ "$target" == refs/heads/* ]]; then
             sha=$(git rev-parse "origin/${target#refs/heads/}")
           else
