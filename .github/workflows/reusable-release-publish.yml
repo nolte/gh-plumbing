@@ -1,0 +1,320 @@
+name: Release Publish
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+        description: |
+          Tag to publish. MUST match an existing release-drafter draft on the
+          repository's default branch. No "newest wins" heuristic per
+          spec/project/release-automation/ §Operational contract.
+      dry_run:
+        required: false
+        type: boolean
+        default: false
+        description: |
+          When true, run every validation gate but do not call
+          `gh release edit --draft=false`. Per spec §Operational contract SHOULD.
+    secrets:
+      token:
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout develop
+        uses: actions/checkout@v6.0.0
+        with:
+          ref: develop
+          fetch-depth: 0
+          token: ${{ secrets.token }}
+
+      - name: Resolve draft
+        id: draft
+        env:
+          GH_TOKEN: ${{ secrets.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          # gh release list on the runner CLI does not expose targetCommitish;
+          # resolve the target via gh release view per matching tag.
+          drafts=$(gh release list --json isDraft,tagName --jq '[.[] | select(.isDraft == true)]')
+          total=$(echo "$drafts" | jq 'length')
+
+          if [[ "$total" == "0" ]]; then
+            echo "::error::No draft release found. Run release-drafter.yml on develop first."
+            exit 1
+          fi
+
+          match=$(echo "$drafts" | jq --arg t "$TAG" '[.[] | select(.tagName == $t)]')
+          match_count=$(echo "$match" | jq 'length')
+
+          if [[ "$match_count" == "0" ]]; then
+            echo "::error::No draft release with tag '$TAG'. Open drafts:"
+            echo "$drafts" | jq -r '.[] | "  - \(.tagName)"' >&2
+            exit 1
+          fi
+
+          if [[ "$match_count" != "1" ]]; then
+            echo "::error::Multiple drafts match tag '$TAG' — release state is corrupt; resolve manually."
+            exit 1
+          fi
+
+          target=$(gh release view "$TAG" --json targetCommitish --jq .targetCommitish)
+          if [[ "$target" == refs/heads/* ]]; then
+            sha=$(git rev-parse "origin/${target#refs/heads/}")
+          else
+            sha="$target"
+          fi
+
+          if ! git merge-base --is-ancestor "$sha" origin/develop; then
+            echo "::error::Draft tag '$TAG' target SHA $sha is not reachable from origin/develop. Re-run release-drafter to refresh draft target."
+            exit 1
+          fi
+
+          echo "target_sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Draft '$TAG' resolved at $sha (reachable from origin/develop)."
+
+      - name: Detect project type and load version-bearing files
+        id: vbf
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          python3 -c "import yaml" 2>/dev/null || pip install --quiet pyyaml
+
+          python3 - <<'PY' > vbf.json
+          import json, pathlib, sys
+
+          override_path = pathlib.Path(".github/release-automation.yml")
+          if override_path.exists():
+              import yaml
+              data = yaml.safe_load(override_path.read_text()) or {}
+              entries = data.get("version_bearing_files", [])
+              for e in entries:
+                  e.setdefault("transform", "strip-leading-v")
+                  if "format" not in e:
+                      p = e.get("path", "")
+                      if p.endswith(".toml"):
+                          e["format"] = "toml"
+                      elif p.endswith(".json"):
+                          e["format"] = "json"
+                      else:
+                          print(f"::error::Cannot infer format for '{p}'; declare format: json|toml in .github/release-automation.yml", file=sys.stderr)
+                          sys.exit(1)
+              json.dump({"source": "override", "entries": entries}, sys.stdout)
+              sys.exit(0)
+
+          if pathlib.Path(".claude-plugin/plugin.json").exists():
+              entries = [{"path": ".claude-plugin/plugin.json", "selector": "version", "transform": "strip-leading-v", "format": "json"}]
+              if pathlib.Path(".claude-plugin/marketplace.json").exists():
+                  entries.append({"path": ".claude-plugin/marketplace.json", "selector": "metadata.version", "transform": "strip-leading-v", "format": "json"})
+              json.dump({"source": "claude-plugin", "entries": entries}, sys.stdout)
+              sys.exit(0)
+
+          if pathlib.Path("pyproject.toml").exists():
+              import tomllib
+              data = tomllib.loads(pathlib.Path("pyproject.toml").read_text())
+              if data.get("project", {}).get("version") is not None:
+                  json.dump({"source": "python", "entries": [
+                      {"path": "pyproject.toml", "selector": "project.version", "transform": "strip-leading-v", "format": "toml"},
+                  ]}, sys.stdout)
+                  sys.exit(0)
+
+          if pathlib.Path("package.json").exists():
+              json.dump({"source": "node", "entries": [
+                  {"path": "package.json", "selector": "version", "transform": "strip-leading-v", "format": "json"},
+              ]}, sys.stdout)
+              sys.exit(0)
+
+          cc = pathlib.Path("custom_components")
+          if cc.is_dir():
+              manifests = sorted(cc.glob("*/manifest.json"))
+              if manifests:
+                  json.dump({"source": "hacs", "entries": [
+                      {"path": str(p), "selector": "version", "transform": "strip-leading-v", "format": "json"} for p in manifests
+                  ]}, sys.stdout)
+                  sys.exit(0)
+
+          json.dump({"source": "none", "entries": []}, sys.stdout)
+          PY
+
+          source=$(jq -r '.source' vbf.json)
+          count=$(jq '.entries | length' vbf.json)
+          echo "source=$source" >> "$GITHUB_OUTPUT"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "Detected project type: $source ($count version-bearing file(s))"
+          jq . vbf.json
+
+      - name: Verify version-bearing-file alignment
+        if: steps.vbf.outputs.count != '0'
+        env:
+          TAG: ${{ inputs.tag }}
+          TARGET_SHA: ${{ steps.draft.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+
+          tag = os.environ["TAG"]
+          sha = os.environ["TARGET_SHA"]
+
+          with open("vbf.json") as f:
+              vbf = json.load(f)
+
+          def value_at_sha(path, sha, fmt, selector):
+              raw = subprocess.run(
+                  ["git", "show", f"{sha}:{path}"],
+                  capture_output=True, text=True, check=True,
+              ).stdout
+              if fmt == "json":
+                  data = json.loads(raw)
+              elif fmt == "toml":
+                  import tomllib
+                  data = tomllib.loads(raw)
+              else:
+                  raise SystemExit(f"::error::Unsupported format '{fmt}' for {path}")
+              for part in [p for p in selector.split(".") if p]:
+                  data = data[part]
+              return str(data)
+
+          def aligned(actual, tag):
+              # transform=strip-leading-v: accept either form, matching the file's existing convention
+              return actual == tag or actual == tag.lstrip("v")
+
+          errors = []
+          for e in vbf["entries"]:
+              try:
+                  actual = value_at_sha(e["path"], sha, e["format"], e["selector"])
+              except subprocess.CalledProcessError:
+                  errors.append(f"  - {e['path']}: file missing at {sha[:8]}")
+                  continue
+              except (KeyError, TypeError) as exc:
+                  errors.append(f"  - {e['path']}: selector '{e['selector']}' not found ({exc})")
+                  continue
+              if not aligned(actual, tag):
+                  errors.append(f"  - {e['path']}: {e['selector']} is '{actual}', expected '{tag}' (or '{tag.lstrip('v')}')")
+
+          if errors:
+              print("::error::Version-bearing files not aligned to target tag:")
+              for line in errors:
+                  print(line)
+              print(f"::error::Open a 'chore(release): {tag}' PR aligning every file, or wait for the workflow-driven primary path (when the portfolio App/PAT lands).")
+              sys.exit(1)
+
+          print(f"All {len(vbf['entries'])} version-bearing file(s) aligned to {tag}.")
+
+          paths = [e["path"] for e in vbf["entries"]]
+          log_args = ["git", "log", "-1", "--pretty=%s", "origin/develop", "--"] + paths
+          subject = subprocess.run(log_args, capture_output=True, text=True, check=True).stdout.strip()
+
+          expected_prefix = f"chore(release): {tag}"
+          if not subject.startswith(expected_prefix):
+              print(f"::error::No 'chore(release): {tag}' alignment commit on origin/develop touching the version-bearing files.")
+              print(f"::error::Most recent commit subject on these paths: '{subject}'")
+              print(f"::error::Per spec/project/release-automation/ §Pre-publish verification, the alignment commit subject must start with '{expected_prefix}'.")
+              sys.exit(1)
+
+          print(f"Alignment commit confirmed: '{subject}'")
+          PY
+
+      - name: Disclose target state in job summary
+        env:
+          GH_TOKEN: ${{ secrets.token }}
+          TAG: ${{ inputs.tag }}
+          TARGET_SHA: ${{ steps.draft.outputs.target_sha }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          VBF_SOURCE: ${{ steps.vbf.outputs.source }}
+          VBF_COUNT: ${{ steps.vbf.outputs.count }}
+        run: |
+          set -euo pipefail
+          created_at=$(gh release view "$TAG" --json createdAt --jq .createdAt)
+          body_head=$(gh release view "$TAG" --json body --jq .body | head -c 800)
+
+          {
+            echo "## Release publish: \`$TAG\`"
+            echo
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Tag | \`$TAG\` |"
+            echo "| Target SHA | \`$TARGET_SHA\` |"
+            echo "| Draft created | $created_at |"
+            echo "| Triggerer | @${GITHUB_TRIGGERING_ACTOR:-$GITHUB_ACTOR} |"
+            echo "| Run URL | $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID |"
+            echo "| Project type | $VBF_SOURCE ($VBF_COUNT file(s)) |"
+            echo "| Dry run | $DRY_RUN |"
+            echo
+            echo "### Body preview"
+            echo
+            echo '```markdown'
+            echo "$body_head"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish (flip draft=false)
+        if: ${{ inputs.dry_run != true }}
+        env:
+          GH_TOKEN: ${{ secrets.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release edit "$TAG" --draft=false
+          published_at=$(date -Is)
+          echo "Published $TAG at $published_at."
+          echo "::notice::Published $TAG at $published_at."
+          {
+            echo
+            echo "### Published"
+            echo
+            echo "- \`$TAG\` flipped to \`draft: false\` at $published_at."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Dry-run summary
+        if: ${{ inputs.dry_run == true }}
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          {
+            echo
+            echo "### Dry run"
+            echo
+            echo "- All gates passed for \`$TAG\`."
+            echo "- \`gh release edit --draft=false\` was **not** called."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post-publish sanity
+        if: ${{ inputs.dry_run != true }}
+        env:
+          GH_TOKEN: ${{ secrets.token }}
+          TAG: ${{ inputs.tag }}
+          TARGET_SHA: ${{ steps.draft.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+          is_draft=$(gh release view "$TAG" --json isDraft --jq .isDraft)
+          if [[ "$is_draft" != "false" ]]; then
+            echo "::error::Post-publish check failed: gh release view '$TAG' returned isDraft=$is_draft (expected false)."
+            exit 1
+          fi
+          echo "Post-publish: isDraft=false confirmed."
+
+          # release-cd-refresh-master cascade check (SHOULD per spec; warning, not error).
+          # GITHUB_TOKEN-authored release:published events do not cascade to other workflows
+          # per spec/project/workflow-health/ §Known platform constraints.
+          sleep 30
+          refresh_run=$(gh run list --workflow=release-cd-refresh-master.yml --limit 1 --json status,createdAt,headSha --jq '.[0]')
+          if [[ -z "$refresh_run" || "$refresh_run" == "null" ]]; then
+            echo "::warning::release-cd-refresh-master.yml has no recent run on $TARGET_SHA. Cascade gap is a known platform constraint with GITHUB_TOKEN — manual fast-forward of main may be required (spec/project/workflow-health/ §Known platform constraints)."
+          else
+            echo "release-cd-refresh-master.yml run detected: $refresh_run"
+          fi

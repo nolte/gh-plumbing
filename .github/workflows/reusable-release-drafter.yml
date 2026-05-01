@@ -11,6 +11,107 @@ jobs:
     name: Update Release Draft
     runs-on: ubuntu-latest
     steps:
-      - uses: release-drafter/release-drafter@v6
+      # Capture the release-skill-layer project-context block from the current
+      # open draft, if any, before release-drafter regenerates the body.
+      # release-drafter@v6 fully rewrites the body from its template, so any
+      # content owned by other tooling (here: nolte-shared release-notes-curate)
+      # is otherwise lost. Spec reference: spec/project/release-skill-layer/
+      # §Skill A — Draft notes curation.
+      - name: Capture project-context block
+        id: capture
+        env:
+          GH_TOKEN: ${{ secrets.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          start_marker='<!-- release-skill-layer:project-context-start -->'
+          end_marker='<!-- release-skill-layer:project-context-end -->'
+
+          # gh release list on the runner CLI does not expose targetCommitish;
+          # we only need tagName here, the restore step re-resolves the active draft.
+          draft=$(gh release list --repo "$REPO" \
+            --json isDraft,tagName \
+            --jq '[.[] | select(.isDraft == true)] | .[0]')
+
+          if [[ -z "$draft" || "$draft" == "null" ]]; then
+            echo "No existing draft to capture from."
+            echo "had_markers=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          captured_tag=$(echo "$draft" | jq -r '.tagName')
+          body=$(gh release view "$captured_tag" --repo "$REPO" --json body --jq .body)
+
+          if ! grep -qF "$start_marker" <<< "$body" || ! grep -qF "$end_marker" <<< "$body"; then
+            echo "Draft '$captured_tag' has no project-context marker pair."
+            echo "had_markers=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          captured=$(awk -v s="$start_marker" -v e="$end_marker" '
+            BEGIN { p=0 }
+            index($0, s) > 0 { p=1 }
+            p { print }
+            index($0, e) > 0 { p=0 }
+          ' <<< "$body")
+
+          if [[ -z "$captured" ]]; then
+            echo "::warning::Marker pair present but extraction returned empty — skipping restore."
+            echo "had_markers=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          mkdir -p .release-drafter-cache
+          printf '%s\n' "$captured" > .release-drafter-cache/markers.md
+          echo "had_markers=true" >> "$GITHUB_OUTPUT"
+          echo "captured_tag=$captured_tag" >> "$GITHUB_OUTPUT"
+          echo "Captured marker block from draft '$captured_tag' ($(wc -l < .release-drafter-cache/markers.md) lines)."
+
+      - name: Update Release Draft
+        uses: release-drafter/release-drafter@v6
         env:
           GITHUB_TOKEN: ${{ secrets.token }}
+
+      - name: Restore project-context block
+        if: steps.capture.outputs.had_markers == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.token }}
+          REPO: ${{ github.repository }}
+          CAPTURED_TAG: ${{ steps.capture.outputs.captured_tag }}
+        run: |
+          set -euo pipefail
+          start_marker='<!-- release-skill-layer:project-context-start -->'
+          end_marker='<!-- release-skill-layer:project-context-end -->'
+
+          draft=$(gh release list --repo "$REPO" \
+            --json isDraft,tagName \
+            --jq '[.[] | select(.isDraft == true)] | .[0]')
+
+          if [[ -z "$draft" || "$draft" == "null" ]]; then
+            echo "::warning::No draft after release-drafter run — markers not restored."
+            exit 0
+          fi
+
+          new_tag=$(echo "$draft" | jq -r '.tagName')
+
+          if [[ "$new_tag" != "$CAPTURED_TAG" ]]; then
+            echo "::warning::Draft tag changed from '$CAPTURED_TAG' to '$new_tag' — captured markers may be stale; not restoring. Re-run release-notes-curate to regenerate the project-context block."
+            exit 0
+          fi
+
+          current_body=$(gh release view "$new_tag" --repo "$REPO" --json body --jq .body)
+
+          if grep -qF "$start_marker" <<< "$current_body" && grep -qF "$end_marker" <<< "$current_body"; then
+            echo "Marker pair already present in post-drafter body. release-drafter@v6 preserved it; skipping restore."
+            exit 0
+          fi
+
+          captured=$(cat .release-drafter-cache/markers.md)
+          new_body=$(printf '%s\n\n%s' "$current_body" "$captured")
+
+          tmpfile=$(mktemp)
+          printf '%s' "$new_body" > "$tmpfile"
+          gh release edit "$new_tag" --repo "$REPO" --notes-file "$tmpfile"
+          rm -f "$tmpfile"
+
+          echo "::notice::Restored release-skill-layer project-context block to draft '$new_tag'."
