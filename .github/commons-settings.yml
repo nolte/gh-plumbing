@@ -74,9 +74,9 @@ labels:
     color: "#3ffc8a"
     description: User question
 
-  - name: documentations
+  - name: documentation
     color: "#caa7e8"
-    description: Update documentation
+    description: Update documentation.
 
   - name: cicd
     color: "#fbca04"
@@ -121,6 +121,18 @@ labels:
   - name: claude-code
     color: "#ffd33d"
     description: Touches Claude Code integration (`.claude/`, `.claude-plugin/`, `CLAUDE.md`).
+
+  - name: release
+    color: "#5319e7"
+    description: Version-alignment PR — excluded from release-drafter changelog.
+
+  - name: github-actions
+    color: "#000000"
+    description: Touches GitHub Actions workflows under `.github/workflows/`.
+
+  - name: stale
+    color: "#cccccc"
+    description: Auto-applied by actions/stale to inactive issues and pull requests.
 
 # <!--td-commons-settings-labels-end-->
 

@@ -3,6 +3,15 @@ repos:
       rev: v6.0.0
       hooks:
           - id: check-yaml
+            args: ['--unsafe']
           - id: end-of-file-fixer
           - id: trailing-whitespace
             args: ['--markdown-linebreak-ext=md']
+    - repo: local
+      hooks:
+          - id: label-description-length
+            name: Label descriptions ≤100 chars (GitHub API limit, see #331)
+            entry: .github/scripts/check-label-descriptions.py
+            language: python
+            additional_dependencies: ['pyyaml']
+            files: '^\.github/commons-settings\.yml$'

@@ -3,3 +3,4 @@ site
 .github/styles/*
 !.github/styles/.keep
 .task
+.claude/

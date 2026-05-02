@@ -7,9 +7,11 @@ labelPRBasedOnFilePath:
     - .github/settings.yml
   chore:
     - .github/**
-  documentations:
+  documentation:
     - docs/**
     - mkdocs.yml
     - .github/ISSUE_TEMPLATE/**
     - .github/pull_request_template.md
+  spec:
+    - spec/**
 # <!--td-commons-settings-labels-end-->

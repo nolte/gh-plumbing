@@ -1,0 +1,21 @@
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (must match an open release-drafter draft)."
+        required: true
+        type: string
+      dry_run:
+        description: "Validate without flipping draft=false."
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  publish:
+    uses: nolte/gh-plumbing/.github/workflows/reusable-release-publish.yml@develop
+    with:
+      tag: ${{ inputs.tag }}
+      dry_run: ${{ inputs.dry_run }}
+    secrets:
+      token: ${{ secrets.GITHUB_TOKEN }}

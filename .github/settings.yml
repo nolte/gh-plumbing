@@ -1,5 +1,15 @@
 ---
-# These settings are synced to GitHub by https://probot.github.io/apps/settings/
+# These settings are synced to GitHub by https://probot.github.io/apps/settings/.
+#
+# The Probot Settings App reacts to push events that touch THIS file; changes
+# to the upstream `_extends:` source (`commons-settings.yml`) do not trigger a
+# fresh sync on their own. When a commons change should propagate, edit this
+# file as well (a comment touch is enough) so the App re-runs the merge.
+# Tracked by https://github.com/nolte/gh-plumbing/issues/331.
+#
+# Last propagation: 2026-05-01 — drift cleanup (rename `documentations` →
+# `documentation`, add `stale` and `github-actions`, simplify `release`
+# description).
 
 _extends: gh-plumbing:.github/commons-settings.yml
 
