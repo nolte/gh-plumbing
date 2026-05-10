@@ -25,3 +25,11 @@ jobs:
           # merge commits are disabled, and the action exits 0 without
           # actually merging — a silent no-op that looks green in CI.
           MERGE_METHOD: squash
+          # `pascalgn/automerge-action` does not honour the GitHub-native
+          # `delete_branch_on_merge: true` repo setting; it has its own
+          # `MERGE_DELETE_BRANCH` env var that defaults to false. Setting
+          # it to "true" makes the action delete the source branch as
+          # part of the same call, mirroring the repo-level convention
+          # declared by commons-settings.yml and removing the per-PR
+          # `gh api -X DELETE` catch-up step from consumer workflows.
+          MERGE_DELETE_BRANCH: "true"

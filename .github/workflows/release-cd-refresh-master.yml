@@ -1,9 +1,23 @@
+name: Release Deliver to Master
+
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: |
+          Tag to fast-forward master to (e.g. v1.1.15). Use as a manual
+          escape hatch when the release:published cascade did not fire
+          under GITHUB_TOKEN — see spec/project/workflow-health/
+          §Known platform constraints.
+        required: true
+        type: string
 
 jobs:
   refresh_presentation_branch:
     uses: nolte/gh-plumbing/.github/workflows/reusable-release-cd-refresh-master.yml@develop
+    with:
+      from_branch: ${{ inputs.tag || github.event.ref }}
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}

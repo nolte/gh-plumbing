@@ -7,7 +7,7 @@ labelPRBasedOnFilePath:
     - .github/settings.yml
   chore:
     - .github/**
-  documentations:
+  documentation:
     - docs/**
     - mkdocs.yml
     - .github/ISSUE_TEMPLATE/**
