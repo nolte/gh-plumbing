@@ -1,0 +1,72 @@
+name: Reusable — Docker Lint & Dry-Build
+
+on:
+  workflow_call:
+    inputs:
+      context:
+        description: Build context passed to docker/build-push-action.
+        required: false
+        type: string
+        default: "."
+      dockerfile:
+        description: Path to the Dockerfile relative to the repository root.
+        required: false
+        type: string
+        default: "Dockerfile"
+      platforms:
+        description: |
+          Comma-separated list of target platforms. Single-arch is the
+          default to keep PR feedback fast; multi-arch is reserved for the
+          publish workflow.
+        required: false
+        type: string
+        default: "linux/amd64"
+      hadolint_config:
+        description: |
+          Optional path to a hadolint config file (.hadolint.yaml). Empty
+          means "use hadolint defaults".
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  hadolint:
+    name: Lint ${{ inputs.dockerfile }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: ${{ inputs.dockerfile }}
+          config: ${{ inputs.hadolint_config }}
+
+  build:
+    name: Dry-build ${{ inputs.dockerfile }}
+    needs: hadolint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        if: contains(inputs.platforms, ',')
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          platforms: ${{ inputs.platforms }}
+          push: false
+          load: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
