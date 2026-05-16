@@ -6,7 +6,9 @@ on:
       image_name:
         description: |
           Image name under ghcr.io/<owner>/. The full reference becomes
-          ghcr.io/${{ github.repository_owner }}/<image_name>:<tag>.
+          ghcr.io/<repository_owner>/<image_name>:<tag>, where
+          <repository_owner> is resolved at job time via
+          github.repository_owner.
         required: true
         type: string
       context:
