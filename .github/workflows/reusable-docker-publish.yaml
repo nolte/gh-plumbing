@@ -95,13 +95,27 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ inputs.registry }}/${{ github.repository_owner }}/${{ inputs.image_name }}
+          # Disable the action's default `latest=auto` so the `latest` tag is
+          # set exclusively by the explicit `type=raw,value=latest,enable=...`
+          # rule below. Without this, `latest=auto` adds a second, parallel
+          # source for the `latest` tag (every tag-ref dispatch resets it),
+          # which produced surprising drift in nolte/reachy-mini-mcp v0.1.1
+          # where a manual `workflow_dispatch --ref v0.1.1` rewrote `latest`.
+          flavor: |
+            latest=false
           tags: |
             type=ref,event=branch
             type=ref,event=pr
             type=sha,prefix=
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ github.event_name == 'release' && !github.event.release.prerelease }}
+            # `latest` is set on:
+            #   - a non-prerelease GitHub Release publish event, or
+            #   - a manual workflow_dispatch fired against a non-prerelease
+            #     semver tag ref (no `-` qualifier in the tag name).
+            # Both paths converge on the same intent: production releases
+            # always own `:latest`, prereleases and branch-refs never do.
+            type=raw,value=latest,enable=${{ (github.event_name == 'release' && !github.event.release.prerelease) || (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/') && !contains(github.ref, '-')) }}
             ${{ inputs.tag_extra }}
 
       - name: Build and push
