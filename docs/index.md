@@ -74,4 +74,6 @@
     ```
 
 !!! tip "Pinning strategy"
-    Reference `@develop` for the latest changes or pin to a release tag (for example `@v1.1.8`) for stability. The `master` branch refreshes automatically on every published release.
+    - **Reusable workflows:** `@develop` for latest, `@vX.Y.Z` for reproducibility, `@master` for the latest published release.
+    - **Probot `_extends`:** no pin possible—always resolves against `develop`. See [Probot → Settings → Versioning](probot/settings.md#versioning-drift-and-the-_extends-contract).
+    - **Renovate preset:** append `#vX.Y.Z` (note: `#`, not `@`) to pin to a release tag.
