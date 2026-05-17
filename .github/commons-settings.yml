@@ -147,7 +147,12 @@ branches:
     protection:
       required_pull_request_reviews: null
       required_status_checks:
+        # Portfolio-default leaves required contexts empty so this commons
+        # config does not impose a gh-plumbing-specific check name on every
+        # consumer repo. Consumers MUST declare their own required-check
+        # contexts in their per-repo .github/settings.yml. See
+        # spec/project/pull-request-workflow §required status checks.
         strict: true
-        contexts:
-          - "static / Static CI Tests"
+        contexts: []
+      enforce_admins: true
       restrictions: null
