@@ -1,6 +1,6 @@
 # Documentation
 
-Builds an [mkdocs](https://www.mkdocs.org/) site and publishes it to GitHub Pages.
+Builds an [MkDocs](https://www.mkdocs.org/) site and publishes it to GitHub Pages.
 
 This workflow is part of the [nolte/cookiecutter-gh-project](https://github.com/nolte/cookiecutter-gh-project) template.
 
