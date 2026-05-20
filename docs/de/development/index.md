@@ -63,5 +63,5 @@ act push -j static -W .github/workflows/build-static-tests.yaml
 
 [Vale](https://vale.sh/) prüft Markdown-Dateien im CI über `reusable-spelling-vale.yaml`. Die Regeln liegen in `.vale.ini`, die Styles unter `.github/styles/`.
 
-!!! info "CLAUDE.md ist ausgenommen"
-    `CLAUDE.md` trägt LLM-Kontext, keine Endnutzer-Dokumentation — Vale überspringt die Datei bewusst.
+!!! info "Vale überspringt CLAUDE.md"
+    `CLAUDE.md` trägt Large-Language-Model-Kontext für Claude Code, keine Endnutzer-Dokumentation, deshalb überspringt Vale die Datei.

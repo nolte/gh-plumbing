@@ -48,9 +48,9 @@ jobs:
 ```
 
 !!! note "Referenz-Auswahl"
-    - `@develop` folgt immer dem aktuellen Stand; empfohlen für interne Repositories, die dieses Projekt eng begleiten.
-    - `@vX.Y.Z` pinnt auf eine veröffentlichte Version; empfohlen, wenn Reproduzierbarkeit zählt.
-    - `master` aktualisiert sich automatisch bei jedem veröffentlichten Release und spiegelt den jeweils aktuellen Release-Tag.
+    - `@develop` folgt immer dem aktuellen Stand. Empfohlen für interne Repositories, die dieses Projekt begleiten.
+    - `@vX.Y.Z` pinnt auf eine veröffentlichte Version. Empfohlen, wenn Reproduzierbarkeit zählt.
+    - `@master` aktualisiert sich automatisch bei jedem veröffentlichten Release und spiegelt den jeweils aktuellen Release-Tag.
 
 ---
 
