@@ -1,10 +1,17 @@
 variable "organization" {
-  description = "GitHub organisation (or user) that owns the consumer repositories. The provider must be authenticated against this scope."
+  description = "GitHub organisation that owns the consumer repositories. Mutually exclusive with var.user — set exactly one. Org mode provisions one org-level variable + secret with visibility=selected; user mode provisions repo-level variables + secrets per consumer repository."
   type        = string
+  default     = ""
+}
+
+variable "user" {
+  description = "GitHub user account that owns the consumer repositories. Mutually exclusive with var.organization — set exactly one. Used when no GitHub organisation exists; the module then creates per-repository Actions variables and secrets instead of organisation-scoped ones."
+  type        = string
+  default     = ""
 }
 
 variable "app_id" {
-  description = "Numeric ID of the portfolio GitHub App (visible on its settings page). Written to the org-level Actions variable PORTFOLIO_APP_ID."
+  description = "Numeric ID of the portfolio GitHub App (visible on its settings page). Written to the Actions variable PORTFOLIO_APP_ID — org-scoped in organisation mode, repo-scoped in user mode."
   type        = string
 
   validation {
@@ -14,7 +21,7 @@ variable "app_id" {
 }
 
 variable "app_private_key" {
-  description = "PEM-encoded private key for the portfolio GitHub App. Written to the org-level Actions secret PORTFOLIO_APP_PRIVATE_KEY. Marked sensitive."
+  description = "PEM-encoded private key for the portfolio GitHub App. Written to the Actions secret PORTFOLIO_APP_PRIVATE_KEY — org-scoped in organisation mode, repo-scoped in user mode. Marked sensitive."
   type        = string
   sensitive   = true
 
@@ -35,7 +42,7 @@ variable "app_slug" {
 }
 
 variable "consumer_repositories" {
-  description = "Names of repositories in var.organization that should consume the portfolio App. The module sets visibility=selected on the org-level variable + secret to this list, and (when enable_branch_bypass is true) configures branch protection with the App as a bypass actor."
+  description = "Names of repositories under the owner (organisation or user) that should consume the portfolio App. Org mode sets visibility=selected on the org-level variable + secret to this list; user mode creates one variable + secret per repository here. When enable_branch_bypass is true, every listed repo also gets the App declared as a push-restriction actor."
   type        = list(string)
 
   validation {
@@ -45,7 +52,7 @@ variable "consumer_repositories" {
 }
 
 variable "enable_branch_bypass" {
-  description = "When true, configure branch protection on var.protected_branches for every consumer repository with var.app_slug declared as a push-restriction (bypass) actor. This is Phase 2 of issue #330. Default off so Phase 0 (credentials + selection) can land independently."
+  description = "When true, configure branch protection on var.protected_branches for every consumer repository with var.app_slug declared as a push-restriction (bypass) actor. This is Phase 2 of issue #330. Default off so Phase 0 (credentials + selection) can land independently. Works identically in organisation and user mode."
   type        = bool
   default     = false
 }
