@@ -184,12 +184,20 @@ Key properties:
   generates a one-hour installation token, scoped to the calling
   repository. No long-lived credential leaves the GitHub control plane.
 
-!!! note "Only emitting wrappers need it"
-    Wrappers that emit cascade-relevant events need the App-credential
-    forwarding pattern: `automerge.yaml`, `release-publish.yml`.
-    Wrappers that only consume cascade events (`release-drafter.yml`,
-    `release-cd-refresh-master.yml`, `release-cd-deliver-docs.yml`)
-    keep using `GITHUB_TOKEN`.
+!!! note "Three wrappers need the App-credential forwarding"
+    Three wrappers push through a protected branch and need the
+    App-token pattern:
+
+    - `automerge.yaml` squash-merges to `develop`.
+    - `release-publish.yml` flips the release to published. The
+      resulting `release: published` event then cascades to other
+      workflows.
+    - `release-cd-refresh-master.yml` fast-forwards `master`. Master
+      is also push-restricted after phase 2.
+
+    Wrappers that don't push directly to a protected branch
+    (`release-drafter.yml`, `release-cd-deliver-docs.yml`) keep using
+    `GITHUB_TOKEN`.
 
 ---
 

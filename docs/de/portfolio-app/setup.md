@@ -197,12 +197,16 @@ Schlüsseleigenschaften:
   begrenzt auf das aufrufende Repository. Es verlässt nie GitHubs
   Control Plane als langlebiges Credential.
 
-!!! note "Nur emittierende Wrapper brauchen das Pattern"
-    Wrapper, die Cascade-relevante Events emittieren, brauchen den
-    Mint-Pattern: `automerge.yaml`, `release-publish.yml`. Wrapper, die
-    nur Cascade-Events konsumieren (`release-drafter.yml`,
-    `release-cd-refresh-master.yml`, `release-cd-deliver-docs.yml`),
-    nutzen weiter `GITHUB_TOKEN`.
+!!! note "Drei Wrapper brauchen das App-Credential-Forwarding"
+    Wrapper, die durch einen geschützten Branch pushen, brauchen das
+    App-Token-Pattern: `automerge.yaml` (Squash-Merge nach `develop`),
+    `release-publish.yml` (Release-Flip — emittiert
+    `release: published` und kaskadiert weiter) und
+    `release-cd-refresh-master.yml` (Fast-Forward nach `master`, das
+    nach Phase 2 ebenfalls push-restricted ist). Wrapper, die nicht
+    direkt auf einen geschützten Branch pushen
+    (`release-drafter.yml`, `release-cd-deliver-docs.yml`), nutzen
+    weiter `GITHUB_TOKEN`.
 
 ---
 
