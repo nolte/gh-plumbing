@@ -9,3 +9,5 @@
 *[IaC]: Infrastructure as Code
 *[TF]: Terraform
 *[MR]: Merge Request
+*[LLM]: Large Language Model
+*[OCI]: Open Container Initiative

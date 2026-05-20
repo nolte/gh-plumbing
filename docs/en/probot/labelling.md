@@ -1,6 +1,6 @@
 # Labelling
 
-Automatically labels PRs and issues using [boring-cyborg](https://probot.github.io/apps/boring-cyborg/). Changes under `./docs`, for example, receive the `documentations` label.
+Automatically labels PRs and issues using [boring-cyborg](https://probot.github.io/apps/boring-cyborg/). Changes under `./docs`, for example, receive the `documentation` label.
 
 ---
 
@@ -26,7 +26,7 @@ Automatically labels PRs and issues using [boring-cyborg](https://probot.github.
 
 ## Label palette
 
-`commons-settings.yml` declares the label palette; the [Settings App](settings.md) applies it.
+`commons-settings.yml` declares the label palette. The [Settings App](settings.md) applies it.
 
 ```yaml
 {%

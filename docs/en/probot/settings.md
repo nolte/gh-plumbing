@@ -43,9 +43,9 @@ repository:
 ## Versioning, drift, and the `_extends` contract
 
 !!! warning "`_extends @<ref>` isn't supported"
-    The Probot Settings App always resolves `_extends:` against the **default
+    The Probot Settings App always resolves `_extends:` from the **default
     branch** of the target repository. The parser rejects any `@<tag>`,
-    `@<sha>`, `?ref=…`, or `:vN` suffix on the `_extends:` value outright; it
+    `@<sha>`, `?ref=…`, or `:vN` suffix on the `_extends:` value outright. It
     doesn't strip the suffix and continue.
     See [`octokit-plugin-config/src/util/extends-to-get-content-params.ts`][parser]
     — the regex anchors at the start and excludes `@` from the filename token.
@@ -57,7 +57,7 @@ repository:
 `commons-*.yml` file changes here, every consumer drifts on its next sync
 trigger, with no signal back to the consumer. There is no reproducible
 snapshot: *"which `commons-settings.yml` state did this repository sync
-against last week?"* has no answer.
+last week?"* has no answer.
 
 **This is a known, accepted trade-off.** See issue
 [#337](https://github.com/nolte/gh-plumbing/issues/337) for the full
