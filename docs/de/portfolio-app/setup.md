@@ -29,6 +29,27 @@ personengebundenes Credential.
 
 ---
 
+## Owner-Modi
+
+Die Portfolio-App kann Konsumenten unter einer GitHub-**Organisation**
+oder unter einem persönlichen **User-Account** bedienen. Wähle den
+Modus, der zum Account passt, der die Konsumenten-Repositories
+besitzt — beide Modi liefern dasselbe nachgelagerte Verhalten
+(App-emittierte Events kaskadieren user-initiated), nur die
+Credential-Verkabelung unterscheidet sich.
+
+| Modus | Wann wählen | Credentials liegen als |
+|---|---|---|
+| Organisations-Modus | Der Account, der die Konsumenten-Repositories besitzt, ist eine GitHub-Organisation. Günstiger im Betrieb ab drei Konsumenten. | Eine Org-Level-Actions-Variable + ein Org-Level-Actions-Secret mit `visibility = "selected"`, beschränkt auf die Konsumenten-Liste. |
+| User-Modus | Der Account, der die Konsumenten-Repositories besitzt, ist ein persönlicher GitHub-Account (keine Org). | Eine Repo-Level-Actions-Variable + ein Repo-Level-Actions-Secret in jedem Konsumenten-Repository. |
+
+Beide Modi nutzen dasselbe Wrapper-Pattern in `.github/workflows/`;
+die Wrapper interessiert nicht, welcher Modus ihr
+`PORTFOLIO_APP_ID` / `PORTFOLIO_APP_PRIVATE_KEY`-Paar gesetzt hat,
+sondern nur, dass das Paar zum Job-Start eine gültige App ergibt.
+
+---
+
 ## Welche Permissions die App braucht
 
 Bei der Registrierung exakt diese Repository-Permissions vergeben:
@@ -64,23 +85,35 @@ Installation-Token holen.
 5. **App installieren** in jedem Konsument-Repository, das
    cascade-korrekte Workflows braucht. Beginne mit
    `nolte/gh-plumbing` selbst.
-6. **Repository- (oder Organisations-) Credentials setzen** auf jedem
-   Konsumenten, der die App adoptiert:
-   - Variable `PORTFOLIO_APP_ID` (Organisations- oder Repo-
-     [Actions-Variable](https://docs.github.com/en/actions/learn-github-actions/variables)) —
-     die App-ID ist nicht sensibel; als Variable abgelegt kann die
-     `if:`-Condition im Wrapper die Adoption erkennen.
-   - Secret `PORTFOLIO_APP_PRIVATE_KEY` (Organisations- oder Repo-
-     [Actions-Secret](https://docs.github.com/en/actions/security-guides/encrypted-secrets)) —
-     der vollständige PEM-Inhalt aus Schritt 3.
+6. **Credentials setzen** im Scope, der zum Owner-Modus passt:
+   - **Organisations-Modus:** eine
+     [Org-Level-Actions-Variable](https://docs.github.com/en/actions/learn-github-actions/variables)
+     `PORTFOLIO_APP_ID` und ein
+     [Org-Level-Actions-Secret](https://docs.github.com/en/actions/security-guides/encrypted-secrets)
+     `PORTFOLIO_APP_PRIVATE_KEY`, beide mit `visibility = "selected"`
+     auf die Konsumenten-Liste eingeschränkt.
+   - **User-Modus:** eine Repo-Level-Actions-Variable
+     `PORTFOLIO_APP_ID` und ein Repo-Level-Actions-Secret
+     `PORTFOLIO_APP_PRIVATE_KEY` in **jedem** Konsumenten-Repository.
+     Persönliche Accounts bieten keine Org-Level-Actions-Resourcen,
+     daher trägt jedes Repository sein eigenes Paar.
+
+   Die App-ID ist nicht sensibel; als Variable abgelegt kann die
+   `if:`-Condition im Wrapper die Adoption erkennen. Der
+   Private-Key-Inhalt aus Schritt 3 landet im Secret.
 
 !!! tip "Terraform-getriebene Provisionierung"
     Die Schritte 5 und 6 sind auch als Terraform-Modul unter
     [`terraform/portfolio-app/`](https://github.com/nolte/gh-plumbing/tree/develop/terraform/portfolio-app)
-    verfügbar. Das Modul legt die Org-Variable und das Org-Secret in
-    einem `terraform apply` an und deklariert optional die App als
-    Branch-Protection-Bypass-Actor. Schritte 1–4 bleiben manuell, weil
-    GitHub keine API zur App-Erstellung anbietet.
+    verfügbar. Das Modul unterstützt beide Modi (Organisation und
+    User), legt Variable und Secret in einem `terraform apply` an und
+    deklariert optional die App als Branch-Protection-Bypass-Actor.
+    Schritte 1–4 bleiben manuell, weil GitHub keine API zur
+    App-Erstellung anbietet. Siehe
+    [`examples/basic/`](https://github.com/nolte/gh-plumbing/tree/develop/terraform/portfolio-app/examples/basic)
+    für den Organisations-Modus und
+    [`examples/personal-account/`](https://github.com/nolte/gh-plumbing/tree/develop/terraform/portfolio-app/examples/personal-account)
+    für den User-Modus.
 
 ---
 
@@ -157,11 +190,14 @@ selbst triggern:
 Wenn ein Cascade immer noch nicht triggert, prüfe:
 
 1. Die App ist im Konsument-Repo installiert (`Settings → GitHub Apps`).
-2. `vars.PORTFOLIO_APP_ID` ist für den Workflow sichtbar (Repo- oder
-   Org-Variable-Scope passt zum Workflow-Repo).
-3. Der Wrapper-Run zeigt den `mint-token`-Job als `success` mit dem
-   `app-token`-Step **executed** (nicht skipped). Skipped Step =
-   Fallback-Pfad = GITHUB_TOKEN = Cascade-Lücke.
+2. `vars.PORTFOLIO_APP_ID` ist für den Workflow sichtbar.
+   Organisations-Modus: die Org-Variable hat `visibility = "selected"`
+   inklusive des Workflow-Repos. User-Modus: das Repository trägt
+   seine eigene `PORTFOLIO_APP_ID`-Actions-Variable.
+3. Der reusable-Run zeigt den `Mint App installation token`-Step als
+   `success` (nicht `skipped`). Skipped Step bedeutet, der App-ID-Input
+   war leer und der Fallback-Pfad griff (`GITHUB_TOKEN` =
+   Cascade-Lücke).
 
 ---
 

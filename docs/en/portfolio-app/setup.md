@@ -29,6 +29,26 @@ Personal-Access-Token collection, no person-bound credential.
 
 ---
 
+## Owner modes
+
+The portfolio App can serve consumers under a GitHub **organisation**
+or under a personal **user** account. Pick the mode that matches the
+account that owns the consumer repositories. Both modes give the same
+downstream behaviour: App-authored events cascade user-initiated.
+Only the credential plumbing differs.
+
+| Mode | When to pick | Credentials live as |
+|---|---|---|
+| Organisation mode | The account owning consumer repositories is a GitHub organisation. Cheaper to operate when three or more consumers exist. | One organisation-level Actions variable + one organisation-level Actions secret with `visibility = "selected"` scoped to the consumer-repositories list. |
+| User mode | The account owning consumer repositories is a personal GitHub account (no organisation). | One repository-level Actions variable + one repository-level Actions secret on each consumer repository. |
+
+Both modes use the same wrapper pattern in `.github/workflows/`. The
+wrappers don't care which mode set their `PORTFOLIO_APP_ID` /
+`PORTFOLIO_APP_PRIVATE_KEY` pair, only that the pair resolves to a
+valid App at job start.
+
+---
+
 ## Permissions the app requires
 
 When you register the App, grant exactly these repository permissions:
@@ -61,23 +81,34 @@ token at job start use the App exclusively.
 4. **Note the App ID** (visible on the App's settings page).
 5. **Install the App** in every consumer repository that needs
    cascade-correct workflows. Start with `nolte/gh-plumbing` itself.
-6. **Set repository (or organisation) credentials** on each consumer
-   that adopts the App:
-   - Variable `PORTFOLIO_APP_ID` (organisation- or repository-level
-     [Actions variable](https://docs.github.com/en/actions/learn-github-actions/variables)).
-     The App ID isn't sensitive; storing it as a variable lets the
-     wrapper `if:` condition detect adoption.
-   - Secret `PORTFOLIO_APP_PRIVATE_KEY` (organisation- or repository-level
-     [Actions secret](https://docs.github.com/en/actions/security-guides/encrypted-secrets))
-     holding the full private-key contents from step 3.
+6. **Set credentials** at the scope that matches the owner mode:
+   - **Organisation mode:** one
+     [organisation-level Actions variable](https://docs.github.com/en/actions/learn-github-actions/variables)
+     `PORTFOLIO_APP_ID` and one
+     [organisation-level Actions secret](https://docs.github.com/en/actions/security-guides/encrypted-secrets)
+     `PORTFOLIO_APP_PRIVATE_KEY`, both with `visibility = "selected"`
+     scoped to the consumer-repositories list.
+   - **User mode:** one repository-level Actions variable
+     `PORTFOLIO_APP_ID` and one repository-level Actions secret
+     `PORTFOLIO_APP_PRIVATE_KEY` on **every** consumer repository.
+     Personal accounts don't expose org-level Actions resources, so
+     each repository carries its own pair.
+
+   The App ID isn't sensitive. Storing it as a variable lets the
+   wrapper `if:` condition detect adoption. The private-key contents
+   from step 3 go into the secret.
 
 !!! tip "Terraform-driven provisioning"
     Steps 5 and 6 are also available as a Terraform module under
     [`terraform/portfolio-app/`](https://github.com/nolte/gh-plumbing/tree/develop/terraform/portfolio-app).
-    The module creates the org-level variable and secret in one
-    `terraform apply` and (optionally) declares the App as a
-    branch-protection bypass actor. Steps 1–4 stay manual because
-    GitHub provides no API to create an App.
+    The module supports both organisation and user mode, creates the
+    variable and secret in one `terraform apply`, and (optionally)
+    declares the App as a branch-protection bypass actor. Steps 1–4
+    stay manual because GitHub provides no API to create an App. See
+    [`examples/basic/`](https://github.com/nolte/gh-plumbing/tree/develop/terraform/portfolio-app/examples/basic)
+    for organisation mode and
+    [`examples/personal-account/`](https://github.com/nolte/gh-plumbing/tree/develop/terraform/portfolio-app/examples/personal-account)
+    for user mode.
 
 ---
 
@@ -144,9 +175,10 @@ After provisioning and adoption, both cascade chains should self-trigger:
 If a cascade still fails to fire, check:
 
 1. Confirm the App install in the consumer repository (`Settings → GitHub Apps`).
-2. Confirm `vars.PORTFOLIO_APP_ID` is visible to the workflow
-   (repository or organisation variable scope matches the workflow's
-   repository).
+2. Confirm `vars.PORTFOLIO_APP_ID` is visible to the workflow.
+   Organisation mode: the org-level variable's `visibility = "selected"`
+   list includes the workflow's repository. User mode: the repository
+   carries its own `PORTFOLIO_APP_ID` Actions variable.
 3. The reusable run shows the `Mint App installation token` step as
    `success`, not `skipped`. A skipped step means the App-id input
    arrived empty and the fallback path took over (`GITHUB_TOKEN` =

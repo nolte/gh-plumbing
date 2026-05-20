@@ -36,6 +36,14 @@
 
     [:octicons-arrow-right-24: Probot-Konfigurationen](probot/index.md)
 
+-   :material-key-variant: **Portfolio-App**
+
+    ---
+
+    Zentrale GitHub App, die die `GITHUB_TOKEN`-Cascade-Lücke schließt. Funktioniert für Organisationen und persönliche Accounts; Terraform-Modul inklusive.
+
+    [:octicons-arrow-right-24: Setup](portfolio-app/setup.md)
+
 -   :material-wrench: **Entwicklung**
 
     ---
