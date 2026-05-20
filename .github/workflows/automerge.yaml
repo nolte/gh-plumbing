@@ -17,8 +17,31 @@ on:
       - completed
   status: {}
 
+# When `vars.PORTFOLIO_APP_ID` is set in this repo (or organisation-wide),
+# the reusable mints a short-lived GitHub-App installation token from
+# `secrets.PORTFOLIO_APP_PRIVATE_KEY` and uses it for the squash-merge.
+# App-authored push events cascade to release-drafter and build-static-
+# tests; GITHUB_TOKEN-authored ones don't. See
+# spec/project/workflow-health/ §Known platform constraints (#330) and
+# docs/<lang>/portfolio-app/ for setup.
+#
+# Backwards compatibility: when `vars.PORTFOLIO_APP_ID` is unset, the
+# reusable skips the mint step and falls through to `secrets.token`
+# (= GITHUB_TOKEN). The cascade gap remains but automerge still works.
+#
+# The App ID is a repository or organisation variable
+# (`vars.PORTFOLIO_APP_ID`) because the App ID is non-sensitive and a
+# variable can drive the reusable's `if:` condition; the private key
+# stays in the `PORTFOLIO_APP_PRIVATE_KEY` secret. The mint itself
+# happens INSIDE the reusable — GitHub Actions masks App-token outputs
+# and blocks them from crossing job boundaries, so a separate mint job
+# in the wrapper can't pass the token to a downstream reusable call.
+
 jobs:
   automerge:
     uses: nolte/gh-plumbing/.github/workflows/reusable-automerge.yaml@develop
+    with:
+      app-id: ${{ vars.PORTFOLIO_APP_ID }}
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}
+      app-private-key: ${{ secrets.PORTFOLIO_APP_PRIVATE_KEY }}

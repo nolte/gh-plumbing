@@ -11,3 +11,6 @@
 *[MR]: Merge Request
 *[LLM]: Large Language Model
 *[OCI]: Open Container Initiative
+*[PAT]: Personal Access Token
+*[PEM]: Privacy-Enhanced Mail (key file format)
+*[TTL]: Time To Live
