@@ -1,6 +1,6 @@
 # Dokumentation
 
-Baut eine [MkDocs](https://www.mkdocs.org/)-Site und veröffentlicht sie auf GitHub Pages.
+Baut eine [mkdocs](https://www.mkdocs.org/)-Site und veröffentlicht sie auf GitHub Pages.
 
 Dieser Workflow ist Teil des Templates [nolte/cookiecutter-gh-project](https://github.com/nolte/cookiecutter-gh-project).
 
@@ -22,7 +22,7 @@ jobs:
 ```
 
 !!! note "GitHub Pages"
-    Stelle sicher, dass das Ziel-Repository `has_pages: true` deklariert. Die geteilten Probot-Settings enthalten das bereits — siehe [Settings](../probot/settings.md).
+    Das Ziel-Repository muss `has_pages: true` deklarieren. Die geteilten Probot-Settings enthalten das bereits — siehe [Settings](../probot/settings.md).
 
 ---
 

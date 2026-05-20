@@ -75,5 +75,5 @@
 
 !!! tip "Pinning-Strategie"
     - **Wiederverwendbare Workflows:** `@develop` für den aktuellen Stand, `@vX.Y.Z` für Reproduzierbarkeit, `@master` für den jeweils zuletzt veröffentlichten Release.
-    - **Probot `_extends`:** kein Pin möglich — wird immer gegen `develop` aufgelöst. Siehe [Probot → Settings → Versionierung](probot/settings.md#versionierung-drift-und-der-_extends-kontrakt).
+    - **Probot `_extends`:** kein Pin möglich — wird immer vom Default-Branch (`develop`) aufgelöst. Siehe [Probot → Settings → Versionierung](probot/settings.md#versionierung-drift-und-der-_extends-kontrakt).
     - **Renovate-Preset:** mit `#vX.Y.Z` (Achtung: `#`, nicht `@`) an einen Release-Tag pinnen.
