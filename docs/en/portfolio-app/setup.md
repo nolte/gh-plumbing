@@ -51,21 +51,51 @@ valid App at job start.
 
 ## Permissions the app requires
 
-When you register the App, grant exactly these repository permissions:
+When you register the App, grant exactly these **Repository
+permissions**:
 
 | Permission | Scope | Why |
 |---|---|---|
-| `Contents` | `Read & write` | squash-merge to develop, edit releases, fast-forward master |
-| `Pull requests` | `Read & write` | `pascalgn/automerge-action` reads and merges PRs |
-| `Actions` | `Read` | `release-publish` reads `gh run list` for the post-publish cascade sanity check |
-| `Metadata` | `Read` | mandatory baseline |
+| `Contents` | `Read and write` | Squash-merge to develop, edit releases, fast-forward master |
+| `Pull requests` | `Read and write` | `pascalgn/automerge-action` reads and merges PRs |
+| `Actions` | `Read-only` | `release-publish` reads `gh run list` for the post-publish cascade sanity check |
+| `Metadata` | `Read-only` | Mandatory baseline (GitHub sets this automatically and won't let you disable it) |
 
-Nothing else. In particular: no `Administration` permission (the
-repository-settings App is a separate service), no `Workflows`
-permission (only needed if the App edits `.github/workflows/` files).
+Leave **every other Repository permission** on `No access`, in
+particular the three that look related but aren't:
 
-A webhook isn't required—workflow runs that mint an installation
-token at job start use the App exclusively.
+| Permission | Setting | Reason to skip |
+|---|---|---|
+| `Administration` | `No access` | The Probot Settings App owns repository configuration. Granting this here adds attack surface for no gain. |
+| `Workflows` | `No access` | Would let the App rewrite `.github/workflows/*.yaml`. The use case in this repository merges branches and releases, not workflow files. Add later only if a future reusable needs it. |
+| `Issues` | `No access` | The App neither reads nor writes issues. |
+
+Leave **all Organization permissions** and **all Account permissions**
+on `No access`. The App's work is repository-scoped.
+
+### Identifying and authorizing users
+
+Leave this entire section off. The App acts through installation
+tokens minted in workflow runs, never on behalf of an end user:
+
+- **Callback `URL`** stays empty (`Delete` the placeholder).
+- **Request user authorization (`OAuth`) during installation** stays
+  unchecked.
+- **Enable Device Flow** stays unchecked.
+- **Expire user authorization tokens** is irrelevant either way;
+  GitHub pre-checks it, but the App issues no user tokens to expire.
+
+### Webhook
+
+Disable the webhook entirely (clear the **Active** checkbox). The App
+runs exclusively inside workflow runs that mint an installation token
+at job start. The App subscribes to no events and exposes no endpoint
+to receive them.
+
+### Subscribe to events
+
+Subscribe to **no events** in the App's event list. Leaving any
+subscription on would only generate dead webhook attempts.
 
 ---
 
