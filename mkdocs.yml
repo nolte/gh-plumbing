@@ -50,6 +50,27 @@ extra_css:
 plugins:
   - search
   - include-markdown
+  - i18n:
+      docs_structure: folder
+      languages:
+        - locale: en
+          default: true
+          name: English
+          build: true
+        - locale: de
+          name: Deutsch
+          build: true
+          nav_translations:
+            Home: Startseite
+            Getting started: Erste Schritte
+            Workflows: Workflows
+            Static tests: Statische Tests
+            Documentation: Dokumentation
+            Release: Release
+            Probot: Probot
+            Settings: Settings
+            Labelling: Labelling
+            Development: Entwicklung
 
 markdown_extensions:
   - abbr

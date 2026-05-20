@@ -11,7 +11,7 @@ uses: nolte/gh-plumbing/.github/workflows/reusable-<name>.yaml@develop
 ## Catalog
 
 {%
-   include-markdown "../../README.md"
+   include-markdown "../../../README.md"
    start="<!--td-workflows-start-->"
    end="<!--td-workflows-end-->"
 %}

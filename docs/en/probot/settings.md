@@ -34,7 +34,7 @@ repository:
 
 ```yaml title=".github/commons-settings.yml"
 {%
-   include "../../.github/commons-settings.yml"
+   include "../../../.github/commons-settings.yml"
 %}
 ```
 

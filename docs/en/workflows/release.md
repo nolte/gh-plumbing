@@ -61,7 +61,7 @@ jobs:
 
     ```yaml
     {%
-       include "../../.github/workflows/reusable-release-drafter.yml"
+       include "../../../.github/workflows/reusable-release-drafter.yml"
     %}
     ```
 
@@ -69,7 +69,7 @@ jobs:
 
     ```yaml
     {%
-       include "../../.github/workflows/reusable-release-cd-refresh-master.yml"
+       include "../../../.github/workflows/reusable-release-cd-refresh-master.yml"
     %}
     ```
 
@@ -77,6 +77,6 @@ jobs:
 
     ```yaml
     {%
-       include "../../.github/commons-release-drafter.yml"
+       include "../../../.github/commons-release-drafter.yml"
     %}
     ```
