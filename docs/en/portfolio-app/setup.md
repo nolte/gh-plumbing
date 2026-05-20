@@ -1,9 +1,9 @@
-# Portfolio GitHub App
+# Portfolio app
 
 Centralised GitHub App that lets reusable workflows in this repository
 emit events GitHub considers user-initiated. Without it, three workflow
-chains in the portfolio fail to cascade silently—`release-drafter`
-after the `automerge` workflow runs, `release-cd-refresh-master` after
+chains in the portfolio fail to cascade—`release-drafter` after the
+`automerge` workflow runs, `release-cd-refresh-master` after
 `release-publish`, and `build-static-tests` on the develop tip after
 `automerge`.
 
@@ -24,12 +24,12 @@ GitHub treats as user-initiated.
 
 The spec mandates a portfolio-level remediation: one App, installed in
 every consumer repository, with the same wrapper pattern in each
-repository's `.github/workflows/`. No per-repository PAT collection,
-no person-bound credential.
+repository's `.github/workflows/`. No per-repository
+Personal-Access-Token collection, no person-bound credential.
 
 ---
 
-## Permissions the App requires
+## Permissions the app requires
 
 When you register the App, grant exactly these repository permissions:
 
@@ -44,8 +44,8 @@ Nothing else. In particular: no `Administration` permission (the
 repository-settings App is a separate service), no `Workflows`
 permission (only needed if the App edits `.github/workflows/` files).
 
-A webhook isn't required—the App is consumed exclusively from
-workflow runs that mint an installation token at job start.
+A webhook isn't required—workflow runs that mint an installation
+token at job start use the App exclusively.
 
 ---
 
@@ -56,8 +56,8 @@ workflow runs that mint an installation token at job start.
    `https://github.com/settings/apps/new` for a personal account).
    Name suggestion: `nolte-portfolio-bot`.
 2. **Grant the permissions listed earlier** and disable every webhook event.
-3. **Generate a private key** (PEM). Save it once because GitHub doesn't
-   show it again.
+3. **Generate a private key** in Privacy-Enhanced-Mail format. Save it
+   once because GitHub doesn't show it again.
 4. **Note the App ID** (visible on the App's settings page).
 5. **Install the App** in every consumer repository that needs
    cascade-correct workflows. Start with `nolte/gh-plumbing` itself.
@@ -69,7 +69,7 @@ workflow runs that mint an installation token at job start.
      wrapper `if:` condition detect adoption.
    - Secret `PORTFOLIO_APP_PRIVATE_KEY` (organisation- or repository-level
      [Actions secret](https://docs.github.com/en/actions/security-guides/encrypted-secrets))
-     holding the full PEM contents from step 3.
+     holding the full private-key contents from step 3.
 
 ---
 
@@ -91,43 +91,36 @@ on:
   status: {}
 
 jobs:
-  mint-token:
-    runs-on: ubuntu-latest
-    outputs:
-      token: ${{ steps.app-token.outputs.token || github.token }}
-    steps:
-      - id: app-token
-        if: ${{ vars.PORTFOLIO_APP_ID != '' }}
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ vars.PORTFOLIO_APP_ID }}
-          private-key: ${{ secrets.PORTFOLIO_APP_PRIVATE_KEY }}
-
   automerge:
-    needs: mint-token
     uses: nolte/gh-plumbing/.github/workflows/reusable-automerge.yaml@develop
+    with:
+      app-id: ${{ vars.PORTFOLIO_APP_ID }}
     secrets:
-      token: ${{ needs.mint-token.outputs.token }}
+      token: ${{ secrets.GITHUB_TOKEN }}
+      app-private-key: ${{ secrets.PORTFOLIO_APP_PRIVATE_KEY }}
 ```
 
 Key properties:
 
 - **Backwards-compatible.** When `vars.PORTFOLIO_APP_ID` is unset, the
-  mint step skips and the wrapper falls through to `github.token`
-  (= `GITHUB_TOKEN`). Behaviour for consumers that haven't adopted the
-  App is unchanged from the pre-App world.
-- **Reusable workflows stay token-type-agnostic.** The reusable
-  workflows in `nolte/gh-plumbing` accept any token shape; only the
-  wrapper decides whether to use the App.
+  reusable skips the mint step and falls through to `secrets.token`
+  (= `GITHUB_TOKEN`). Consumers that haven't adopted the App see no
+  behaviour change from the pre-App world.
+- **Mint happens inside the reusable.** GitHub Actions masks App-token
+  outputs and blocks them from crossing job boundaries, so a separate
+  mint job in the wrapper can't pass the token to a downstream
+  reusable call. The reusable holds the mint step itself, gated on
+  `inputs.app-id`.
 - **Short token lifetime.** `actions/create-github-app-token@v2`
   generates a one-hour installation token, scoped to the calling
-  repository. No long-lived credential leaves GitHub's control plane.
+  repository. No long-lived credential leaves the GitHub control plane.
 
 !!! note "Only emitting wrappers need it"
-    Wrappers that emit cascade-relevant events need the mint pattern:
-    `automerge.yaml`, `release-publish.yml`. Wrappers that only consume
-    cascade events (`release-drafter.yml`, `release-cd-refresh-master.yml`,
-    `release-cd-deliver-docs.yml`) keep using `GITHUB_TOKEN`.
+    Wrappers that emit cascade-relevant events need the App-credential
+    forwarding pattern: `automerge.yaml`, `release-publish.yml`.
+    Wrappers that only consume cascade events (`release-drafter.yml`,
+    `release-cd-refresh-master.yml`, `release-cd-deliver-docs.yml`)
+    keep using `GITHUB_TOKEN`.
 
 ---
 
@@ -142,12 +135,14 @@ After provisioning and adoption, both cascade chains should self-trigger:
 
 If a cascade still fails to fire, check:
 
-1. The App is installed in the consumer repository (`Settings → GitHub Apps`).
-2. `vars.PORTFOLIO_APP_ID` is visible to the workflow (repository or
-   organisation variable scope matches the workflow's repository).
-3. The wrapper run shows the `mint-token` job as `success` with the
-   `app-token` step executed (not skipped). A skipped step means the
-   fallback path took over (`GITHUB_TOKEN` = cascade gap).
+1. Confirm the App install in the consumer repository (`Settings → GitHub Apps`).
+2. Confirm `vars.PORTFOLIO_APP_ID` is visible to the workflow
+   (repository or organisation variable scope matches the workflow's
+   repository).
+3. The reusable run shows the `Mint App installation token` step as
+   `success`, not `skipped`. A skipped step means the App-id input
+   arrived empty and the fallback path took over (`GITHUB_TOKEN` =
+   cascade gap).
 
 ---
 
@@ -158,21 +153,21 @@ If a cascade still fails to fire, check:
 | Routine annual rotation | Generate a new private key on the App page, update `PORTFOLIO_APP_PRIVATE_KEY` in every consumer (or at organisation level once if organisation-scoped), delete the old key from the App. |
 | Suspected key leak | Revoke the leaked key immediately from the App settings, generate a new one, distribute the same day. App ID stays unchanged. |
 | App-ID rotation | Never needed because App IDs are immutable. |
-| Permission scope change | Edit the App's permissions; existing installation tokens with old permissions continue to work for their TTL (≤ 1 h), then renew with new scope. |
+| Permission scope change | Edit the App's permissions; existing installation tokens with old permissions continue to work for their time-to-live (≤ 1 h), then renew with new scope. |
 
 ---
 
 ## Branch-protection bypass (future work)
 
-The spec also calls for the App to be declared as a branch-protection
+The spec also calls for declaring the App as a branch-protection
 bypass actor in `commons-settings.yml` so that the workflow-driven
 primary path of
 `spec/project/release-automation/` §Version-bearing file alignment
 becomes usable. That change wires the App into every consumer's
 `develop` and `master` branch protection through `_extends`.
 
-It's intentionally **not** part of this initial PR. A separate PR
-lands the bypass entry once the App is registered and you can fill in
+This change isn't part of the initial PR. A separate PR lands
+the bypass entry once you have the App registered and can fill in
 its App slug.
 
 ---

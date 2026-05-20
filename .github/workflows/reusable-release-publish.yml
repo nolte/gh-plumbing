@@ -17,9 +17,28 @@ on:
         description: |
           When true, run every validation gate but do not call
           `gh release edit --draft=false`. Per spec §Operational contract SHOULD.
+      app-id:
+        description: |
+          Numeric GitHub App ID of the portfolio App. When set, the
+          reusable mints a short-lived installation token from
+          `secrets.app-private-key` and uses it for the release-edit and
+          gh CLI calls in this workflow. When empty (the default), the
+          reusable falls through to `secrets.token` — typically the
+          consumer's `GITHUB_TOKEN`. The App-authored release:published
+          event cascades to release-cd-refresh-master and release-cd-
+          deliver-docs, closing the GITHUB_TOKEN cascade gap (issue #330,
+          spec/project/workflow-health/ §Known platform constraints).
+        required: false
+        type: string
+        default: ""
     secrets:
       token:
         required: true
+      app-private-key:
+        description: |
+          PEM-encoded private key for the App identified by `inputs.app-id`.
+          Required when `app-id` is set; ignored otherwise.
+        required: false
 
 permissions:
   contents: write
@@ -33,17 +52,33 @@ jobs:
     name: Publish Release
     runs-on: ubuntu-latest
     steps:
+      # Mint an App installation token only when the caller has set
+      # inputs.app-id. The output token (when present) replaces
+      # secrets.token everywhere downstream in this job via the
+      # steps.app-token.outputs.token || secrets.token fallback.
+      - name: Mint App installation token
+        id: app-token
+        if: ${{ inputs.app-id != '' }}
+        # Tolerate a half-configured setup. On any failure outputs.token
+        # is empty and the fallback to secrets.token kicks in — release-
+        # publish keeps working, the cascade gap returns silently.
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+
       - name: Checkout develop
         uses: actions/checkout@v6.0.0
         with:
           ref: develop
           fetch-depth: 0
-          token: ${{ secrets.token }}
+          token: ${{ steps.app-token.outputs.token || secrets.token }}
 
       - name: Resolve draft
         id: draft
         env:
-          GH_TOKEN: ${{ secrets.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
@@ -231,7 +266,7 @@ jobs:
 
       - name: Disclose target state in job summary
         env:
-          GH_TOKEN: ${{ secrets.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
           TAG: ${{ inputs.tag }}
           TARGET_SHA: ${{ steps.draft.outputs.target_sha }}
           DRY_RUN: ${{ inputs.dry_run }}
@@ -265,7 +300,7 @@ jobs:
       - name: Publish (flip draft=false)
         if: ${{ inputs.dry_run != true }}
         env:
-          GH_TOKEN: ${{ secrets.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
@@ -296,7 +331,7 @@ jobs:
       - name: Post-publish sanity
         if: ${{ inputs.dry_run != true }}
         env:
-          GH_TOKEN: ${{ secrets.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
           TAG: ${{ inputs.tag }}
           TARGET_SHA: ${{ steps.draft.outputs.target_sha }}
         run: |
