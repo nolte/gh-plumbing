@@ -227,18 +227,44 @@ If a cascade still fails to fire, check:
 
 ---
 
-## Branch-protection bypass (future work)
+## Branch-protection bypass (phase 2)
 
-The spec also calls for declaring the App as a branch-protection
-bypass actor in `commons-settings.yml` so that the workflow-driven
-primary path of
-`spec/project/release-automation/` §Version-bearing file alignment
-becomes usable. That change wires the App into every consumer's
-`develop` and `master` branch protection through `_extends`.
+`commons-settings.yml` declares the App as a push-restriction actor
+on the `develop` and `master` branches. Because consumer repositories
+extend the commons through `_extends:`, the bypass propagates to
+every adopter automatically once the App reaches an installation in
+their repository.
 
-This change isn't part of the initial PR. A separate PR lands
-the bypass entry once you have the App registered and can fill in
-its App slug.
+The configured slug is **`nolte-portfolio-app`**:
+
+```yaml title=".github/commons-settings.yml"
+branches:
+  - name: develop
+    protection:
+      enforce_admins: true
+      restrictions:
+        users: []
+        teams: []
+        apps:
+          - nolte-portfolio-app
+```
+
+The same block applies to `master`.
+
+!!! warning "Personal accounts can't honour `restrictions.apps`"
+    GitHub limits `restrictions.users` / `.teams` / `.apps` to
+    organisation-owned repositories. The Probot Settings App skips
+    the field without error when it lands in a personal-account
+    repository. Personal-account consumers either operate without
+    push restrictions or override the branches block in their
+    per-repo `.github/settings.yml`.
+
+!!! tip "Pre-condition for phase 2"
+    Before merging the phase-2 PR, the App must already live in
+    every consumer repository whose `commons-settings.yml` will
+    receive the bypass. An App that hasn't reached the repository
+    can't bypass anything. The only effect of an early phase 2 is to
+    block direct pushes from any other actor.
 
 ---
 

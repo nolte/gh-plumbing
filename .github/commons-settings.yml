@@ -142,7 +142,25 @@ branches:
       required_pull_request_reviews: null
       required_status_checks: null
       enforce_admins: true
-      restrictions: null
+      # nolte-portfolio-app is the portfolio GitHub App that the cascade
+      # remediation in #330 (Phase 1) wires through every cascade-emitting
+      # reusable workflow. Declaring it as a push restriction actor here
+      # enables the workflow-driven primary path of
+      # spec/project/release-automation/ §Version-bearing file alignment:
+      # `reusable-release-cd-refresh-master.yml` fast-forwards master with
+      # the App token, and the push event cascades to other workflows.
+      #
+      # Consumers that own a personal account (not an organisation) cannot
+      # honour `restrictions.apps` (GitHub limits this to organisation-owned
+      # repositories); the Probot Settings App will skip the field silently
+      # for those repositories. Such consumers either operate without
+      # restrictions or override this block in their per-repo
+      # .github/settings.yml.
+      restrictions:
+        users: []
+        teams: []
+        apps:
+          - nolte-portfolio-app
   - name: develop
     protection:
       required_pull_request_reviews: null
@@ -155,4 +173,8 @@ branches:
         strict: true
         contexts: []
       enforce_admins: true
-      restrictions: null
+      restrictions:
+        users: []
+        teams: []
+        apps:
+          - nolte-portfolio-app

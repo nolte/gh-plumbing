@@ -7,9 +7,11 @@
 # file as well (a comment touch is enough) so the App re-runs the merge.
 # Tracked by https://github.com/nolte/gh-plumbing/issues/331.
 #
-# Last propagation: 2026-05-01 — drift cleanup (rename `documentations` →
-# `documentation`, add `stale` and `github-actions`, simplify `release`
-# description).
+# Last propagation: 2026-05-20 — Phase 2 of #330: declare
+# nolte-portfolio-app as branch-protection bypass actor on develop and
+# master (push_restrictions actor) so the workflow-driven primary path
+# of spec/project/release-automation/ §Version-bearing file alignment
+# becomes usable.
 
 _extends: gh-plumbing:.github/commons-settings.yml
 
