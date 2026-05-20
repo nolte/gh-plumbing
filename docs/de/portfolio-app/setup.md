@@ -241,18 +241,45 @@ Wenn ein Cascade immer noch nicht triggert, prüfe:
 
 ---
 
-## Branch-Protection-Bypass (Folgearbeit)
+## Branch-Protection-Bypass (Phase 2)
 
-Die Spec verlangt außerdem, die App in `commons-settings.yml` als
-Bypass-Actor für Branch-Protection zu deklarieren, damit der
-workflow-getriebene Primary Path aus
-`spec/project/release-automation/` §Version-bearing file alignment
-nutzbar wird. Diese Änderung verdrahtet die App über `_extends` in die
-`develop`- und `master`-Branch-Protection jedes Konsumenten.
+`commons-settings.yml` deklariert die App als Push-Restriction-Actor
+auf den Branches `develop` und `master`. Da Konsumenten-Repositories
+die Commons per `_extends:` einbinden, propagiert der Bypass
+automatisch zu jedem Adopter, sobald die App in dessen Repository
+installiert ist.
 
-Sie ist absichtlich **nicht** Teil dieses initialen PRs. Ein separater
-PR fügt den Bypass-Eintrag ein, sobald die App registriert ist und du
-ihren App-Slug eintragen kannst.
+Der konfigurierte Slug ist **`nolte-portfolio-app`**:
+
+```yaml title=".github/commons-settings.yml"
+branches:
+  - name: develop
+    protection:
+      enforce_admins: true
+      restrictions:
+        users: []
+        teams: []
+        apps:
+          - nolte-portfolio-app
+```
+
+Derselbe Block gilt für `master`.
+
+!!! warning "Persönliche Accounts unterstützen `restrictions.apps` nicht"
+    GitHub beschränkt `restrictions.users` / `.teams` / `.apps` auf
+    Organisations-Repositories. Die Probot Settings App überspringt
+    das Feld still, wenn es in einem persönlichen Account landet.
+    Persönliche-Account-Konsumenten arbeiten entweder ohne
+    Push-Restriktionen oder überschreiben den Branches-Block in
+    ihrem per-Repo-`.github/settings.yml`.
+
+!!! tip "Vorbedingung für Phase 2"
+    Vor dem Merge des Phase-2-PRs muss die App bereits in jedem
+    Konsumenten-Repository installiert sein, dessen
+    `commons-settings.yml` den Bypass erhält. Eine nicht installierte
+    App kann nichts bypassen; der einzige Effekt einer zu frühen
+    Phase 2 wäre, direkte Pushes von allen anderen Actors zu
+    blockieren.
 
 ---
 
