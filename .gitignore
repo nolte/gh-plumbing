@@ -4,3 +4,16 @@ site
 !.github/styles/.keep
 .task
 .claude/
+
+# Terraform: ignore the local plugin cache and per-run plan files;
+# .terraform.lock.hcl is kept under version control on purpose.
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc

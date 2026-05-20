@@ -71,6 +71,14 @@ token at job start use the App exclusively.
      [Actions secret](https://docs.github.com/en/actions/security-guides/encrypted-secrets))
      holding the full private-key contents from step 3.
 
+!!! tip "Terraform-driven provisioning"
+    Steps 5 and 6 are also available as a Terraform module under
+    [`terraform/portfolio-app/`](https://github.com/nolte/gh-plumbing/tree/develop/terraform/portfolio-app).
+    The module creates the org-level variable and secret in one
+    `terraform apply` and (optionally) declares the App as a
+    branch-protection bypass actor. Steps 1–4 stay manual because
+    GitHub provides no API to create an App.
+
 ---
 
 ## Wrapper pattern (for downstream consumers)
