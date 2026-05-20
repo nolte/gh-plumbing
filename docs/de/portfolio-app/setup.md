@@ -52,23 +52,52 @@ sondern nur, dass das Paar zum Job-Start eine gültige App ergibt.
 
 ## Welche Permissions die App braucht
 
-Bei der Registrierung exakt diese Repository-Permissions vergeben:
+Bei der Registrierung exakt diese **Repository permissions**
+vergeben:
 
 | Permission | Scope | Wofür |
 |---|---|---|
-| `Contents` | `Read & write` | Squash-Merge nach develop, Releases editieren, master fast-forwarden |
-| `Pull requests` | `Read & write` | `pascalgn/automerge-action` liest und merged PRs |
-| `Actions` | `Read` | `release-publish` liest `gh run list` für den Post-Publish-Cascade-Check |
-| `Metadata` | `Read` | Pflicht-Basis |
+| `Contents` | `Read and write` | Squash-Merge nach develop, Releases editieren, master fast-forwarden |
+| `Pull requests` | `Read and write` | `pascalgn/automerge-action` liest und merged PRs |
+| `Actions` | `Read-only` | `release-publish` liest `gh run list` für den Post-Publish-Cascade-Check |
+| `Metadata` | `Read-only` | Pflicht-Basis (setzt GitHub automatisch und lässt sich nicht abwählen) |
 
-Sonst nichts. Insbesondere: keine `Administration`-Permission (die
-Repository-Settings-App ist ein eigenständiger Service), keine
-`Workflows`-Permission (nur nötig, wenn die App Dateien unter
-`.github/workflows/` editiert).
+**Jede andere Repository-Permission** bleibt auf `No access`,
+insbesondere die drei, die verwandt klingen, aber keine sind:
 
-Webhook wird nicht gebraucht — die App wird ausschließlich aus
-Workflow-Runs konsumiert, die zu Beginn eines Jobs ein
-Installation-Token holen.
+| Permission | Setting | Wieso NICHT |
+|---|---|---|
+| `Administration` | `No access` | Die Probot Settings App verwaltet Repo-Konfiguration. Diese Permission hier zu setzen erhöht nur die Angriffsfläche, ohne Nutzen. |
+| `Workflows` | `No access` | Würde der App erlauben, `.github/workflows/*.yaml` zu überschreiben. Unsere Use-Case merged Branches und Releases, keine Workflow-Dateien. Später aktivieren, falls jemals nötig. |
+| `Issues` | `No access` | Die App liest und schreibt keine Issues. |
+
+**Alle Organization permissions** und **alle Account permissions**
+bleiben auf `No access` — die Arbeit der App ist repo-scoped.
+
+### Identifying and authorizing users
+
+Diese ganze Sektion bleibt aus. Unsere App agiert über
+Installation-Tokens, die in Workflow-Runs gemintet werden, niemals
+im Namen eines Endnutzers:
+
+- **Callback URL** bleibt leer (`Delete` auf den Platzhalter klicken).
+- **Request user authorization (OAuth) during installation** bleibt
+  ungesetzt.
+- **Enable Device Flow** bleibt ungesetzt.
+- **Expire user authorization tokens** ist egal; GitHub setzt es
+  vor, aber wir geben keine User-Tokens aus, die ablaufen könnten.
+
+### Webhook
+
+Webhook komplett deaktivieren (**Active** abwählen). Die App wird
+ausschließlich aus Workflow-Runs konsumiert, die zu Beginn eines
+Jobs ein Installation-Token holen — keine Event-Subscriptions
+notwendig und kein Endpoint vorhanden, der sie entgegennimmt.
+
+### Subscribe to events
+
+In der Event-Liste der App **keinen einzigen Event** abonnieren.
+Jedes aktivierte Häkchen würde nur tote Webhook-Versuche erzeugen.
 
 ---
 
