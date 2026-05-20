@@ -14,10 +14,26 @@ on:
         required: true
         type: string
 
+# This wrapper pushes a fast-forward merge to master through
+# `devmasx/merge-branch`. After Phase 2 of issue #330 lands its
+# push-restriction (`restrictions.apps: [nolte-portfolio-app]`) on
+# master, `GITHUB_TOKEN` no longer has the right to push to master —
+# the App token is now mandatory. Forwarding `vars.PORTFOLIO_APP_ID`
+# and `secrets.PORTFOLIO_APP_PRIVATE_KEY` into the reusable lets it
+# mint a short-lived installation token at job start.
+#
+# Backwards compatibility: when `vars.PORTFOLIO_APP_ID` is unset, the
+# reusable skips the mint step and falls through to `secrets.token`
+# (= GITHUB_TOKEN). On an organisation-owned consumer whose master is
+# also restricted via the inherited commons, the GITHUB_TOKEN push
+# would fail — the operator must complete Phase 0 first.
+
 jobs:
   refresh_presentation_branch:
     uses: nolte/gh-plumbing/.github/workflows/reusable-release-cd-refresh-master.yml@develop
     with:
       from_branch: ${{ inputs.tag || github.event.ref }}
+      app-id: ${{ vars.PORTFOLIO_APP_ID }}
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}
+      app-private-key: ${{ secrets.PORTFOLIO_APP_PRIVATE_KEY }}
