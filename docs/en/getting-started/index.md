@@ -48,9 +48,9 @@ jobs:
 ```
 
 !!! note "Reference selection"
-    - `@develop` always tracks the latest changes; recommended for internal repositories that follow this project closely.
-    - `@vX.Y.Z` pins to a released version; recommended when you need reproducibility.
-    - `master` refreshes automatically on every published release and mirrors the latest release tag.
+    - `@develop` always tracks the latest changes. Recommended for internal repositories that follow this project.
+    - `@vX.Y.Z` pins to a released version. Recommended when you need reproducibility.
+    - `@master` refreshes automatically on every published release and mirrors the latest release tag.
 
 ---
 
