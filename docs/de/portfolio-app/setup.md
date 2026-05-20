@@ -74,6 +74,14 @@ Installation-Token holen.
      [Actions-Secret](https://docs.github.com/en/actions/security-guides/encrypted-secrets)) —
      der vollständige PEM-Inhalt aus Schritt 3.
 
+!!! tip "Terraform-getriebene Provisionierung"
+    Die Schritte 5 und 6 sind auch als Terraform-Modul unter
+    [`terraform/portfolio-app/`](https://github.com/nolte/gh-plumbing/tree/develop/terraform/portfolio-app)
+    verfügbar. Das Modul legt die Org-Variable und das Org-Secret in
+    einem `terraform apply` an und deklariert optional die App als
+    Branch-Protection-Bypass-Actor. Schritte 1–4 bleiben manuell, weil
+    GitHub keine API zur App-Erstellung anbietet.
+
 ---
 
 ## Wrapper-Pattern (für nachgelagerte Konsumenten)
