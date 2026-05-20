@@ -36,6 +36,14 @@
 
     [:octicons-arrow-right-24: Probot configurations](probot/index.md)
 
+-   :material-key-variant: **Portfolio App**
+
+    ---
+
+    Centralised GitHub App that closes the `GITHUB_TOKEN` cascade gap. Works for organisations and personal accounts. Terraform module included.
+
+    [:octicons-arrow-right-24: Setup](portfolio-app/setup.md)
+
 -   :material-wrench: **Development**
 
     ---
