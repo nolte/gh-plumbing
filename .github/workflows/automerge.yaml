@@ -17,8 +17,51 @@ on:
       - completed
   status: {}
 
+# Why this wrapper has a token-mint job in front of the reusable call:
+#
+# GitHub Actions has a deterministic platform constraint — workflow events
+# emitted under GITHUB_TOKEN do NOT trigger downstream workflow runs.
+# `pascalgn/automerge-action` here squash-merges PRs into develop; the
+# resulting `push: develop` and `pull_request: closed` events therefore
+# fail to cascade to release-drafter, build-static-tests, and any other
+# workflow that listens on those triggers.
+#
+# Spec reference: spec/project/workflow-health/ §Known platform constraints.
+# Tracking issue: #330.
+#
+# Remediation: mint a GitHub App installation token in a pre-job and pass
+# it as `token` to the reusable. App-authored events are considered
+# user-initiated by GitHub and DO cascade.
+#
+# Backwards compatibility: when the PORTFOLIO_APP_ID variable is absent
+# (consumer hasn't adopted the App yet), the wrapper falls through to
+# GITHUB_TOKEN. Behaviour is identical to the pre-App world — the
+# cascade gap remains, but automerge still works.
+#
+# App ID is stored as a repository or organisation variable
+# (`vars.PORTFOLIO_APP_ID`) because the App ID is non-sensitive and the
+# GitHub Actions `secrets` context is not reliably readable from
+# job-level `if:` conditions. The private key stays in
+# `secrets.PORTFOLIO_APP_PRIVATE_KEY`.
+
 jobs:
+  mint-token:
+    name: Mint portfolio App token (with GITHUB_TOKEN fallback)
+    runs-on: ubuntu-latest
+    outputs:
+      token: ${{ steps.app-token.outputs.token || github.token }}
+      using_app: ${{ steps.app-token.conclusion == 'success' }}
+    steps:
+      - name: Mint App installation token
+        id: app-token
+        if: ${{ vars.PORTFOLIO_APP_ID != '' }}
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.PORTFOLIO_APP_ID }}
+          private-key: ${{ secrets.PORTFOLIO_APP_PRIVATE_KEY }}
+
   automerge:
+    needs: mint-token
     uses: nolte/gh-plumbing/.github/workflows/reusable-automerge.yaml@develop
     secrets:
-      token: ${{ secrets.GITHUB_TOKEN }}
+      token: ${{ needs.mint-token.outputs.token }}
