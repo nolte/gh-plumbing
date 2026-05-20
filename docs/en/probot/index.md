@@ -1,7 +1,7 @@
 # Probot
 
 {%
-   include-markdown "../../README.md"
+   include-markdown "../../../README.md"
    start="<!--probot-intro-start-->"
    end="<!--probot-intro-end-->"
 %}
@@ -17,7 +17,7 @@ _extends: gh-plumbing:.github/commons-<name>.yml
 ## Shared apps
 
 {%
-   include-markdown "../../README.md"
+   include-markdown "../../../README.md"
    start="<!--td-probot-apps-start-->"
    end="<!--td-probot-apps-end-->"
 %}

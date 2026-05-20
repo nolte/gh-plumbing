@@ -8,7 +8,7 @@ Automatically labels PRs and issues using [boring-cyborg](https://probot.github.
 
 ```yaml title=".github/boring-cyborg.yml"
 {%
-   include "../../.github/boring-cyborg.yml"
+   include "../../../.github/boring-cyborg.yml"
 %}
 ```
 
@@ -18,7 +18,7 @@ Automatically labels PRs and issues using [boring-cyborg](https://probot.github.
 
 ```yaml title=".github/commons-boring-cyborg.yml"
 {%
-   include "../../.github/commons-boring-cyborg.yml"
+   include "../../../.github/commons-boring-cyborg.yml"
 %}
 ```
 
@@ -30,7 +30,7 @@ Automatically labels PRs and issues using [boring-cyborg](https://probot.github.
 
 ```yaml
 {%
-   include "../../.github/commons-settings.yml"
+   include "../../../.github/commons-settings.yml"
    start="# <!--td-commons-settings-labels-start-->"
    end="# <!--td-commons-settings-labels-end-->"
 %}

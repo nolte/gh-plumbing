@@ -30,6 +30,6 @@ jobs:
 
 ```yaml title=".github/workflows/reusable-mkdocs.yaml"
 {%
-   include "../../.github/workflows/reusable-mkdocs.yaml"
+   include "../../../.github/workflows/reusable-mkdocs.yaml"
 %}
 ```
