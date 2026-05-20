@@ -45,6 +45,14 @@ jobs:
       - name: Mint App installation token
         id: app-token
         if: ${{ vars.PORTFOLIO_APP_ID != '' }}
+        # Tolerate a half-configured setup (variable set, secret missing,
+        # App not installed in this repo, App permissions revoked).
+        # On any failure the outputs.token is empty and the `|| github.token`
+        # fallback in the job outputs kicks in. The mint failure shows up as
+        # a yellow warning in the run log but does not break the dependent
+        # publish job — operators see the cascade gap silently return
+        # rather than every release-publish breaking outright.
+        continue-on-error: true
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ vars.PORTFOLIO_APP_ID }}
