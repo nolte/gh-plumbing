@@ -2,8 +2,25 @@ on:
   release:
     types: [published]
 
+# When `vars.PORTFOLIO_APP_ID` is set, the reusable mints a short-lived
+# GitHub-App installation token from `secrets.PORTFOLIO_APP_PRIVATE_KEY`
+# and uses it for the gh-pages push. gh-pages has no branch protection,
+# so the App token here is a consistency / audit-trail improvement, not
+# a permissions requirement — but running the gh-pages push under the
+# same credential as the rest of the release toolchain keeps the
+# release audit trail homogeneous.
+# See spec/project/workflow-health/ §Known platform constraints (#357)
+# and docs/<lang>/portfolio-app/ for setup.
+#
+# Backwards compatibility: when `vars.PORTFOLIO_APP_ID` is unset, the
+# reusable falls through to `secrets.token` (= GITHUB_TOKEN). The
+# gh-pages push keeps working; only the audit-trail consistency is lost.
+
 jobs:
   publish_docs:
     uses: nolte/gh-plumbing/.github/workflows/reusable-mkdocs.yaml@develop
+    with:
+      app-id: ${{ vars.PORTFOLIO_APP_ID }}
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}
+      app-private-key: ${{ secrets.PORTFOLIO_APP_PRIVATE_KEY }}

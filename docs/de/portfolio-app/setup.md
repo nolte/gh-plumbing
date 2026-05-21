@@ -148,10 +148,11 @@ Jedes aktivierte Häkchen würde nur tote Webhook-Versuche erzeugen.
 
 ## Wrapper-Pattern (für nachgelagerte Konsumenten)
 
-Die beiden Cascade-emittierenden Wrapper in `nolte/gh-plumbing` zeigen
-das Pattern. Übernimm dieselbe Form in dein Repository für jeden
-Wrapper, der eine `reusable-*.yaml` aufruft, deren Arbeit nachgelagerte
-Workflows triggern soll.
+Die Cascade-emittierenden Wrapper in `nolte/gh-plumbing` zeigen das
+Pattern. Übernimm dieselbe Form in dein Repository für jeden Wrapper,
+der eine `reusable-*.yaml` aufruft, deren Arbeit nachgelagerte
+Workflows triggern soll oder die du unter derselben Release-Audit-
+Identität halten willst.
 
 ```yaml title=".github/workflows/automerge.yaml"
 on:
@@ -164,49 +165,55 @@ on:
   status: {}
 
 jobs:
-  mint-token:
-    runs-on: ubuntu-latest
-    outputs:
-      token: ${{ steps.app-token.outputs.token || github.token }}
-    steps:
-      - id: app-token
-        if: ${{ vars.PORTFOLIO_APP_ID != '' }}
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ vars.PORTFOLIO_APP_ID }}
-          private-key: ${{ secrets.PORTFOLIO_APP_PRIVATE_KEY }}
-
   automerge:
-    needs: mint-token
     uses: nolte/gh-plumbing/.github/workflows/reusable-automerge.yaml@develop
+    with:
+      app-id: ${{ vars.PORTFOLIO_APP_ID }}
     secrets:
-      token: ${{ needs.mint-token.outputs.token }}
+      token: ${{ secrets.GITHUB_TOKEN }}
+      app-private-key: ${{ secrets.PORTFOLIO_APP_PRIVATE_KEY }}
 ```
 
 Schlüsseleigenschaften:
 
 - **Backwards-kompatibel.** Wenn `vars.PORTFOLIO_APP_ID` ungesetzt ist,
-  überspringt der Mint-Step und der Wrapper fällt zurück auf
-  `github.token` (= `GITHUB_TOKEN`). Das Verhalten für nicht-adoptierte
-  Konsumenten ist identisch zum Pre-App-Zustand.
-- **Reusables bleiben tokentyp-agnostisch.** Die Reusables in
-  `nolte/gh-plumbing` akzeptieren jede Token-Form; nur der Wrapper
-  entscheidet, ob die App zum Zug kommt.
+  überspringt der Reusable den Mint-Step und fällt zurück auf
+  `secrets.token` (= `GITHUB_TOKEN`). Das Verhalten für
+  nicht-adoptierte Konsumenten ist identisch zum Pre-App-Zustand.
+- **Mint passiert im Reusable.** GitHub Actions maskiert
+  App-Token-Outputs und blockiert sie an Job-Grenzen — ein separater
+  Mint-Job im Wrapper kann das Token nicht an einen nachgelagerten
+  Reusable-Call weitergeben. Der Reusable hält den Mint-Step selbst,
+  gated auf `inputs.app-id`.
 - **Kurze Token-Lebensdauer.**
   `actions/create-github-app-token@v2` erzeugt ein 1-Stunden-Installation-Token,
   begrenzt auf das aufrufende Repository. Es verlässt nie GitHubs
   Control Plane als langlebiges Credential.
 
-!!! note "Drei Wrapper brauchen das App-Credential-Forwarding"
-    Wrapper, die durch einen geschützten Branch pushen, brauchen das
-    App-Token-Pattern: `automerge.yaml` (Squash-Merge nach `develop`),
-    `release-publish.yml` (Release-Flip — emittiert
-    `release: published` und kaskadiert weiter) und
-    `release-cd-refresh-master.yml` (Fast-Forward nach `master`, das
-    nach Phase 2 ebenfalls push-restricted ist). Wrapper, die nicht
-    direkt auf einen geschützten Branch pushen
-    (`release-drafter.yml`, `release-cd-deliver-docs.yml`), nutzen
-    weiter `GITHUB_TOKEN`.
+!!! note "Fünf Wrapper brauchen das App-Credential-Forwarding"
+    Drei Wrapper pushen durch einen geschützten Branch und **müssen**
+    das App-Token-Pattern verwenden:
+
+    - `automerge.yaml` (Squash-Merge nach `develop`).
+    - `release-publish.yml` (Release-Flip — emittiert
+      `release: published` und kaskadiert weiter).
+    - `release-cd-refresh-master.yml` (Fast-Forward nach `master`, das
+      nach Phase 2 ebenfalls push-restricted ist).
+
+    Zwei weitere Wrapper reichen dasselbe Credential aus
+    Konsistenz- und Audit-Trail-Gründen durch, obwohl ihr Ziel-Branch
+    nicht geschützt ist:
+
+    - `release-drafter.yml` aktualisiert den Release-Entwurf über die
+      GitHub-API. Unter dem Portfolio-App-Token läuft jeder
+      Release-Toolchain-Schritt unter einer einheitlichen Identität.
+    - `release-cd-deliver-docs.yml` pusht die gerenderte Site nach
+      `gh-pages`. `gh-pages` hat keine Protection — das App-Token ist
+      hier rein Audit-Trail-Verbesserung.
+
+    Alle fünf Wrapper bleiben backwards-kompatibel: ist
+    `vars.PORTFOLIO_APP_ID` ungesetzt, fällt jeder Reusable auf
+    `GITHUB_TOKEN` zurück und funktioniert weiter.
 
 ---
 

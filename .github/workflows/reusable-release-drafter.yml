@@ -2,15 +2,53 @@ name: Release Drafter
 
 on:
   workflow_call:
+    inputs:
+      app-id:
+        description: |
+          Numeric GitHub App ID of the portfolio App. When set, the
+          reusable mints a short-lived installation token from
+          `secrets.app-private-key` and uses it for the release-edit
+          and gh CLI calls in this workflow. When empty (the default),
+          the reusable falls through to `secrets.token` — typically the
+          consumer's `GITHUB_TOKEN`. release-drafter is invoked after
+          an automerge-driven `push: develop`; running it under the
+          portfolio-App token keeps the audit trail consistent with the
+          rest of the release toolchain (issue #357,
+          spec/project/workflow-health/ §Known platform constraints).
+        required: false
+        type: string
+        default: ""
     secrets:
       token:
         required: true
+      app-private-key:
+        description: |
+          PEM-encoded private key for the App identified by `inputs.app-id`.
+          Required when `app-id` is set; ignored otherwise.
+        required: false
 
 jobs:
   update_release_draft:
     name: Update Release Draft
     runs-on: ubuntu-latest
     steps:
+      # Mint an App installation token only when the caller has set
+      # inputs.app-id. The output token (when present) replaces
+      # secrets.token everywhere downstream in this job via the
+      # steps.app-token.outputs.token || secrets.token fallback.
+      - name: Mint App installation token
+        id: app-token
+        if: ${{ inputs.app-id != '' }}
+        # Tolerate a half-configured setup. On any failure outputs.token
+        # is empty and the fallback to secrets.token kicks in — release-
+        # drafter keeps working under GITHUB_TOKEN, only the audit-trail
+        # consistency is lost.
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+
       # Capture the release-skill-layer project-context block from the current
       # open draft, if any, before release-drafter regenerates the body.
       # release-drafter@v6 fully rewrites the body from its template, so any
@@ -20,7 +58,7 @@ jobs:
       - name: Capture project-context block
         id: capture
         env:
-          GH_TOKEN: ${{ secrets.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
@@ -70,12 +108,12 @@ jobs:
       - name: Update Release Draft
         uses: release-drafter/release-drafter@v6
         env:
-          GITHUB_TOKEN: ${{ secrets.token }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
 
       - name: Restore project-context block
         if: steps.capture.outputs.had_markers == 'true'
         env:
-          GH_TOKEN: ${{ secrets.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
           REPO: ${{ github.repository }}
           CAPTURED_TAG: ${{ steps.capture.outputs.captured_tag }}
         run: |

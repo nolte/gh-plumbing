@@ -4,8 +4,24 @@ on:
     branches:
       - develop
 
+# When `vars.PORTFOLIO_APP_ID` is set, the reusable mints a short-lived
+# GitHub-App installation token from `secrets.PORTFOLIO_APP_PRIVATE_KEY`
+# and uses it for the release-drafter API calls. release-drafter is
+# itself a downstream of the automerge-driven `push: develop` cascade
+# closed by #330/#349; running it under the portfolio-App token keeps
+# the audit trail consistent across the full release toolchain.
+# See spec/project/workflow-health/ §Known platform constraints (#357)
+# and docs/<lang>/portfolio-app/ for setup.
+#
+# Backwards compatibility: when `vars.PORTFOLIO_APP_ID` is unset, the
+# reusable falls through to `secrets.token` (= GITHUB_TOKEN). release-
+# drafter keeps working; only the audit-trail consistency is lost.
+
 jobs:
   update_release_draft:
     uses: nolte/gh-plumbing/.github/workflows/reusable-release-drafter.yml@develop
+    with:
+      app-id: ${{ vars.PORTFOLIO_APP_ID }}
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}
+      app-private-key: ${{ secrets.PORTFOLIO_APP_PRIVATE_KEY }}

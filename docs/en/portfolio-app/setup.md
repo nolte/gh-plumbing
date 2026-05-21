@@ -144,10 +144,11 @@ subscription on would only generate dead webhook attempts.
 
 ## Wrapper pattern (for downstream consumers)
 
-The two cascade-emitting wrappers in `nolte/gh-plumbing` show the
+The cascade-emitting wrappers in `nolte/gh-plumbing` show the
 pattern. Copy the same shape into your repository for any wrapper
 calling a `reusable-*.yaml` whose work should trigger downstream
-workflows.
+workflows or that you want to keep under the same release-audit
+identity.
 
 ```yaml title=".github/workflows/automerge.yaml"
 on:
@@ -184,8 +185,8 @@ Key properties:
   generates a one-hour installation token, scoped to the calling
   repository. No long-lived credential leaves the GitHub control plane.
 
-!!! note "Three wrappers need the App-credential forwarding"
-    Three wrappers push through a protected branch and need the
+!!! note "Five wrappers need the App-credential forwarding"
+    Three wrappers push through a protected branch and **need** the
     App-token pattern:
 
     - `automerge.yaml` squash-merges to `develop`.
@@ -195,9 +196,20 @@ Key properties:
     - `release-cd-refresh-master.yml` fast-forwards `master`. Master
       is also push-restricted after phase 2.
 
-    Wrappers that don't push directly to a protected branch
-    (`release-drafter.yml`, `release-cd-deliver-docs.yml`) keep using
-    `GITHUB_TOKEN`.
+    Two more wrappers forward the same credential for consistency and
+    audit-trail homogeneity, even though their target branch isn't
+    protected:
+
+    - `release-drafter.yml` updates the draft release through the
+      GitHub API. Running it under the portfolio-App token keeps every
+      release-toolchain step under one identity.
+    - `release-cd-deliver-docs.yml` pushes the rendered site to
+      `gh-pages`. `gh-pages` has no protection, so the App token here
+      is an audit-trail improvement only.
+
+    All five wrappers stay backwards-compatible: when
+    `vars.PORTFOLIO_APP_ID` is unset, each reusable falls through to
+    `GITHUB_TOKEN` and keeps working.
 
 ---
 
