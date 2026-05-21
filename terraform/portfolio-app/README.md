@@ -67,7 +67,15 @@ the configuration sets both or neither.
 Before `terraform apply`:
 
 1. The portfolio App carries the permissions listed in
-   `docs/en/portfolio-app/setup.md` §Permissions the app requires.
+   `docs/en/portfolio-app/setup.md` §Permissions the app requires —
+   `Contents: Read and write`, `Pull requests: Read and write`,
+   `Issues: Read and write`, `Actions: Read-only`, plus the implicit
+   `Metadata: Read-only` baseline. `Issues: Read and write` is what
+   lets an App-driven squash-merge auto-close issues referenced via
+   `Closes #N` in the PR body; without it the merge succeeds but the
+   issue stays `OPEN`. The Terraform module doesn't manage App
+   permissions — they're set on the App's registration page in the
+   GitHub UI.
 2. The App lives in every repository you intend to list under
    `consumer_repositories`.
 3. The Terraform provider holds credentials for the owner account
