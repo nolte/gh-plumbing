@@ -8,20 +8,56 @@ on:
         required: false
         default: "./requirements-dev.txt"
         type: string
+      app-id:
+        description: |
+          Numeric GitHub App ID of the portfolio App. When set, the
+          reusable mints a short-lived installation token from
+          `secrets.app-private-key` and uses it for the gh-pages push.
+          When empty (the default), the reusable falls through to
+          `secrets.token` — typically the consumer's `GITHUB_TOKEN`.
+          gh-pages is not branch-protected, so the App token here is a
+          consistency / audit-trail improvement, not a permissions
+          requirement (issue #357, spec/project/workflow-health/
+          §Known platform constraints).
+        required: false
+        type: string
+        default: ""
     secrets:
       token:
         required: true
+      app-private-key:
+        description: |
+          PEM-encoded private key for the App identified by `inputs.app-id`.
+          Required when `app-id` is set; ignored otherwise.
+        required: false
 
 jobs:
   publish_docs:
     name: "Publish the HTML Documentation"
     runs-on: ubuntu-latest
     steps:
+      # Mint an App installation token only when the caller has set
+      # inputs.app-id. The output token replaces secrets.token in the
+      # mhausenblas/mkdocs-deploy-gh-pages step via the
+      # steps.app-token.outputs.token || secrets.token fallback.
+      - name: Mint App installation token
+        id: app-token
+        if: ${{ inputs.app-id != '' }}
+        # Tolerate a half-configured setup. On any failure outputs.token
+        # is empty and the fallback to secrets.token kicks in — the
+        # gh-pages push keeps working, only the audit-trail consistency
+        # with the rest of the release toolchain is lost.
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+
       - name: Checkout master
         uses: actions/checkout@v6.0.0
 
       - name: Deploy docs
         uses: mhausenblas/mkdocs-deploy-gh-pages@1.26
         env:
-          GITHUB_TOKEN: ${{ secrets.token  }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
           REQUIREMENTS: ${{ inputs.requirements }}
