@@ -59,17 +59,17 @@ vergeben:
 |---|---|---|
 | `Contents` | `Read and write` | Squash-Merge nach develop, Releases editieren, master fast-forwarden |
 | `Pull requests` | `Read and write` | `pascalgn/automerge-action` liest und merged PRs |
+| `Issues` | `Read and write` | Auto-Close von Issues, die im PR-Body via `Closes #N` / `Fixes #N` / `Resolves #N` referenziert sind, wenn die App den Squash-Merge ausführt. GitHub schließt referenzierte Issues nur, wenn der mergende Actor `Issues: write` hat — fehlt diese Permission, parst GitHub die Autolinks zwar in `closingIssuesReferences`, aber der Close-Flip feuert nicht (Live-Beobachtung an #357 / #358). |
 | `Actions` | `Read-only` | `release-publish` liest `gh run list` für den Post-Publish-Cascade-Check |
 | `Metadata` | `Read-only` | Pflicht-Basis (setzt GitHub automatisch und lässt sich nicht abwählen) |
 
 **Jede andere Repository-Permission** bleibt auf `No access`,
-insbesondere die drei, die verwandt klingen, aber keine sind:
+insbesondere die zwei, die verwandt klingen, aber keine sind:
 
 | Permission | Setting | Wieso NICHT |
 |---|---|---|
 | `Administration` | `No access` | Die Probot Settings App verwaltet Repo-Konfiguration. Diese Permission hier zu setzen erhöht nur die Angriffsfläche, ohne Nutzen. |
 | `Workflows` | `No access` | Würde der App erlauben, `.github/workflows/*.yaml` zu überschreiben. Unsere Use-Case merged Branches und Releases, keine Workflow-Dateien. Später aktivieren, falls jemals nötig. |
-| `Issues` | `No access` | Die App liest und schreibt keine Issues. |
 
 **Alle Organization permissions** und **alle Account permissions**
 bleiben auf `No access` — die Arbeit der App ist repo-scoped.
@@ -226,6 +226,12 @@ selbst triggern:
 |---|---|
 | `automerge`-Label an einen grünen PR | `automerge.yaml` squash-merged → `release-drafter.yml` aktualisiert den Entwurf → `build-static-tests.yaml` läuft auf dem neuen develop-Tip |
 | `release-publish.yml` für offenen Entwurf dispatchen | `reusable-release-publish.yml` flippt draft=false → `release-cd-refresh-master.yml` fast-forwarded master → `release-cd-deliver-docs.yml` baut die MkDocs-Site neu |
+
+Eine dritte Self-Check-Zeile betrifft den Issue-Lifecycle:
+
+| Aktion | Erwartetes Ergebnis |
+|---|---|
+| PR squash-mergen, dessen Body `Closes #N` enthält | Issue `#N` flippt automatisch auf `CLOSED`; `gh issue view N --json state` liefert `CLOSED`. Setzt die App-Permission `Issues: Read and write` voraus — ohne sie greift der Merge zwar, der Close feuert aber nicht, obwohl `gh pr view --json closingIssuesReferences` den Autolink korrekt geparst zeigt. |
 
 Wenn ein Cascade immer noch nicht triggert, prüfe:
 
