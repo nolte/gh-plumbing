@@ -1,7 +1,7 @@
 # Overview
 
 {%
-   include-markdown "../README.md"
+   include-markdown "../../README.md"
    start="<!--intro-start-->"
    end="<!--intro-end-->"
 %}
@@ -35,6 +35,14 @@
     Shared Probot configurations consumed via `_extends:` for settings, labelling, and release notes.
 
     [:octicons-arrow-right-24: Probot configurations](probot/index.md)
+
+-   :material-key-variant: **Portfolio App**
+
+    ---
+
+    Centralised GitHub App that closes the `GITHUB_TOKEN` cascade gap. Works for organisations and personal accounts. Terraform module included.
+
+    [:octicons-arrow-right-24: Setup](portfolio-app/setup.md)
 
 -   :material-wrench: **Development**
 
@@ -74,4 +82,6 @@
     ```
 
 !!! tip "Pinning strategy"
-    Reference `@develop` for the latest changes or pin to a release tag (for example `@v1.1.8`) for stability. The `master` branch refreshes automatically on every published release.
+    - **Reusable workflows:** `@develop` for latest, `@vX.Y.Z` for reproducibility, `@master` for the latest published release.
+    - **Probot `_extends`:** no pin possible—always resolves from the default branch (`develop`). See [Probot → Settings → Versioning](probot/settings.md#versioning-drift-and-the-_extends-contract).
+    - **Renovate preset:** append `#vX.Y.Z` (note: `#`, not `@`) to pin to a release tag.

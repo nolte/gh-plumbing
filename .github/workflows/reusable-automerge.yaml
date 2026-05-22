@@ -2,9 +2,27 @@ name: automerge
 
 on:
   workflow_call:
+    inputs:
+      app-id:
+        description: |
+          Numeric GitHub App ID of the portfolio App. When set, the
+          reusable mints a short-lived installation token from
+          `secrets.app-private-key` and passes it to
+          pascalgn/automerge-action. When empty (the default), the
+          reusable falls through to `secrets.token` — typically the
+          consumer's `GITHUB_TOKEN`. See docs/<lang>/portfolio-app/
+          for the rationale.
+        required: false
+        type: string
+        default: ""
     secrets:
       token:
         required: true
+      app-private-key:
+        description: |
+          PEM-encoded private key for the App identified by `app-id`.
+          Required when `app-id` is set; ignored otherwise.
+        required: false
 
 permissions:
   contents: write
@@ -14,10 +32,30 @@ jobs:
   automerge:
     runs-on: ubuntu-latest
     steps:
+      # Mint an App installation token only when the caller has set
+      # inputs.app-id. The output token is consumed by the next step
+      # via steps.app-token.outputs.token; staying inside the same job
+      # avoids the cross-job secret-masking that blocks token output
+      # propagation between jobs.
+      - name: Mint App installation token
+        id: app-token
+        if: ${{ inputs.app-id != '' }}
+        # Tolerate a half-configured setup (variable set, secret missing,
+        # App not installed in this repo, App permissions revoked).
+        # On any failure the outputs.token is empty and the
+        # `|| secrets.token` fallback in the next step kicks in. The
+        # mint failure shows up as a yellow warning in the run log but
+        # does not break automerge outright.
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+
       - name: automerge
         uses: pascalgn/automerge-action@v0.16.4
         env:
-          GITHUB_TOKEN: ${{ secrets.token  }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
           # Match the repo-level `allow_squash_merge: true` +
           # `allow_merge_commit: false` convention declared by
           # commons-settings.yml. Without this override the action

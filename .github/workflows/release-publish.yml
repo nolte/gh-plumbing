@@ -11,11 +11,27 @@ on:
         type: boolean
         default: false
 
+# When `vars.PORTFOLIO_APP_ID` is set, the reusable mints a short-lived
+# GitHub-App installation token from `secrets.PORTFOLIO_APP_PRIVATE_KEY`
+# and uses it for `gh release edit --draft=false`. App-authored
+# release:published events cascade to release-cd-refresh-master and
+# release-cd-deliver-docs; GITHUB_TOKEN-authored ones don't.
+# See spec/project/workflow-health/ §Known platform constraints (#330)
+# and docs/<lang>/portfolio-app/ for setup.
+#
+# Backwards compatibility: when `vars.PORTFOLIO_APP_ID` is unset, the
+# reusable falls through to `secrets.token` (= GITHUB_TOKEN). The
+# release publish step still works; the cascade gap remains and the
+# workflow_dispatch escape hatch on release-cd-refresh-master.yml
+# (added in #329) stays load-bearing.
+
 jobs:
   publish:
     uses: nolte/gh-plumbing/.github/workflows/reusable-release-publish.yml@develop
     with:
       tag: ${{ inputs.tag }}
       dry_run: ${{ inputs.dry_run }}
+      app-id: ${{ vars.PORTFOLIO_APP_ID }}
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}
+      app-private-key: ${{ secrets.PORTFOLIO_APP_PRIVATE_KEY }}

@@ -22,7 +22,7 @@ jobs:
 ```
 
 !!! note "GitHub Pages"
-    Ensure the target repository declares `has_pages: true`. The shared Probot settings already include this—see [Settings](../probot/settings.md).
+    The target repository must declare `has_pages: true`. The shared Probot settings already include this—see [Settings](../probot/settings.md).
 
 ---
 
@@ -30,6 +30,6 @@ jobs:
 
 ```yaml title=".github/workflows/reusable-mkdocs.yaml"
 {%
-   include "../../.github/workflows/reusable-mkdocs.yaml"
+   include "../../../.github/workflows/reusable-mkdocs.yaml"
 %}
 ```

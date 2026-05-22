@@ -50,6 +50,29 @@ extra_css:
 plugins:
   - search
   - include-markdown
+  - i18n:
+      docs_structure: folder
+      languages:
+        - locale: en
+          default: true
+          name: English
+          build: true
+        - locale: de
+          name: Deutsch
+          build: true
+          nav_translations:
+            Home: Startseite
+            Getting started: Erste Schritte
+            Workflows: Workflows
+            Static tests: Statische Tests
+            Documentation: Dokumentation
+            Release: Release
+            Probot: Probot
+            Settings: Settings
+            Labelling: Labelling
+            Portfolio App: Portfolio-App
+            Setup: Setup
+            Development: Entwicklung
 
 markdown_extensions:
   - abbr
@@ -100,5 +123,7 @@ nav:
       - probot/index.md
       - Settings: probot/settings.md
       - Labelling: probot/labelling.md
+  - Portfolio App:
+      - Setup: portfolio-app/setup.md
   - Development:
       - development/index.md

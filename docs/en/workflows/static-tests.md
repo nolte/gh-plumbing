@@ -27,6 +27,6 @@ jobs:
 
 ```yaml title=".github/workflows/reusable-pre-commit.yaml"
 {%
-   include "../../.github/workflows/reusable-pre-commit.yaml"
+   include "../../../.github/workflows/reusable-pre-commit.yaml"
 %}
 ```

@@ -3,7 +3,13 @@
 version: '3'
 
 vars:
-  TASK_COLLECTION_BASE: https://raw.githubusercontent.com/nolte/taskfiles/fix/py-var-names/src
+  # Follows the default branch of nolte/taskfiles. The previous pin
+  # (`fix/py-var-names`) was a feature branch that has since been
+  # deleted upstream after merge; deletion of the source branch yields
+  # 404 on every `task` invocation here. Tracking `develop` is the
+  # baseline until upstream produces a tag that ships both
+  # taskfile-include-mkdocs.yaml AND taskfile-include-pre-commit.yaml.
+  TASK_COLLECTION_BASE: https://raw.githubusercontent.com/nolte/taskfiles/develop/src
 
 includes:
   mkdocs: "{{.TASK_COLLECTION_BASE}}/taskfile-include-mkdocs.yaml"

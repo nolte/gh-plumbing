@@ -11,15 +11,53 @@ on:
         required: false
         default: master
         type: string
+      app-id:
+        description: |
+          Numeric GitHub App ID of the portfolio App. When set, the
+          reusable mints a short-lived installation token from
+          `secrets.app-private-key` and uses it for the master fast-
+          forward. When empty (the default), the reusable falls
+          through to `secrets.token` — typically the consumer's
+          `GITHUB_TOKEN`. After Phase 2 of issue #330 lands its
+          push-restriction (`restrictions.apps: [<app-slug>]`) on
+          master, `GITHUB_TOKEN` no longer has the right to push to
+          master and the App token is mandatory.
+        required: false
+        type: string
+        default: ""
     secrets:
       token:
         required: true
+      app-private-key:
+        description: |
+          PEM-encoded private key for the App identified by `inputs.app-id`.
+          Required when `app-id` is set; ignored otherwise.
+        required: false
 
 jobs:
   refresh_presentation_branch:
     name: "Publish the the Release to Master"
     runs-on: ubuntu-latest
     steps:
+      # Mint an App installation token only when the caller has set
+      # inputs.app-id. The output token replaces secrets.token in the
+      # devmasx/merge-branch step via the
+      # `steps.app-token.outputs.token || secrets.token` fallback.
+      - name: Mint App installation token
+        id: app-token
+        if: ${{ inputs.app-id != '' }}
+        # Tolerate a half-configured setup. On any failure outputs.token
+        # is empty and the fallback to secrets.token kicks in — note
+        # that on a protected master with `restrictions.apps`, the
+        # fallback will fail at push time; the operator must complete
+        # Phase 0 (variable + secret) before this workflow can
+        # succeed on a fully-restricted master.
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+
       - name: Checkout master
         uses: actions/checkout@v6.0.0
       - name: Merge Tag -> Master
@@ -28,4 +66,4 @@ jobs:
           type: now
           from_branch: ${{ inputs.from_branch }}
           target_branch: ${{ inputs.target_branch }}
-          github_token: ${{ secrets.token }}
+          github_token: ${{ steps.app-token.outputs.token || secrets.token }}
