@@ -4,5 +4,14 @@
     ":dependencyDashboard",
     ":enablePreCommit"
   ],
-  "labels": ["chore","dependencies"]
+  "labels": ["chore","dependencies"],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/(^|/)\\.vale\\.ini$/"],
+      "matchStrings": ["nolte/vale-style/releases/download/(?<currentValue>v[0-9.]+)/"],
+      "depNameTemplate": "nolte/vale-style",
+      "datasourceTemplate": "github-releases"
+    }
+  ]
 }

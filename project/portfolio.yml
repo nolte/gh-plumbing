@@ -1,0 +1,45 @@
+# Portfolio manifest for nolte/gh-plumbing.
+# Schema: spec/portfolio/portfolio-management/ §Capability inventory per repository
+# Audience references resolve against AUDIENCES.md at the repo root.
+
+capabilities:
+  - name: reusable-github-actions-workflows
+    description: >-
+      A library of reusable GitHub Actions workflows (reusable-*.yaml:
+      pre-commit, mkdocs deploy, spelling/Vale, automerge,
+      release-drafter/publish, Docker lint/build/publish, Ansible
+      molecule/galaxy, Terraform lint, Trivy, chain-bench, dependency-review)
+      that downstream nolte/* repositories call to get consistent CI/CD without
+      reimplementing pipelines.
+    audience:
+      - Downstream repositories consuming reusable workflows
+      - Repository maintainer (nolte)
+    status: active
+    rationale: >-
+      gh-plumbing is the single portfolio source of reusable CI/CD workflows;
+      consolidating them here removes the per-repo pipeline duplication the
+      2026-06-02 portfolio audit flagged (W2 copy-paste smell).
+  - name: probot-commons-config
+    description: >-
+      Shared Probot app configuration commons (settings, release-drafter,
+      boring-cyborg, stale presets) that downstream nolte/* repositories extend
+      so repository governance stays uniform across the portfolio.
+    audience:
+      - Downstream repositories extending Probot configurations
+      - Repository maintainer (nolte)
+    status: active
+    rationale: >-
+      Centralising the Probot commons here lets every consumer inherit one
+      governance baseline via extends rather than maintaining per-repo settings.
+  - name: renovate-shared-presets
+    description: >-
+      Shared Renovate configuration presets (renovate-configs/) that downstream
+      nolte/* repositories extend for consistent dependency-update grouping,
+      scheduling, and labelling.
+    audience:
+      - Downstream repositories consuming Renovate presets
+      - Renovate bot
+    status: active
+    rationale: >-
+      One curated Renovate preset source keeps dependency-bot behaviour
+      consistent across the portfolio.
