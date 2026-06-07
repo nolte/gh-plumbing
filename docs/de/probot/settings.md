@@ -26,7 +26,7 @@ repository:
 ```
 
 !!! tip "Overrides"
-    Schlüssel in deiner lokalen `.github/settings.yml` überschreiben die geerbten Werte. Definiere dort nur, was vom geteilten Default abweicht.
+    Schlüssel in der lokalen `.github/settings.yml` überschreiben die geerbten Werte. Dort nur angeben, was vom geteilten Default abweicht.
 
 ---
 

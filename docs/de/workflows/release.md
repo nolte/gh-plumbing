@@ -66,11 +66,11 @@ jobs:
 !!! note "Tag muss zu einem bestehenden Entwurf passen"
     `tag` muss zum Tag eines bestehenden Release-Drafter-Entwurfs passen. Es
     gibt keine „neuester gewinnt"-Heuristik — existiert kein Entwurf für den
-    angegebenen Tag, scheitert der Workflow sofort. Lass vorher den
-    Draft-Workflow auf `develop` laufen.
+    angegebenen Tag, scheitert der Workflow sofort. Zuvor den
+    Draft-Workflow auf `develop` laufen lassen.
 
 !!! tip "Dry Run"
-    Setze `dry_run: true`, um jeden Validierungs-Gate auszuführen, ohne den
+    `dry_run: true` setzen, um jeden Validierungs-Gate auszuführen, ohne den
     Entwurf zu einem veröffentlichten Release umzuschalten. Nützlich, um den
     Publish-Pfad vor dem eigentlichen Release zu verifizieren.
 
@@ -91,7 +91,7 @@ jobs:
 ```
 
 !!! warning "Direkte Commits auf master"
-    Commit nicht direkt auf `master` — der Workflow überschreibt deine Änderungen beim nächsten Release.
+    Nicht direkt auf `master` committen — der Workflow überschreibt lokale Änderungen beim nächsten Release.
 
 ---
 
