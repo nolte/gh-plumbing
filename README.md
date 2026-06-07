@@ -16,7 +16,7 @@ Centralised reusable [GitHub Actions workflows](https://docs.github.com/en/actio
 | ```reusable-ansible-galaxy-push.yaml```      | Publish an Ansible role to [Ansible Galaxy](https://galaxy.ansible.com/) via [robertdebock/galaxy-action](https://github.com/robertdebock/galaxy-action).        |
 | ```reusable-ansible-molecule.yaml```         | Run a [Molecule](https://molecule.readthedocs.io/) test scenario via [gofrolist/molecule-action](https://github.com/gofrolist/molecule-action).                  |
 | ```reusable-automerge.yaml```                | Auto-merge pull requests via [pascalgn/automerge-action](https://github.com/pascalgn/automerge-action).                                                          |
-| ```reusable-chain-bench.yaml```              | Run the supply-chain CIS benchmark via [aquasecurity/chain-bench-action](https://github.com/aquasecurity/chain-bench-action).                                    |
+| ```reusable-chain-bench.yaml```              | Run the supply-chain CIS (Center for Internet Security) benchmark via [aquasecurity/chain-bench-action](https://github.com/aquasecurity/chain-bench-action).     |
 | ```reusable-dependency-review.yaml```        | Gate pull requests against vulnerable or licence-incompatible dependency changes via [actions/dependency-review-action](https://github.com/actions/dependency-review-action). |
 | ```reusable-docker-lint-build.yaml```        | Run [hadolint](https://github.com/hadolint/hadolint-action) on a Dockerfile and a buildx dry-build (no push) for fast PR feedback.                              |
 | ```reusable-docker-publish.yaml```           | Build a multi-arch container image with [docker/build-push-action](https://github.com/docker/build-push-action) and push it to a configurable OCI registry.      |
@@ -28,8 +28,8 @@ Centralised reusable [GitHub Actions workflows](https://docs.github.com/en/actio
 | ```reusable-spelling-vale.yaml```            | Lint Markdown prose via [errata-ai/vale-action](https://github.com/errata-ai/vale-action) with inline reviewdog annotations on pull requests.                    |
 | ```reusable-sphinx.yaml```                   | Build and publish a [Sphinx](https://www.sphinx-doc.org/en/master) documentation site to [GitHub Pages](https://pages.github.com/).                              |
 | ```reusable-stale.yaml```                    | Mark and close stale issues and pull requests via [actions/stale](https://github.com/actions/stale).                                                             |
-| ```reusable-trivy.yaml```                    | Scan the GitRepo by using [aquasecurity/trivy-action](https://github.com/aquasecurity/trivy-action).                                                             |
-| ```reusable-tf-lint.yaml```                  | Use [terraform-linters/setup-tflint](https://github.com/terraform-linters/setup-tflint) for Lint terraform sources.                                              |
+| ```reusable-trivy.yaml```                    | Scan the repository with [aquasecurity/trivy-action](https://github.com/aquasecurity/trivy-action).                                                              |
+| ```reusable-tf-lint.yaml```                  | Lint Terraform sources with [terraform-linters/setup-tflint](https://github.com/terraform-linters/setup-tflint).                                                 |
 
 <!--td-workflows-end-->
 
@@ -37,20 +37,20 @@ Centralised reusable [GitHub Actions workflows](https://docs.github.com/en/actio
 ## Probot configuration
 
 <!--probot-intro-start-->
-Collection of common Configurations for Project Management and CI/CD.  
-For Using in other GitHub Projects, having a reusable set of Probot Configuration Repository, more information at [probot.github.io](https://probot.github.io/docs/best-practices/#configuration).
+Collection of common configurations for project management and CI/CD.  
+Reuse this shared set of Probot configurations across your GitHub projects. For more information, see the [Probot best-practices documentation](https://probot.github.io/docs/best-practices/#configuration).
 <!--probot-intro-end-->
 
 <!--td-probot-apps-start-->
 | probot                                                            | git                                                                         | description                                                                                                         |
 |-------------------------------------------------------------------|-----------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------|
-| [boring-cyborg](https://probot.github.io/apps/boring-cyborg/)     | [kaxil/boring-cyborg](https://github.com/kaxil/boring-cyborg)               | Different actions like, automatically label Pull Request                                                       |
+| [boring-cyborg](https://probot.github.io/apps/boring-cyborg/)     | [kaxil/boring-cyborg](https://github.com/kaxil/boring-cyborg)               | Automates pull-request labelling and other repository housekeeping tasks.                                            |
 | [release-drafter](https://probot.github.io/apps/release-drafter/) | [release-drafter/release-drafter](https://github.com/release-drafter/release-drafter) | Creates a human-readable release changelog (**deprecated** as a Probot app—prefer the workflow implementation).     |
-| [renovate](https://github.com/apps/renovate)                      |                                                                             | Using [renovate](https://www.whitesourcesoftware.com/free-developer-tools/renovate/) for keep dependencies in sync. |
+| [renovate](https://github.com/apps/renovate)                      |                                                                             | Keeps dependencies in sync with [Renovate](https://www.whitesourcesoftware.com/free-developer-tools/renovate/), an automated dependency-update bot. |
 | [settings](https://probot.github.io/apps/settings/)               | [probot/settings](https://github.com/probot/settings)                       | Configure GitHub Projects by Source.                                                                                |
 <!--td-probot-apps-end-->
 
-For More information take a look to the GH Page, [gh-plumbing](http://nolte.github.io/gh-plumbing).
+For more information, see the [gh-plumbing GitHub Pages site](http://nolte.github.io/gh-plumbing).
 
 ## Development
 
@@ -63,13 +63,13 @@ asdf install
 
 ### Workflows
 
-For local testing you can use [nektos/act](https://github.com/nektos/act), run the GitHub Actions locally.
+For local testing, use [nektos/act](https://github.com/nektos/act) to run the GitHub Actions on your machine.
 
 ```sh
 act push -j static -W .github/workflows/build-static-tests.yaml
 ```
 
-Will be start the [![.github/workflows/build-static-tests.yaml](https://github.com/nolte/gh-plumbing/actions/workflows/build-static-tests.yaml/badge.svg)](https://github.com/nolte/gh-plumbing/actions/workflows/build-static-tests.yaml) at your system.
+This runs the [`build-static-tests`](https://github.com/nolte/gh-plumbing/actions/workflows/build-static-tests.yaml) workflow on your machine.
 
 
 ### Documentation
@@ -83,7 +83,7 @@ pip install -r requirements-dev.txt
 mkdocs serve -a localhost:8001
 ```
 
-Open [localhost:8001](http://localhost:8001/) for take a look to the latest documentation, created with [mkdocs](https://www.mkdocs.org/).
+Open [localhost:8001](http://localhost:8001/) to view the latest documentation, built with [mkdocs](https://www.mkdocs.org/).
 <!--development-intro-end-->
 
 ### Task

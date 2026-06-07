@@ -24,18 +24,18 @@ Credential, das GitHub als user-initiated wertet.
 
 Die Spec verlangt eine Portfolio-Level-Lösung: eine App, in jedem
 Konsument-Repo installiert, mit demselben Wrapper-Pattern in jedem
-`.github/workflows/`. Kein PAT-Sammeln pro Repo, kein
-personengebundenes Credential.
+`.github/workflows/`. Kein Sammeln von Personal-Access-Tokens (PAT)
+pro Repo, kein personengebundenes Credential.
 
 ---
 
 ## Owner-Modi
 
 Die Portfolio-App kann Konsumenten unter einer GitHub-**Organisation**
-oder unter einem persönlichen **User-Account** bedienen. Wähle den
-Modus, der zum Account passt, der die Konsumenten-Repositories
-besitzt — beide Modi liefern dasselbe nachgelagerte Verhalten
-(App-emittierte Events kaskadieren user-initiated), nur die
+oder unter einem persönlichen **User-Account** bedienen. Den Modus
+wählen, der zum Account passt, der die Konsumenten-Repositories
+besitzt. Beide Modi liefern dasselbe nachgelagerte Verhalten —
+App-emittierte Events kaskadieren user-initiated —, nur die
 Credential-Verkabelung unterscheidet sich.
 
 | Modus | Wann wählen | Credentials liegen als |
@@ -108,12 +108,12 @@ Jedes aktivierte Häkchen würde nur tote Webhook-Versuche erzeugen.
    `https://github.com/settings/apps/new` für einen persönlichen
    Account). Namensvorschlag: `nolte-portfolio-bot`.
 2. **Permissions wie oben vergeben** und jeden Webhook-Event abwählen.
-3. **Private Key (PEM) generieren** — einmal speichern; GitHub zeigt
-   ihn nicht erneut an.
+3. **Private Key im PEM-Format (Privacy-Enhanced Mail) generieren** —
+   einmal speichern; GitHub zeigt ihn nicht erneut an.
 4. **App-ID notieren** (sichtbar auf der App-Settings-Seite).
 5. **App installieren** in jedem Konsument-Repository, das
-   cascade-korrekte Workflows braucht. Beginne mit
-   `nolte/gh-plumbing` selbst.
+   cascade-korrekte Workflows braucht. Mit `nolte/gh-plumbing` selbst
+   beginnen.
 6. **Credentials setzen** im Scope, der zum Owner-Modus passt:
    - **Organisations-Modus:** eine
      [Org-Level-Actions-Variable](https://docs.github.com/en/actions/learn-github-actions/variables)
@@ -149,10 +149,10 @@ Jedes aktivierte Häkchen würde nur tote Webhook-Versuche erzeugen.
 ## Wrapper-Pattern (für nachgelagerte Konsumenten)
 
 Die Cascade-emittierenden Wrapper in `nolte/gh-plumbing` zeigen das
-Pattern. Übernimm dieselbe Form in dein Repository für jeden Wrapper,
-der eine `reusable-*.yaml` aufruft, deren Arbeit nachgelagerte
-Workflows triggern soll oder die du unter derselben Release-Audit-
-Identität halten willst.
+Pattern. Dieselbe Form in das eigene Repository für jeden Wrapper
+übernehmen, der eine `reusable-*.yaml` aufruft, deren Arbeit
+nachgelagerte Workflows triggern soll oder die unter derselben
+Release-Audit-Identität bleiben soll.
 
 ```yaml title=".github/workflows/automerge.yaml"
 on:
@@ -233,7 +233,7 @@ Eine dritte Self-Check-Zeile betrifft den Issue-Lifecycle:
 |---|---|
 | PR squash-mergen, dessen Body `Closes #N` enthält | Issue `#N` flippt automatisch auf `CLOSED`; `gh issue view N --json state` liefert `CLOSED`. Setzt die App-Permission `Issues: Read and write` voraus — ohne sie greift der Merge zwar, der Close feuert aber nicht, obwohl `gh pr view --json closingIssuesReferences` den Autolink korrekt geparst zeigt. |
 
-Wenn ein Cascade immer noch nicht triggert, prüfe:
+Wenn ein Cascade immer noch nicht triggert, prüfen:
 
 1. Die App ist im Konsument-Repo installiert (`Settings → GitHub Apps`).
 2. `vars.PORTFOLIO_APP_ID` ist für den Workflow sichtbar.
@@ -254,7 +254,7 @@ Wenn ein Cascade immer noch nicht triggert, prüfe:
 | Reguläre jährliche Rotation | Neuen Private Key auf der App-Seite generieren, `PORTFOLIO_APP_PRIVATE_KEY` in jedem Konsumenten aktualisieren (oder einmal auf Org-Level, falls org-scoped), den alten Key auf der App-Seite löschen. |
 | Vermuteter Key-Leak | Geleakten Key sofort in den App-Settings widerrufen, neuen Key generieren, am selben Tag verteilen. App-ID bleibt unverändert. |
 | App-ID-Rotation | Niemals nötig — App-IDs sind unveränderlich. |
-| Permission-Scope-Änderung | App-Permissions editieren; bestehende Installation-Tokens mit alten Permissions laufen für ihre TTL (≤ 1 h) weiter, dann werden sie mit neuem Scope erneuert. |
+| Permission-Scope-Änderung | App-Permissions editieren; bestehende Installation-Tokens mit alten Permissions laufen für ihre Gültigkeitsdauer (TTL, ≤ 1 h) weiter, dann werden sie mit neuem Scope erneuert. |
 
 ---
 

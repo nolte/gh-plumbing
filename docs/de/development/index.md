@@ -59,7 +59,7 @@ act push -j static -W .github/workflows/build-static-tests.yaml
 
 ---
 
-## Prose-Linting
+## Prosa-Linting
 
 [Vale](https://vale.sh/) prüft Markdown-Dateien im CI über `reusable-spelling-vale.yaml`. Die Regeln liegen in `.vale.ini`, die Styles unter `.github/styles/`.
 
