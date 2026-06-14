@@ -1,0 +1,40 @@
+name: Reusable — MkDocs Strict Build
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: Python version passed to actions/setup-python.
+        required: false
+        type: string
+        default: "3.x"
+      requirements:
+        description: |
+          Path to the pip requirements file that installs the MkDocs
+          toolchain (mkdocs, theme, and plugins).
+        required: false
+        type: string
+        default: "requirements-dev.txt"
+
+jobs:
+  build:
+    name: MkDocs Build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6.0.0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Install MkDocs toolchain
+        run: pip install -r ${{ inputs.requirements }}
+
+      # --strict turns broken links, missing nav entries, and plugin
+      # render errors into a non-zero exit, so docs regressions surface
+      # on the pull request instead of only when the site is deployed.
+      - name: Build site (strict)
+        run: mkdocs build --strict
