@@ -1,0 +1,103 @@
+name: Reusable — Node.js Coverage
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: Node.js version passed to actions/setup-node.
+        required: false
+        type: string
+        default: "lts/*"
+      working-directory:
+        description: Directory the install and test commands run in.
+        required: false
+        type: string
+        default: "."
+      install-command:
+        description: Shell command that installs the project dependencies.
+        required: false
+        type: string
+        default: "npm ci"
+      test-command:
+        description: |
+          Shell command that runs the tests and writes an Istanbul
+          json-summary coverage report to <coverage-summary-path>. Both
+          Vitest (--coverage.reporter=json-summary) and Jest
+          (--coverageReporters=json-summary) emit this format.
+        required: false
+        type: string
+        default: "npm test"
+      coverage-summary-path:
+        description: Path to the Istanbul json-summary report.
+        required: false
+        type: string
+        default: "coverage/coverage-summary.json"
+      fail-under:
+        description: |
+          Minimum line coverage percentage. The job fails below it.
+          0 disables the gate.
+        required: false
+        type: number
+        default: 0
+
+jobs:
+  coverage:
+    name: Node.js Coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6.0.0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Install dependencies
+        run: ${{ inputs.install-command }}
+
+      - name: Run tests with coverage
+        run: ${{ inputs.test-command }}
+
+      - name: Render coverage into the job summary
+        if: ${{ !cancelled() }}
+        env:
+          SUMMARY_PATH: ${{ inputs.coverage-summary-path }}
+        run: |
+          node <<'NODE' >> "$GITHUB_STEP_SUMMARY"
+          const fs = require('fs');
+          const path = process.env.SUMMARY_PATH;
+          if (!fs.existsSync(path)) {
+            console.error(`::error::Coverage summary not found at ${path}`);
+            process.exit(1);
+          }
+          const total = JSON.parse(fs.readFileSync(path, 'utf8')).total;
+          const rows = ['lines', 'statements', 'functions', 'branches']
+            .map((k) => `| ${k} | ${total[k].pct}% | ${total[k].covered}/${total[k].total} |`)
+            .join('\n');
+          process.stdout.write(
+            `## Test coverage\n\n| Metric | % | Covered / Total |\n| --- | --- | --- |\n${rows}\n`
+          );
+          NODE
+
+      - name: Enforce coverage threshold
+        if: ${{ inputs.fail-under > 0 }}
+        env:
+          SUMMARY_PATH: ${{ inputs.coverage-summary-path }}
+          FAIL_UNDER: ${{ inputs.fail-under }}
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const total = JSON.parse(fs.readFileSync(process.env.SUMMARY_PATH, 'utf8')).total;
+          const pct = total.lines.pct;
+          const threshold = Number(process.env.FAIL_UNDER);
+          if (pct < threshold) {
+            console.error(`::error::Line coverage ${pct}% is below the required ${threshold}%`);
+            process.exit(1);
+          }
+          console.log(`Line coverage ${pct}% meets the required ${threshold}%.`);
+          NODE
