@@ -1,0 +1,82 @@
+name: Reusable — Python Coverage
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: Python version passed to actions/setup-python.
+        required: false
+        type: string
+        default: "3.x"
+      working-directory:
+        description: Directory the install and test commands run in.
+        required: false
+        type: string
+        default: "."
+      install-command:
+        description: |
+          Shell command that installs the project together with its test
+          dependencies (must include pytest and pytest-cov).
+        required: false
+        type: string
+        default: "pip install -e .[test]"
+      coverage-source:
+        description: |
+          Module or package measured for coverage, passed to pytest as
+          --cov=<source>.
+        required: false
+        type: string
+        default: "."
+      pytest-args:
+        description: Extra arguments appended to the pytest invocation.
+        required: false
+        type: string
+        default: ""
+      fail-under:
+        description: |
+          Minimum total coverage percentage. The job fails below it.
+          0 disables the gate.
+        required: false
+        type: number
+        default: 0
+
+jobs:
+  coverage:
+    name: Python Coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6.0.0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Install dependencies
+        run: ${{ inputs.install-command }}
+
+      - name: Run pytest with coverage
+        run: |
+          pytest \
+            --cov=${{ inputs.coverage-source }} \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            ${{ inputs.pytest-args }}
+
+      - name: Render coverage into the job summary
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "## Test coverage"
+            echo
+            coverage report --format=markdown
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce coverage threshold
+        if: ${{ inputs.fail-under > 0 }}
+        run: coverage report --fail-under=${{ inputs.fail-under }}
