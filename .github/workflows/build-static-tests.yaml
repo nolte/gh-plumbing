@@ -5,8 +5,6 @@ on:
 jobs:
   static:
     uses: nolte/gh-plumbing/.github/workflows/reusable-pre-commit.yaml@develop
-  docs:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-mkdocs-build.yaml@develop
   security:
     uses: nolte/gh-plumbing/.github/workflows/reusable-trivy.yaml@develop
   chain-bench:
