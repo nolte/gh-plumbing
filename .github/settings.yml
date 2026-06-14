@@ -7,11 +7,17 @@
 # file as well (a comment touch is enough) so the App re-runs the merge.
 # Tracked by https://github.com/nolte/gh-plumbing/issues/331.
 #
-# Last propagation: 2026-05-20 — Phase 2 of #330: declare
+# Last propagation: 2026-06-14 — declare this repo's own required status
+# checks on develop. commons-settings.yml leaves develop's
+# `required_status_checks.contexts` empty by portfolio policy ("Consumers
+# MUST declare their own required-check contexts in their per-repo
+# .github/settings.yml"); the branches block below supplies them. Per the
+# Probot Settings App `_extends` merge rules, branch entries merge by
+# `name`, so declaring only `develop` here keeps the `master` block and
+# develop's `enforce_admins` / `restrictions` from commons untouched.
+# (Previous propagation 2026-05-20 — Phase 2 of #330: declare
 # nolte-portfolio-app as branch-protection bypass actor on develop and
-# master (push_restrictions actor) so the workflow-driven primary path
-# of spec/project/release-automation/ §Version-bearing file alignment
-# becomes usable.
+# master.)
 
 _extends: gh-plumbing:.github/commons-settings.yml
 
@@ -20,3 +26,17 @@ repository:
   description: Github Project plumbing
   homepage: https://nolte.github.io/gh-plumbing/
   topics: github, plumbing
+
+branches:
+  # Merges by `name` into the commons `develop` block; only
+  # required_status_checks.contexts is overridden here. The check
+  # contexts are "<caller-job-id> / <reusable-job-display-name>":
+  # `static` job → reusable-pre-commit's "Static CI Tests";
+  # `docs` job → reusable-mkdocs-build's "MkDocs Build".
+  - name: develop
+    protection:
+      required_status_checks:
+        strict: true
+        contexts:
+          - static / Static CI Tests
+          - docs / MkDocs Build
