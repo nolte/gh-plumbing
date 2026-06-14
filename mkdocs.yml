@@ -47,6 +47,20 @@ theme:
 extra_css:
   - stylesheets/extra.css
 
+# Header language switcher. The i18n plugin emits the SEO `hreflang`
+# alternates automatically, but Material only renders the visible
+# selector when `extra.alternate` is declared. Links carry the
+# `/gh-plumbing/` site base (see site_url); `en` is the default locale
+# and builds to the site root, `de` builds under `/de/`.
+extra:
+  alternate:
+    - name: English
+      link: /gh-plumbing/
+      lang: en
+    - name: Deutsch
+      link: /gh-plumbing/de/
+      lang: de
+
 plugins:
   - search
   - include-markdown
@@ -86,6 +100,9 @@ markdown_extensions:
       permalink: true
   - pymdownx.caret
   - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
   - pymdownx.highlight:
       anchor_linenums: true
       line_spans: __span
@@ -117,6 +134,7 @@ nav:
   - Workflows:
       - workflows/index.md
       - Static tests: workflows/static-tests.md
+      - Coverage: workflows/coverage.md
       - Documentation: workflows/documentation.md
       - Release: workflows/release.md
   - Probot:
