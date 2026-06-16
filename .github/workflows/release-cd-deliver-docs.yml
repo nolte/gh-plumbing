@@ -1,3 +1,5 @@
+name: Release — Deliver Docs
+
 on:
   release:
     types: [published]

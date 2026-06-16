@@ -1,4 +1,4 @@
-name: tf-lint
+name: Reusable — Terraform Lint
 
 on:
   workflow_call:
