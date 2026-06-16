@@ -1,3 +1,5 @@
+name: Static CI Tests
+
 on:
   push:
   workflow_dispatch:
