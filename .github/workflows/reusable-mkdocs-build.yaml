@@ -1,0 +1,56 @@
+name: Reusable — MkDocs Strict Build
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: Python version passed to actions/setup-python.
+        required: false
+        type: string
+        default: "3.x"
+      requirements:
+        description: |
+          Path to the pip requirements file that installs the MkDocs
+          toolchain (mkdocs, theme, and plugins).
+        required: false
+        type: string
+        default: "requirements-dev.txt"
+      pre-build-command:
+        description: |
+          Optional shell command run after the toolchain install and
+          before `mkdocs build`. Use it to generate derived pages (for
+          example a skill/agent catalog) that are gitignored and
+          therefore absent from a fresh checkout, so the strict build
+          does not fail on missing nav targets. The requirements file
+          is already installed, so a Python generator can import its
+          deps directly. Empty (default) skips the step.
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  build:
+    name: MkDocs Build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6.0.0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Install MkDocs toolchain
+        run: pip install -r ${{ inputs.requirements }}
+
+      - name: Pre-build command
+        if: ${{ inputs.pre-build-command != '' }}
+        run: ${{ inputs.pre-build-command }}
+
+      # --strict turns broken links, missing nav entries, and plugin
+      # render errors into a non-zero exit, so docs regressions surface
+      # on the pull request instead of only when the site is deployed.
+      - name: Build site (strict)
+        run: mkdocs build --strict

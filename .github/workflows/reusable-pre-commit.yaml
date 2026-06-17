@@ -1,4 +1,4 @@
-name: CI Static Tests
+name: Reusable — Pre-Commit
 
 on:
   workflow_call:

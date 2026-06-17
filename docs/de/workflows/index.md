@@ -30,6 +30,14 @@ uses: nolte/gh-plumbing/.github/workflows/reusable-<name>.yaml@develop
 
     [:octicons-arrow-right-24: reusable-pre-commit](static-tests.md)
 
+-   :material-chart-box-outline: **Coverage**
+
+    ---
+
+    Python- oder Node.js-Testabdeckung in die Job-Zusammenfassung rendern, mit optionalem `fail-under`-Gate.
+
+    [:octicons-arrow-right-24: Coverage-Workflows](coverage.md)
+
 -   :material-book-open-variant: **Dokumentation**
 
     ---

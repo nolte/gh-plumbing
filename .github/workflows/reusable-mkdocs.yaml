@@ -1,4 +1,4 @@
-name: Release Deliver Docs
+name: Reusable — MkDocs Deploy
 
 on:
   workflow_call:
@@ -8,6 +8,26 @@ on:
         required: false
         default: "./requirements-dev.txt"
         type: string
+      pre-build-command:
+        description: |
+          Optional shell command run on the runner after checkout and
+          before the gh-pages build/deploy. Use it to generate derived
+          pages (for example a skill/agent catalog) that are gitignored
+          and therefore absent from a fresh checkout. The requirements
+          file is installed on the runner first, so a Python generator
+          can import its deps directly; the generated files live in the
+          workspace and are picked up by the deploy step. Empty
+          (default) skips the step.
+        required: false
+        type: string
+        default: ""
+      python-version:
+        description: |
+          Python version for the pre-build command step. Only used when
+          pre-build-command is set.
+        required: false
+        type: string
+        default: "3.x"
       app-id:
         description: |
           Numeric GitHub App ID of the portfolio App. When set, the
@@ -55,6 +75,22 @@ jobs:
 
       - name: Checkout master
         uses: actions/checkout@v6.0.0
+
+      # Optional pre-build hook. Runs on the runner host before the
+      # Dockerised deploy action; files it writes into the workspace
+      # (e.g. a generated catalog under docs/) are mounted into and
+      # picked up by mkdocs gh-deploy.
+      - name: Set up Python for pre-build
+        if: ${{ inputs.pre-build-command != '' }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Pre-build command
+        if: ${{ inputs.pre-build-command != '' }}
+        run: |
+          pip install -r ${{ inputs.requirements }}
+          ${{ inputs.pre-build-command }}
 
       - name: Deploy docs
         uses: mhausenblas/mkdocs-deploy-gh-pages@1.26
