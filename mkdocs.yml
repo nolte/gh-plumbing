@@ -81,6 +81,7 @@ plugins:
             Static tests: Statische Tests
             Documentation: Dokumentation
             Release: Release
+            HACS validation: HACS-Validierung
             Probot: Probot
             Settings: Settings
             Labelling: Labelling
@@ -137,6 +138,7 @@ nav:
       - Coverage: workflows/coverage.md
       - Documentation: workflows/documentation.md
       - Release: workflows/release.md
+      - HACS validation: workflows/hacs.md
   - Probot:
       - probot/index.md
       - Settings: probot/settings.md

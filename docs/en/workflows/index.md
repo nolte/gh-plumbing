@@ -54,6 +54,14 @@ uses: nolte/gh-plumbing/.github/workflows/reusable-<name>.yaml@develop
 
     [:octicons-arrow-right-24: Release workflows](release.md)
 
+-   :material-home-assistant: **HACS validation**
+
+    ---
+
+    Validate a HACS custom integration with `hacs/action` and `hassfest`, and ship the release ZIP asset.
+
+    [:octicons-arrow-right-24: HACS validation](hacs.md)
+
 </div>
 
 !!! info "Conventions"
