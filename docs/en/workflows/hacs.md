@@ -20,7 +20,7 @@ jobs:
 ```
 
 !!! tip "Custom repository vs. default store"
-    Leave `ignore` empty for a default-store-grade run — HACS forbids ignored checks for default-store inclusion. A pure custom repository may ignore checks it cannot satisfy, e.g. `with: { ignore: "brands" }`.
+    Leave `ignore` empty for a default-store-grade run. HACS forbids ignored checks for default-store inclusion. A pure custom repository may ignore checks it can't satisfy, for example `with: { ignore: "brands" }`.
 
 ---
 
