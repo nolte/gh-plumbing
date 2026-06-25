@@ -58,7 +58,7 @@ uses: nolte/gh-plumbing/.github/workflows/reusable-<name>.yaml@develop
 
     ---
 
-    Validate a HACS custom integration with `hacs/action` and hassfest, and ship the release ZIP asset.
+    Validate a HACS custom integration with `hacs/action` and `hassfest`, and ship the release ZIP asset.
 
     [:octicons-arrow-right-24: HACS validation](hacs.md)
 
