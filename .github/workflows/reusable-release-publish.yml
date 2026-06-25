@@ -31,6 +31,21 @@ on:
         required: false
         type: string
         default: ""
+      asset-filename:
+        description: |
+          Name of the HACS zip-release asset the publish step builds and
+          attaches (HACS source only). When set, it takes precedence over
+          the implicit `hacs.json .filename` read; when empty (the default),
+          the reusable falls back to `hacs.json .filename` and finally to
+          `<domain>.zip`. This input only decouples the *build* name from
+          hacs.json — it does NOT replace the consumer's hacs.json
+          `filename`/`zip_release` keys, which are HACS's own contract (HACS
+          reads hacs.json to decide which release asset to download). The two
+          MUST agree: a mismatch means HACS looks for an asset the reusable
+          never built. See spec/ha/hacs-release §ZIP release distribution.
+        required: false
+        type: string
+        default: ""
     secrets:
       token:
         required: true
@@ -316,6 +331,7 @@ jobs:
           TAG: ${{ inputs.tag }}
           TARGET_SHA: ${{ steps.draft.outputs.target_sha }}
           DRY_RUN: ${{ inputs.dry_run }}
+          ASSET_FILENAME: ${{ inputs.asset-filename }}
         run: |
           set -euo pipefail
 
@@ -327,14 +343,28 @@ jobs:
             exit 1
           fi
 
-          # Asset filename from hacs.json at the target SHA; default to <domain>.zip.
+          # Asset filename resolution (precedence per spec/ha/hacs-release
+          # §ZIP release distribution): explicit inputs.asset-filename wins;
+          # else hacs.json .filename at the target SHA; else <domain>.zip.
+          hacs_filename=""
           if git cat-file -e "$TARGET_SHA:hacs.json" 2>/dev/null; then
-            filename=$(git show "$TARGET_SHA:hacs.json" | jq -r '.filename // empty')
+            hacs_filename=$(git show "$TARGET_SHA:hacs.json" | jq -r '.filename // empty')
           else
             echo "::warning::No hacs.json at $TARGET_SHA — a HACS integration MUST ship one (spec/ha/hacs-release)."
-            filename=""
           fi
-          [[ -z "$filename" || "$filename" == "null" ]] && filename="${domain}.zip"
+          [[ "$hacs_filename" == "null" ]] && hacs_filename=""
+
+          if [[ -n "$ASSET_FILENAME" ]]; then
+            filename="$ASSET_FILENAME"
+            # The build name and HACS's own hacs.json contract MUST agree, or
+            # HACS downloads an asset this run never built. Warn on divergence.
+            if [[ -n "$hacs_filename" && "$hacs_filename" != "$filename" ]]; then
+              echo "::warning::asset-filename '$filename' disagrees with hacs.json filename '$hacs_filename' — HACS reads hacs.json to pick the asset, so the two MUST match (spec/ha/hacs-release §ZIP release distribution)."
+            fi
+          else
+            filename="$hacs_filename"
+          fi
+          [[ -z "$filename" ]] && filename="${domain}.zip"
           echo "Building HACS asset '$filename' from custom_components/$domain at ${TARGET_SHA:0:8}."
 
           # Extract the integration directory from the target tree (independent of
