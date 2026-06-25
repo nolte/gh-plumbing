@@ -1,0 +1,199 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
+    <url>
+        <loc>https://nolte.github.io/gh-plumbing/</loc>
+        <lastmod>2026-06-25</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://nolte.github.io/gh-plumbing/"/>
+        <xhtml:link rel="alternate" hreflang="de" href="https://nolte.github.io/gh-plumbing/de/"/>
+    </url>
+    <url>
+        <loc>https://nolte.github.io/gh-plumbing/development/</loc>
+        <lastmod>2026-06-25</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://nolte.github.io/gh-plumbing/development/"/>
+        <xhtml:link rel="alternate" hreflang="de" href="https://nolte.github.io/gh-plumbing/de/development/"/>
+    </url>
+    <url>
+        <loc>https://nolte.github.io/gh-plumbing/getting-started/</loc>
+        <lastmod>2026-06-25</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://nolte.github.io/gh-plumbing/getting-started/"/>
+        <xhtml:link rel="alternate" hreflang="de" href="https://nolte.github.io/gh-plumbing/de/getting-started/"/>
+    </url>
+    <url>
+        <loc>https://nolte.github.io/gh-plumbing/portfolio-app/setup/</loc>
+        <lastmod>2026-06-25</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://nolte.github.io/gh-plumbing/portfolio-app/setup/"/>
+        <xhtml:link rel="alternate" hreflang="de" href="https://nolte.github.io/gh-plumbing/de/portfolio-app/setup/"/>
+    </url>
+    <url>
+        <loc>https://nolte.github.io/gh-plumbing/probot/</loc>
+        <lastmod>2026-06-25</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://nolte.github.io/gh-plumbing/probot/"/>
+        <xhtml:link rel="alternate" hreflang="de" href="https://nolte.github.io/gh-plumbing/de/probot/"/>
+    </url>
+    <url>
+        <loc>https://nolte.github.io/gh-plumbing/probot/labelling/</loc>
+        <lastmod>2026-06-25</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://nolte.github.io/gh-plumbing/probot/labelling/"/>
+        <xhtml:link rel="alternate" hreflang="de" href="https://nolte.github.io/gh-plumbing/de/probot/labelling/"/>
+    </url>
+    <url>
+        <loc>https://nolte.github.io/gh-plumbing/probot/settings/</loc>
+        <lastmod>2026-06-25</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://nolte.github.io/gh-plumbing/probot/settings/"/>
+        <xhtml:link rel="alternate" hreflang="de" href="https://nolte.github.io/gh-plumbing/de/probot/settings/"/>
+    </url>
+    <url>
+        <loc>https://nolte.github.io/gh-plumbing/workflows/</loc>
+        <lastmod>2026-06-25</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://nolte.github.io/gh-plumbing/workflows/"/>
+        <xhtml:link rel="alternate" hreflang="de" href="https://nolte.github.io/gh-plumbing/de/workflows/"/>
+    </url>
+    <url>
+        <loc>https://nolte.github.io/gh-plumbing/workflows/coverage/</loc>
+        <lastmod>2026-06-25</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://nolte.github.io/gh-plumbing/workflows/coverage/"/>
+        <xhtml:link rel="alternate" hreflang="de" href="https://nolte.github.io/gh-plumbing/de/workflows/coverage/"/>
+    </url>
+    <url>
+        <loc>https://nolte.github.io/gh-plumbing/workflows/documentation/</loc>
+        <lastmod>2026-06-25</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://nolte.github.io/gh-plumbing/workflows/documentation/"/>
+        <xhtml:link rel="alternate" hreflang="de" href="https://nolte.github.io/gh-plumbing/de/workflows/documentation/"/>
+    </url>
+    <url>
+        <loc>https://nolte.github.io/gh-plumbing/workflows/hacs/</loc>
+        <lastmod>2026-06-25</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://nolte.github.io/gh-plumbing/workflows/hacs/"/>
+        <xhtml:link rel="alternate" hreflang="de" href="https://nolte.github.io/gh-plumbing/de/workflows/hacs/"/>
+    </url>
+    <url>
+        <loc>https://nolte.github.io/gh-plumbing/workflows/release/</loc>
+        <lastmod>2026-06-25</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://nolte.github.io/gh-plumbing/workflows/release/"/>
+        <xhtml:link rel="alternate" hreflang="de" href="https://nolte.github.io/gh-plumbing/de/workflows/release/"/>
+    </url>
+    <url>
+        <loc>https://nolte.github.io/gh-plumbing/workflows/static-tests/</loc>
+        <lastmod>2026-06-25</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://nolte.github.io/gh-plumbing/workflows/static-tests/"/>
+        <xhtml:link rel="alternate" hreflang="de" href="https://nolte.github.io/gh-plumbing/de/workflows/static-tests/"/>
+    </url>
+    <url>
+        <loc>https://nolte.github.io/gh-plumbing/includes/abbreviations/</loc>
+        <lastmod>2026-06-25</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://nolte.github.io/gh-plumbing/includes/abbreviations/"/>
+        <xhtml:link rel="alternate" hreflang="de" href="https://nolte.github.io/gh-plumbing/de/includes/abbreviations/"/>
+    </url>
+    <url>
+        <loc>https://nolte.github.io/gh-plumbing/de/</loc>
+        <lastmod>2026-06-25</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="de" href="https://nolte.github.io/gh-plumbing/de/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://nolte.github.io/gh-plumbing/"/>
+    </url>
+    <url>
+        <loc>https://nolte.github.io/gh-plumbing/de/development/</loc>
+        <lastmod>2026-06-25</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="de" href="https://nolte.github.io/gh-plumbing/de/development/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://nolte.github.io/gh-plumbing/development/"/>
+    </url>
+    <url>
+        <loc>https://nolte.github.io/gh-plumbing/de/getting-started/</loc>
+        <lastmod>2026-06-25</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="de" href="https://nolte.github.io/gh-plumbing/de/getting-started/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://nolte.github.io/gh-plumbing/getting-started/"/>
+    </url>
+    <url>
+        <loc>https://nolte.github.io/gh-plumbing/de/portfolio-app/setup/</loc>
+        <lastmod>2026-06-25</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="de" href="https://nolte.github.io/gh-plumbing/de/portfolio-app/setup/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://nolte.github.io/gh-plumbing/portfolio-app/setup/"/>
+    </url>
+    <url>
+        <loc>https://nolte.github.io/gh-plumbing/de/probot/</loc>
+        <lastmod>2026-06-25</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="de" href="https://nolte.github.io/gh-plumbing/de/probot/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://nolte.github.io/gh-plumbing/probot/"/>
+    </url>
+    <url>
+        <loc>https://nolte.github.io/gh-plumbing/de/probot/labelling/</loc>
+        <lastmod>2026-06-25</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="de" href="https://nolte.github.io/gh-plumbing/de/probot/labelling/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://nolte.github.io/gh-plumbing/probot/labelling/"/>
+    </url>
+    <url>
+        <loc>https://nolte.github.io/gh-plumbing/de/probot/settings/</loc>
+        <lastmod>2026-06-25</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="de" href="https://nolte.github.io/gh-plumbing/de/probot/settings/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://nolte.github.io/gh-plumbing/probot/settings/"/>
+    </url>
+    <url>
+        <loc>https://nolte.github.io/gh-plumbing/de/workflows/</loc>
+        <lastmod>2026-06-25</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="de" href="https://nolte.github.io/gh-plumbing/de/workflows/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://nolte.github.io/gh-plumbing/workflows/"/>
+    </url>
+    <url>
+        <loc>https://nolte.github.io/gh-plumbing/de/workflows/coverage/</loc>
+        <lastmod>2026-06-25</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="de" href="https://nolte.github.io/gh-plumbing/de/workflows/coverage/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://nolte.github.io/gh-plumbing/workflows/coverage/"/>
+    </url>
+    <url>
+        <loc>https://nolte.github.io/gh-plumbing/de/workflows/documentation/</loc>
+        <lastmod>2026-06-25</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="de" href="https://nolte.github.io/gh-plumbing/de/workflows/documentation/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://nolte.github.io/gh-plumbing/workflows/documentation/"/>
+    </url>
+    <url>
+        <loc>https://nolte.github.io/gh-plumbing/de/workflows/hacs/</loc>
+        <lastmod>2026-06-25</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="de" href="https://nolte.github.io/gh-plumbing/de/workflows/hacs/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://nolte.github.io/gh-plumbing/workflows/hacs/"/>
+    </url>
+    <url>
+        <loc>https://nolte.github.io/gh-plumbing/de/workflows/release/</loc>
+        <lastmod>2026-06-25</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="de" href="https://nolte.github.io/gh-plumbing/de/workflows/release/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://nolte.github.io/gh-plumbing/workflows/release/"/>
+    </url>
+    <url>
+        <loc>https://nolte.github.io/gh-plumbing/de/workflows/static-tests/</loc>
+        <lastmod>2026-06-25</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="de" href="https://nolte.github.io/gh-plumbing/de/workflows/static-tests/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://nolte.github.io/gh-plumbing/workflows/static-tests/"/>
+    </url>
+    <url>
+        <loc>https://nolte.github.io/gh-plumbing/de/includes/abbreviations/</loc>
+        <lastmod>2026-06-25</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="de" href="https://nolte.github.io/gh-plumbing/de/includes/abbreviations/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://nolte.github.io/gh-plumbing/includes/abbreviations/"/>
+    </url>
+</urlset>
