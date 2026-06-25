@@ -1,0 +1,88 @@
+name: Reusable — HACS Validate
+
+# Validates a HACS-distributed Home Assistant custom integration with the two
+# official actions, so a consuming integration inherits the same gate HACS and
+# Home Assistant Core apply. Spec: claude-home-assistant spec/ha/hacs-release.
+#
+#   - hacs/action       — runs the same code HACS uses to validate a repository
+#                         (hacs.json existence, brands, topics, …). category is
+#                         required; this reusable defaults it to "integration".
+#   - hassfest          — Home Assistant Core's own manifest/structure validator,
+#                         able to validate standalone/custom integrations.
+#
+# Consumers call this on push and pull_request:
+#
+#   jobs:
+#     validate:
+#       uses: nolte/gh-plumbing/.github/workflows/reusable-hacs-validate.yaml@develop
+
+on:
+  workflow_call:
+    inputs:
+      category:
+        description: |
+          HACS repository category passed to hacs/action. One of: integration,
+          plugin, theme, python_script, appdaemon, template. This reusable
+          targets HACS integrations; the default is "integration".
+        required: false
+        type: string
+        default: integration
+      ignore:
+        description: |
+          Space-separated list of hacs/action checks to skip. Valid names:
+          archived brands description hacsjson images information issues topics.
+          Leave empty for a default-store-grade run — per
+          spec/ha/hacs-release a default-store inclusion MUST NOT ignore any
+          check. A pure custom repository MAY ignore checks it cannot satisfy.
+        required: false
+        type: string
+        default: ""
+      run_hassfest:
+        description: |
+          Run hassfest. Keep true for integrations (the default). Set false for
+          non-integration HACS categories (plugin/theme/…) where hassfest does
+          not apply.
+        required: false
+        type: boolean
+        default: true
+      hacs_action_ref:
+        description: |
+          Git ref of hacs/action to pin. Defaults to "main" (the action's own
+          moving default). Override with a tag or commit SHA to harden, matching
+          spec/ha/hacs-release §CI validation (SHOULD pin hacs/action).
+        required: false
+        type: string
+        default: main
+
+permissions:
+  contents: read
+
+jobs:
+  hacs:
+    name: HACS Action
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6.0.0
+
+      - name: HACS validation
+        uses: hacs/action@${{ inputs.hacs_action_ref }}
+        env:
+          # hacs/action calls the GitHub API for the issues/topics/brands checks.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          category: ${{ inputs.category }}
+          ignore: ${{ inputs.ignore }}
+
+  hassfest:
+    name: Hassfest
+    if: ${{ inputs.run_hassfest }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6.0.0
+
+      # hassfest is canonically referenced @master per the Home Assistant
+      # developer docs; pin by SHA downstream if you want it frozen.
+      - name: Hassfest validation
+        uses: home-assistant/actions/hassfest@master

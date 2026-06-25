@@ -297,6 +297,75 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # HACS zip-release asset (spec/ha/hacs-release §ZIP release distribution).
+      # When the project is a HACS integration, attach a <domain>.zip asset built
+      # from the integration directory at the draft's target SHA BEFORE the
+      # draft=false flip below — a downstream `on: release published` job would
+      # race the user's first download. Gated on the same `hacs` source the
+      # version-bearing-file detection already established; a no-op for every
+      # other project type.
+      #
+      # ZIP layout: the contents of custom_components/<domain>/ at the ZIP root
+      # (the established integration_blueprint pattern — HACS extracts the named
+      # asset into custom_components/<domain>/). content_in_root layouts and
+      # non-integration HACS categories are out of scope for this step.
+      - name: Attach HACS zip-release asset
+        if: steps.vbf.outputs.source == 'hacs'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
+          TAG: ${{ inputs.tag }}
+          TARGET_SHA: ${{ steps.draft.outputs.target_sha }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+
+          # Domain from the first detected manifest path: custom_components/<domain>/manifest.json
+          domain=$(jq -r '.entries[0].path' vbf.json \
+            | sed -E 's#^custom_components/([^/]+)/manifest\.json$#\1#')
+          if [[ -z "$domain" || "$domain" == "null" ]]; then
+            echo "::error::Could not derive integration domain from vbf.json entries."
+            exit 1
+          fi
+
+          # Asset filename from hacs.json at the target SHA; default to <domain>.zip.
+          if git cat-file -e "$TARGET_SHA:hacs.json" 2>/dev/null; then
+            filename=$(git show "$TARGET_SHA:hacs.json" | jq -r '.filename // empty')
+          else
+            echo "::warning::No hacs.json at $TARGET_SHA — a HACS integration MUST ship one (spec/ha/hacs-release)."
+            filename=""
+          fi
+          [[ -z "$filename" || "$filename" == "null" ]] && filename="${domain}.zip"
+          echo "Building HACS asset '$filename' from custom_components/$domain at ${TARGET_SHA:0:8}."
+
+          # Extract the integration directory from the target tree (independent of
+          # the checked-out develop HEAD), then zip its CONTENTS at the root.
+          workdir=$(mktemp -d)
+          if ! git archive "$TARGET_SHA" "custom_components/$domain" | tar -x -C "$workdir"; then
+            echo "::error::custom_components/$domain not found at $TARGET_SHA."
+            exit 1
+          fi
+          srcdir="$workdir/custom_components/$domain"
+
+          # Best-effort determinism: stamp mtimes to the target commit date, sort entries.
+          commit_date=$(git show -s --format=%cI "$TARGET_SHA")
+          find "$srcdir" -exec touch -d "$commit_date" {} +
+
+          out="$PWD/$filename"
+          ( cd "$srcdir" && find . -type f -printf '%P\n' | sort | zip -X -q "$out" -@ )
+          echo "Built $(du -h "$out" | cut -f1) asset: $filename"
+
+          if [[ "$DRY_RUN" == "true" ]]; then
+            echo "::notice::Dry run — built '$filename' but not uploading to draft '$TAG'."
+            { echo; echo "### HACS asset"; echo; echo "- Built \`$filename\` (dry run, not uploaded)."; } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # Attach to the still-draft release so the asset is present the instant
+          # the next step flips draft=false. --clobber makes re-runs idempotent.
+          gh release upload "$TAG" "$out" --clobber
+          echo "::notice::Attached '$filename' to draft '$TAG'."
+          { echo; echo "### HACS asset"; echo; echo "- Attached \`$filename\` to the release before publish."; } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Publish (flip draft=false)
         if: ${{ inputs.dry_run != true }}
         env:
