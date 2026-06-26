@@ -243,7 +243,9 @@ Wenn ein Cascade immer noch nicht triggert, prüfen:
 3. Der reusable-Run zeigt den `Mint App installation token`-Step als
    `success` (nicht `skipped`). Skipped Step bedeutet, der App-ID-Input
    war leer und der Fallback-Pfad griff (`GITHUB_TOKEN` =
-   Cascade-Lücke).
+   Cascade-Lücke). Greift der Fallback-Pfad, trägt die Job-Summary des
+   Runs eine explizite **"Cascade gap (GITHUB_TOKEN fallback)"**-Warnung,
+   die auf den manuellen Fast-Forward-Notausgang hinweist.
 
 ---
 

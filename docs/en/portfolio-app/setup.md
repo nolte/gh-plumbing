@@ -238,7 +238,9 @@ If a cascade still fails to fire, check:
 3. The reusable run shows the `Mint App installation token` step as
    `success`, not `skipped`. A skipped step means the App-id input
    arrived empty and the fallback path took over (`GITHUB_TOKEN` =
-   cascade gap).
+   cascade gap). When the fallback path is taken the run's job summary
+   carries an explicit **"Cascade gap (GITHUB_TOKEN fallback)"** warning
+   that names the manual fast-forward escape hatch.
 
 ---
 
