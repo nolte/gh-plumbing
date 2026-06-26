@@ -266,12 +266,12 @@ jobs:
           print(f"All {len(vbf['entries'])} version-bearing file(s) aligned to {tag}.")
 
           paths = [e["path"] for e in vbf["entries"]]
-          log_args = ["git", "log", "-1", "--pretty=%s", "origin/develop", "--"] + paths
+          log_args = ["git", "log", "-1", "--pretty=%s", sha, "--"] + paths
           subject = subprocess.run(log_args, capture_output=True, text=True, check=True).stdout.strip()
 
           expected_prefix = f"chore(release): {tag}"
           if not subject.startswith(expected_prefix):
-              print(f"::error::No 'chore(release): {tag}' alignment commit on origin/develop touching the version-bearing files.")
+              print(f"::error::No 'chore(release): {tag}' alignment commit at {sha[:8]} touching the version-bearing files.")
               print(f"::error::Most recent commit subject on these paths: '{subject}'")
               print(f"::error::Per spec/project/release-automation/ §Pre-publish verification, the alignment commit subject must start with '{expected_prefix}'.")
               sys.exit(1)
