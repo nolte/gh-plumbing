@@ -387,24 +387,42 @@ jobs:
             echo "Committed chore(release): $TAG at $new_sha."
           fi
 
-          echo "target_sha=$new_sha" >> "$GITHUB_OUTPUT"
-
           if [[ "$DRY_RUN" == "true" ]]; then
+            # Dry run: expose the locally-built commit so the Verify step can read
+            # the aligned tree via `git show`, but never push or realign the draft.
+            echo "target_sha=$new_sha" >> "$GITHUB_OUTPUT"
             echo "::notice::Dry run — aligned locally at ${new_sha:0:8}; not pushing to develop or realigning the draft."
             { echo; echo "### Alignment (dry run)"; echo; echo "- Would commit/push \`chore(release): $TAG\` and realign the draft to \`${new_sha:0:8}\`."; } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
-          # Push the alignment commit (if any) and realign the draft target to the
-          # aligned SHA so the published tag is cut from exactly this commit. The
-          # push authority is the App being a declared bypass actor on develop
-          # (branch-protection config, not a workflow `permissions:` key); per
-          # spec the push respects `enforce_admins: true` — the bypass is declared,
-          # not stolen. A rejected push degrades to the operator fallback path.
+          # Push the alignment commit (if any). The push authority is the App being
+          # a declared bypass actor on develop (branch-protection config, not a
+          # workflow `permissions:` key); per spec the push respects
+          # `enforce_admins: true` — the bypass is declared, not stolen.
+          #
+          # A rejected push (e.g. develop's branch protection refuses a direct push
+          # because the App is not a permitted bypass actor) MUST NOT wedge the
+          # release. Degrade to the operator fallback path: warn, emit no
+          # target_sha, and skip the draft realign so the Verify step below falls
+          # back to steps.draft.outputs.target_sha — the unaligned draft tree — and
+          # surfaces the operator-fallback message
+          # (spec/project/release-automation/ §Fallback path).
           if [[ "$committed" == "true" ]]; then
-            git push origin HEAD:develop
+            if ! git push origin HEAD:develop; then
+              msg="Primary-path push of 'chore(release): $TAG' to develop was rejected (the App may not be a permitted bypass actor for direct pushes to develop). Falling back to the operator path: open a 'chore(release): $TAG' PR aligning every version-bearing file (spec/project/release-automation/ §Fallback path), then re-run release-publish."
+              echo "::warning::$msg"
+              { echo; echo "### ⚠️ Alignment push rejected (operator fallback)"; echo; echo "$msg"; } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
             echo "::notice::Pushed alignment commit to develop."
           fi
+
+          # Push succeeded, or no commit was needed because the tree was already
+          # aligned at develop HEAD — in both cases new_sha is reachable on develop.
+          # Expose it and realign the draft target to that exact SHA so the
+          # published tag is cut from this commit.
+          echo "target_sha=$new_sha" >> "$GITHUB_OUTPUT"
           gh release edit "$TAG" --target "$new_sha"
           echo "::notice::Realigned draft '$TAG' target to ${new_sha:0:8}."
           { echo; echo "### Alignment"; echo; echo "- Aligned version-bearing files and set draft '$TAG' target to \`${new_sha:0:8}\`."; } >> "$GITHUB_STEP_SUMMARY"
