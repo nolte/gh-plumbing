@@ -336,8 +336,12 @@ jobs:
                       continue
                   for c, k in targets:
                       c[k] = target_value(c[k], tag)
-                  m = re.search(r"\n( +)\S", raw)
-                  indent = len(m.group(1)) if m else 2
+                  # Preserve the file's exact indent unit (spaces or tabs):
+                  # json.dumps accepts a string indent and uses it verbatim, so a
+                  # tab-indented manifest stays tab-indented instead of silently
+                  # collapsing to 2 spaces. Default to 2 spaces when undetectable.
+                  m = re.search(r"\n([ \t]+)\S", raw)
+                  indent = m.group(1) if m else 2
                   open(path, "w").write(json.dumps(data, indent=indent, ensure_ascii=False) + "\n")
               elif fmt == "toml":
                   # tomllib is read-only; rewrite the single `<key> = "<value>"`
