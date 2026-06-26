@@ -58,7 +58,7 @@ permissions**:
 |---|---|---|
 | `Contents` | `Read and write` | Squash-merge to develop, edit releases, fast-forward master |
 | `Pull requests` | `Read and write` | `pascalgn/automerge-action` reads and merges PRs |
-| `Issues` | `Read and write` | Automatically close issues referenced via `Closes #N` / `Fixes #N` / `Resolves #N` in the PR body when the App squash-merges. GitHub only honours these autolinks when the merging actor has `Issues: write`; without this scope the autolinks parse correctly into `closingIssuesReferences` but the close never fires (observed end-to-end on #357 / #358). |
+| `Issues` | `Read and write` | Automatically close issues referenced via `Closes #N` / `Fixes #N` / `Resolves #N` in the PR body when the App squash-merges. GitHub only honours these closing references when the merging actor has `Issues: write`; without this scope the references parse correctly into `closingIssuesReferences` but the close never fires (observed end-to-end on #357 / #358). |
 | `Actions` | `Read-only` | `release-publish` reads `gh run list` for the post-publish cascade sanity check |
 | `Metadata` | `Read-only` | Mandatory baseline (GitHub sets this automatically and won't let you disable it) |
 
