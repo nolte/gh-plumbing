@@ -427,28 +427,61 @@ jobs:
             echo "- \`gh release edit --draft=false\` was **not** called."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Pitfall 1: re-read isDraft after the flip and fail loudly if the release
+      # is still a draft. `gh release edit --draft=false` (and any automerge-style
+      # wrapper around it) can exit 0 without the draft actually flipping — the
+      # silent-success footgun #375 names. Never trust the publish step's exit
+      # code alone; verify the observable state.
       - name: Post-publish sanity
         if: ${{ inputs.dry_run != true }}
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
           TAG: ${{ inputs.tag }}
-          TARGET_SHA: ${{ steps.draft.outputs.target_sha }}
         run: |
           set -euo pipefail
           is_draft=$(gh release view "$TAG" --json isDraft --jq .isDraft)
           if [[ "$is_draft" != "false" ]]; then
-            echo "::error::Post-publish check failed: gh release view '$TAG' returned isDraft=$is_draft (expected false)."
+            echo "::error::Post-publish check failed: '$TAG' still reports isDraft=$is_draft after the flip (expected false). The publish step exited 0 but the draft did not flip — re-run release-publish or flip the draft manually (gh release edit '$TAG' --draft=false)."
             exit 1
           fi
           echo "Post-publish: isDraft=false confirmed."
 
-          # release-cd-refresh-master cascade check (SHOULD per spec; warning, not error).
-          # GITHUB_TOKEN-authored release:published events do not cascade to other workflows
-          # per spec/project/workflow-health/ §Known platform constraints.
+      # Pitfall 2: deterministic cascade-gap warning bound to the fallback
+      # condition itself. steps.app-token.outputs.token is empty in exactly the
+      # two cases the issue names — inputs.app-id unset (mint step skipped) or
+      # the App-token mint failed (continue-on-error) — so this fires precisely
+      # when the release:published event was authored by GITHUB_TOKEN and will
+      # NOT cascade. Surfaced in the job summary, not just the log.
+      - name: Warn on GITHUB_TOKEN cascade gap
+        if: ${{ inputs.dry_run != true && steps.app-token.outputs.token == '' }}
+        run: |
+          set -euo pipefail
+          msg="Published under GITHUB_TOKEN (no portfolio App token: inputs.app-id unset or the App-token mint failed). The release:published event will NOT cascade to release-cd-refresh-master.yml / release-cd-deliver-docs.yml — main and the docs will not refresh automatically. Dispatch release-cd-refresh-master.yml manually to fast-forward main (spec/project/workflow-health/ §Known platform constraints, #330)."
+          echo "::warning::$msg"
+          {
+            echo
+            echo "### ⚠️ Cascade gap (GITHUB_TOKEN fallback)"
+            echo
+            echo "$msg"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Belt-and-suspenders runtime probe — only when an App token WAS used and
+      # the cascade is therefore expected to fire. Gating on token != '' keeps
+      # this neutral/informational note from contradicting the deterministic
+      # cascade-gap warning above (the two conditions are mutually exclusive).
+      - name: Probe cascade run (App token path)
+        if: ${{ inputs.dry_run != true && steps.app-token.outputs.token != '' }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
+          TARGET_SHA: ${{ steps.draft.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+          # The cascade run may not have registered yet; this is a best-effort
+          # probe, never an error (spec/project/workflow-health/ §Known platform constraints).
           sleep 30
           refresh_run=$(gh run list --workflow=release-cd-refresh-master.yml --limit 1 --json status,createdAt,headSha --jq '.[0]')
           if [[ -z "$refresh_run" || "$refresh_run" == "null" ]]; then
-            echo "::warning::release-cd-refresh-master.yml has no recent run on $TARGET_SHA. Cascade gap is a known platform constraint with GITHUB_TOKEN — manual fast-forward of main may be required (spec/project/workflow-health/ §Known platform constraints)."
+            echo "::notice::No recent release-cd-refresh-master.yml run observed yet for $TARGET_SHA. The App-authored release:published event should cascade shortly; if main does not refresh, dispatch release-cd-refresh-master.yml manually."
           else
             echo "release-cd-refresh-master.yml run detected: $refresh_run"
           fi
