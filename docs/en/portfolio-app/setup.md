@@ -296,6 +296,47 @@ The same block applies to `master`.
 
 ---
 
+## Version-bearing file alignment (primary path)
+
+Once the App is installed **and** named as a `develop` bypass actor
+(the phase-2 block above), a caller can opt into the **workflow-driven
+primary path** for version-bearing-file alignment
+(`spec/project/release-automation/` §Version-bearing file alignment) by
+passing `auto-align: true` to `reusable-release-publish.yml`. With the
+opt-in set and an App token present, before verifying the reusable now:
+
+1. updates every version-bearing file to the target tag under its
+   transform—respecting each file's existing `v`-prefix convention,
+   and bumping **every** match of an array selector such as
+   `$.plugins[].version` in a multi-plugin `marketplace.json`;
+2. commits the aggregate change as `chore(release): <tag>` on
+   `develop`, authored by the App;
+3. pushes it through the declared bypass and realigns the draft's
+   `target_commitish` to the new commit, so the published tag is cut
+   from exactly the aligned tree.
+
+The **opt-in plus the App-token presence are the enablement gate**: the
+align step runs only when `auto-align: true` **and** the mint step
+produced a token. Without the opt-in, without the App, or on a mint
+failure the step is skipped and the workflow falls back to the
+**operator path**—a human opens a `chore(release): <tag>` PR, squash-
+merges it through the UI, then dispatches `release-publish`. Both paths
+land the identical `chore(release): <tag>` commit shape; only the
+credential that creates it differs. A `dry_run` dispatch aligns and
+verifies locally on the runner but never pushes or realigns the draft.
+
+!!! warning "First real run validates the protected push"
+    A direct push to `develop` under `enforce_admins: true` with
+    required status checks is only honoured if the App is a genuine
+    bypass actor. `dry_run` can't exercise it. If the first real push
+    is rejected, the remediation is the branch-protection bypass-actor
+    setting (the phase-2 block, applied via the GitHub UI when the
+    Probot App doesn't sync a protection field), not a workflow change;
+    the run degrades to the operator fallback rather than wedging the
+    release.
+
+---
+
 ## Related work
 
 - Tracking issue: [#330](https://github.com/nolte/gh-plumbing/issues/330)
