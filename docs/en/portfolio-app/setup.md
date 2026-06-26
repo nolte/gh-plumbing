@@ -58,7 +58,7 @@ permissions**:
 |---|---|---|
 | `Contents` | `Read and write` | Squash-merge to develop, edit releases, fast-forward master |
 | `Pull requests` | `Read and write` | `pascalgn/automerge-action` reads and merges PRs |
-| `Issues` | `Read and write` | Automatically close issues referenced via `Closes #N` / `Fixes #N` / `Resolves #N` in the PR body when the App squash-merges. GitHub only honours these autolinks when the merging actor has `Issues: write`; without this scope the autolinks parse correctly into `closingIssuesReferences` but the close never fires (observed end-to-end on #357 / #358). |
+| `Issues` | `Read and write` | Automatically close issues referenced via `Closes #N` / `Fixes #N` / `Resolves #N` in the PR body when the App squash-merges. GitHub only honours these closing references when the merging actor has `Issues: write`; without this scope the references parse correctly into `closingIssuesReferences` but the close never fires (observed end-to-end on #357 / #358). |
 | `Actions` | `Read-only` | `release-publish` reads `gh run list` for the post-publish cascade sanity check |
 | `Metadata` | `Read-only` | Mandatory baseline (GitHub sets this automatically and won't let you disable it) |
 
@@ -293,6 +293,47 @@ The same block applies to `master`.
     receive the bypass. An App that hasn't reached the repository
     can't bypass anything. The only effect of an early phase 2 is to
     block direct pushes from any other actor.
+
+---
+
+## Version-bearing file alignment (primary path)
+
+Phase 2 installs the App and names it as a `develop` bypass actor.
+After that, a caller can opt into the **workflow-driven primary path**
+for version-bearing-file alignment
+(`spec/project/release-automation/` §Version-bearing file alignment).
+The caller passes `auto-align: true` to `reusable-release-publish.yml`.
+With the opt-in set and an App token present, the reusable then does
+three things before it verifies:
+
+1. it updates every version-bearing file to the target tag under its
+   transform. It keeps each file's existing `v`-prefix convention and
+   bumps **every** match of an array selector such as
+   `$.plugins[].version` in a multi-plugin `marketplace.json`.
+2. it commits the aggregate change as `chore(release): <tag>` on
+   `develop` under the App's identity.
+3. it pushes the commit through the declared bypass and realigns the
+   draft's `target_commitish` to it. The published tag then comes from
+   exactly the aligned tree.
+
+The align step needs **both the opt-in and the App token**. It runs
+only when `auto-align: true` meets a token from the mint step.
+Otherwise the workflow skips the step and falls back to the **operator
+path**. There, a human opens a `chore(release): <tag>` PR, squash-
+merges it through the UI, then dispatches `release-publish`. Both paths
+land the identical `chore(release): <tag>` commit shape. Only the
+credential that creates it differs. A `dry_run` dispatch aligns and
+verifies on the runner. It never pushes and never realigns the draft.
+
+!!! warning "First real run validates the protected push"
+    A direct push to `develop` under `enforce_admins: true` with
+    required status checks works only when the App is a genuine bypass
+    actor. `dry_run` can't exercise it. The remediation for a rejected
+    first push is the branch-protection bypass-actor setting—the
+    phase-2 block. An operator applies it through the GitHub UI when the
+    Probot App skips a protection field. It's not a workflow change.
+    The run degrades to the operator fallback rather than wedging the
+    release.
 
 ---
 

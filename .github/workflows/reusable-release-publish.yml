@@ -46,6 +46,29 @@ on:
         required: false
         type: string
         default: ""
+      auto-align:
+        description: |
+          Opt-in to the spec's "Primary path: Workflow-driven"
+          (spec/project/release-automation/ §Version-bearing file
+          alignment). When true AND an App installation token is
+          available (inputs.app-id set + secrets.app-private-key valid),
+          the reusable updates every version-bearing file to the target
+          tag under its transform, commits `chore(release): <tag>` on
+          develop authored by the App, pushes, and realigns the draft's
+          target_commitish to the new SHA. When false (the default) — or
+          when no App token is present — the reusable only verifies
+          alignment and leaves the `chore(release): <tag>` commit to the
+          operator fallback path. The opt-in plus the App-token presence
+          together enforce the spec's "MUST NOT be enabled until the
+          portfolio App/PAT is installed and `.github/settings.yml`
+          explicitly names the credential as a bypass actor": no token or
+          no opt-in ⇒ no write ⇒ fallback. A push rejected by develop's
+          branch protection degrades gracefully — the step warns and the
+          Verify step below produces the operator-fallback message rather
+          than wedging the release.
+        required: false
+        type: boolean
+        default: false
     secrets:
       token:
         required: true
@@ -168,8 +191,21 @@ jobs:
 
           if pathlib.Path(".claude-plugin/plugin.json").exists():
               entries = [{"path": ".claude-plugin/plugin.json", "selector": "version", "transform": "strip-leading-v", "format": "json"}]
-              if pathlib.Path(".claude-plugin/marketplace.json").exists():
+              mp = pathlib.Path(".claude-plugin/marketplace.json")
+              if mp.exists():
                   entries.append({"path": ".claude-plugin/marketplace.json", "selector": "metadata.version", "transform": "strip-leading-v", "format": "json"})
+                  # Per spec/project/release-automation/ §Version-bearing files the
+                  # marketplace.json selector is `$.metadata.version` AND `$.plugins[].version`.
+                  # Guard on existence: only emit the array selector when EVERY plugins[]
+                  # entry actually declares a version key, so single-plugin repos and repos
+                  # whose plugins[] omit version (the claude-shared workaround) don't start
+                  # failing verification on a key the wildcard read would not find.
+                  try:
+                      plugins = (json.loads(mp.read_text()) or {}).get("plugins", [])
+                  except (ValueError, OSError):
+                      plugins = []
+                  if isinstance(plugins, list) and plugins and all(isinstance(p, dict) and "version" in p for p in plugins):
+                      entries.append({"path": ".claude-plugin/marketplace.json", "selector": "plugins[].version", "transform": "strip-leading-v", "format": "json"})
               json.dump({"source": "claude-plugin", "entries": entries}, sys.stdout)
               sys.exit(0)
 
@@ -207,15 +243,182 @@ jobs:
           echo "Detected project type: $source ($count version-bearing file(s))"
           jq . vbf.json
 
+      # Shared version-bearing selector grammar, written once and imported by
+      # BOTH the align (write) and verify (read) steps so the dot-path + array-
+      # wildcard grammar can never drift between them. Grammar: dot-separated
+      # parts; a part may carry a trailing `[]` or `[*]` meaning "every element
+      # of this array" (spec/project/release-automation/ §Version-bearing files
+      # lists `$.plugins[].version`). refs(data, selector) returns (container,
+      # key) leaf refs — read via container[key], written via container[key]=v.
+      - name: Prepare selector helper
+        if: steps.vbf.outputs.count != '0'
+        run: |
+          set -euo pipefail
+          cat > selectorlib.py <<'PY'
+          def refs(data, selector):
+              """Return [(container, key), ...] scalar-leaf refs for a dot-path
+              selector with optional `[]`/`[*]` array wildcards. Raises
+              KeyError/TypeError/IndexError on a path that does not resolve."""
+              parts = [p for p in selector.split(".") if p]
+              nodes = [data]
+              for i, raw in enumerate(parts):
+                  if raw.endswith("[]"):
+                      key, wild = raw[:-2], True
+                  elif raw.endswith("[*]"):
+                      key, wild = raw[:-3], True
+                  else:
+                      key, wild = raw, False
+                  last = i == len(parts) - 1
+                  nxt = []
+                  for n in nodes:
+                      child = n[key]
+                      if wild:
+                          if not isinstance(child, list):
+                              raise TypeError(f"selector part '{raw}' is not an array")
+                          if last:
+                              nxt.extend((child, idx) for idx in range(len(child)))
+                          else:
+                              nxt.extend(child)
+                      else:
+                          nxt.append((n, key) if last else child)
+                  nodes = nxt
+              return nodes
+          PY
+
+      # Primary path (spec/project/release-automation/ §Version-bearing file
+      # alignment → "Primary path: Workflow-driven"). Runs only when the caller
+      # opts in (inputs.auto-align) AND a bypass App token is available
+      # (steps.app-token.outputs.token != ''): the workflow then aligns every
+      # version-bearing file to the target tag, commits `chore(release): <tag>`
+      # on develop authored by the App, and pushes — automating the last manual
+      # link end-to-end. The opt-in plus the App-token presence together enforce
+      # the spec's enablement gate ("MUST NOT be enabled until the App is
+      # installed and named as a bypass actor"): no opt-in or no token ⇒ this
+      # step is skipped and the Verify step's operator-fallback message governs
+      # (the fallback path stays byte-for-byte unchanged).
+      - name: Align version-bearing files (primary path)
+        id: align
+        if: ${{ inputs.auto-align && steps.app-token.outputs.token != '' && steps.vbf.outputs.count != '0' }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
+          TAG: ${{ inputs.tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+          # Edit every version-bearing file in the checked-out develop tree to the
+          # target tag, honouring each file's existing v-prefix convention and
+          # every selector match (incl. array wildcards). Format-preserving:
+          # JSON via an indent-detecting round-trip, TOML via a targeted regex on
+          # the version line — minimal diffs, no whole-file reformat, no tomlkit.
+          python3 - <<'PY'
+          import json, os, re, sys
+          from selectorlib import refs
+
+          tag = os.environ["TAG"]
+
+          with open("vbf.json") as f:
+              vbf = json.load(f)
+
+          def target_value(existing, tag):
+              # strip-leading-v: keep the file's existing convention — write the
+              # v-prefixed tag only when the current value already uses a v
+              # (spec SHOULD: the workflow MUST NOT silently rewrite the convention).
+              return tag if str(existing).startswith("v") else tag.lstrip("v")
+
+          for e in vbf["entries"]:
+              path, selector, fmt = e["path"], e["selector"], e["format"]
+              raw = open(path).read()
+              if fmt == "json":
+                  data = json.loads(raw)
+                  targets = refs(data, selector)
+                  if not targets:
+                      continue
+                  for c, k in targets:
+                      c[k] = target_value(c[k], tag)
+                  # Preserve the file's exact indent unit (spaces or tabs):
+                  # json.dumps accepts a string indent and uses it verbatim, so a
+                  # tab-indented manifest stays tab-indented instead of silently
+                  # collapsing to 2 spaces. Default to 2 spaces when undetectable.
+                  m = re.search(r"\n([ \t]+)\S", raw)
+                  indent = m.group(1) if m else 2
+                  open(path, "w").write(json.dumps(data, indent=indent, ensure_ascii=False) + "\n")
+              elif fmt == "toml":
+                  # tomllib is read-only; rewrite the single `<key> = "<value>"`
+                  # line in place with a targeted regex (no tomlkit dependency).
+                  import tomllib
+                  data = tomllib.loads(raw)
+                  for c, k in refs(data, selector):
+                      existing = str(c[k])
+                      newval = target_value(existing, tag)
+                      pat = re.compile(r'^(\s*' + re.escape(k) + r'\s*=\s*)"' + re.escape(existing) + r'"', re.M)
+                      raw, n = pat.subn(lambda mo: mo.group(1) + '"' + newval + '"', raw, count=1)
+                      if n == 0:
+                          print(f"::error::Could not rewrite {k} in {path} (format-preserving regex matched nothing).", file=sys.stderr)
+                          sys.exit(1)
+                  open(path, "w").write(raw)
+              else:
+                  print(f"::error::Unsupported format '{fmt}' for {path}", file=sys.stderr)
+                  sys.exit(1)
+          PY
+
+          mapfile -t paths < <(jq -r '.entries[].path' vbf.json | sort -u)
+
+          if git diff --quiet -- "${paths[@]}"; then
+            # Already aligned at develop HEAD (a prior primary run or a merged
+            # fallback `chore(release)` PR). No commit needed; the draft target is
+            # realigned to develop HEAD below so Verify reads the aligned tree.
+            committed=false
+            new_sha=$(git rev-parse HEAD)
+            echo "Version-bearing files already aligned at $new_sha; no commit needed."
+          else
+            committed=true
+            slug="${APP_SLUG:-github-actions}"
+            uid=$(gh api "/users/${slug}[bot]" --jq .id 2>/dev/null || echo "")
+            git config user.name "${slug}[bot]"
+            if [[ -n "$uid" ]]; then
+              git config user.email "${uid}+${slug}[bot]@users.noreply.github.com"
+            else
+              git config user.email "${slug}[bot]@users.noreply.github.com"
+            fi
+            git add -- "${paths[@]}"
+            git commit -m "chore(release): $TAG"
+            new_sha=$(git rev-parse HEAD)
+            echo "Committed chore(release): $TAG at $new_sha."
+          fi
+
+          echo "target_sha=$new_sha" >> "$GITHUB_OUTPUT"
+
+          if [[ "$DRY_RUN" == "true" ]]; then
+            echo "::notice::Dry run — aligned locally at ${new_sha:0:8}; not pushing to develop or realigning the draft."
+            { echo; echo "### Alignment (dry run)"; echo; echo "- Would commit/push \`chore(release): $TAG\` and realign the draft to \`${new_sha:0:8}\`."; } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # Push the alignment commit (if any) and realign the draft target to the
+          # aligned SHA so the published tag is cut from exactly this commit. The
+          # push authority is the App being a declared bypass actor on develop
+          # (branch-protection config, not a workflow `permissions:` key); per
+          # spec the push respects `enforce_admins: true` — the bypass is declared,
+          # not stolen. A rejected push degrades to the operator fallback path.
+          if [[ "$committed" == "true" ]]; then
+            git push origin HEAD:develop
+            echo "::notice::Pushed alignment commit to develop."
+          fi
+          gh release edit "$TAG" --target "$new_sha"
+          echo "::notice::Realigned draft '$TAG' target to ${new_sha:0:8}."
+          { echo; echo "### Alignment"; echo; echo "- Aligned version-bearing files and set draft '$TAG' target to \`${new_sha:0:8}\`."; } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Verify version-bearing-file alignment
         if: steps.vbf.outputs.count != '0'
         env:
           TAG: ${{ inputs.tag }}
-          TARGET_SHA: ${{ steps.draft.outputs.target_sha }}
+          TARGET_SHA: ${{ steps.align.outputs.target_sha || steps.draft.outputs.target_sha }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
           import json, os, subprocess, sys
+          from selectorlib import refs
 
           tag = os.environ["TAG"]
           sha = os.environ["TARGET_SHA"]
@@ -223,21 +426,17 @@ jobs:
           with open("vbf.json") as f:
               vbf = json.load(f)
 
-          def value_at_sha(path, sha, fmt, selector):
+          def data_at_sha(path, sha, fmt):
               raw = subprocess.run(
                   ["git", "show", f"{sha}:{path}"],
                   capture_output=True, text=True, check=True,
               ).stdout
               if fmt == "json":
-                  data = json.loads(raw)
+                  return json.loads(raw)
               elif fmt == "toml":
                   import tomllib
-                  data = tomllib.loads(raw)
-              else:
-                  raise SystemExit(f"::error::Unsupported format '{fmt}' for {path}")
-              for part in [p for p in selector.split(".") if p]:
-                  data = data[part]
-              return str(data)
+                  return tomllib.loads(raw)
+              raise SystemExit(f"::error::Unsupported format '{fmt}' for {path}")
 
           def aligned(actual, tag):
               # transform=strip-leading-v: accept either form, matching the file's existing convention
@@ -246,15 +445,18 @@ jobs:
           errors = []
           for e in vbf["entries"]:
               try:
-                  actual = value_at_sha(e["path"], sha, e["format"], e["selector"])
+                  data = data_at_sha(e["path"], sha, e["format"])
+                  # Every selector match (incl. array wildcards) MUST equal the tag.
+                  values = [str(c[k]) for c, k in refs(data, e["selector"])]
               except subprocess.CalledProcessError:
                   errors.append(f"  - {e['path']}: file missing at {sha[:8]}")
                   continue
-              except (KeyError, TypeError) as exc:
+              except (KeyError, TypeError, IndexError) as exc:
                   errors.append(f"  - {e['path']}: selector '{e['selector']}' not found ({exc})")
                   continue
-              if not aligned(actual, tag):
-                  errors.append(f"  - {e['path']}: {e['selector']} is '{actual}', expected '{tag}' (or '{tag.lstrip('v')}')")
+              for actual in values:
+                  if not aligned(actual, tag):
+                      errors.append(f"  - {e['path']}: {e['selector']} is '{actual}', expected '{tag}' (or '{tag.lstrip('v')}')")
 
           if errors:
               print("::error::Version-bearing files not aligned to target tag:")
@@ -283,7 +485,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
           TAG: ${{ inputs.tag }}
-          TARGET_SHA: ${{ steps.draft.outputs.target_sha }}
+          TARGET_SHA: ${{ steps.align.outputs.target_sha || steps.draft.outputs.target_sha }}
           DRY_RUN: ${{ inputs.dry_run }}
           VBF_SOURCE: ${{ steps.vbf.outputs.source }}
           VBF_COUNT: ${{ steps.vbf.outputs.count }}
@@ -329,7 +531,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
           TAG: ${{ inputs.tag }}
-          TARGET_SHA: ${{ steps.draft.outputs.target_sha }}
+          TARGET_SHA: ${{ steps.align.outputs.target_sha || steps.draft.outputs.target_sha }}
           DRY_RUN: ${{ inputs.dry_run }}
           ASSET_FILENAME: ${{ inputs.asset-filename }}
         run: |
@@ -473,7 +675,7 @@ jobs:
         if: ${{ inputs.dry_run != true && steps.app-token.outputs.token != '' }}
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
-          TARGET_SHA: ${{ steps.draft.outputs.target_sha }}
+          TARGET_SHA: ${{ steps.align.outputs.target_sha || steps.draft.outputs.target_sha }}
         run: |
           set -euo pipefail
           # The cascade run may not have registered yet; this is a best-effort
