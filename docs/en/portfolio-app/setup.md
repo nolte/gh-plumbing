@@ -315,8 +315,8 @@ opt-in set and an App token present, before verifying the reusable now:
    `target_commitish` to the new commit, so the published tag is cut
    from exactly the aligned tree.
 
-The **opt-in plus the App-token presence are the enablement gate**: the
-align step runs only when `auto-align: true` **and** the mint step
+The align step is **gated on both the opt-in and the App-token
+presence**: it runs only when `auto-align: true` **and** the mint step
 produced a token. Without the opt-in, without the App, or on a mint
 failure the step is skipped and the workflow falls back to the
 **operator path**—a human opens a `chore(release): <tag>` PR, squash-
