@@ -5,7 +5,7 @@ audiences:
   - Downstream repositories consuming reusable workflows
   - Downstream repositories extending Probot configurations
   - Downstream repositories consuming Renovate presets
-  - Repository maintainer (nolte)
+  - Repository maintainer (`nolte`)
 verifies_via: F-1:acceptance-1
 time_bound:
   kind: mvp_completion
