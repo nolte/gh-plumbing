@@ -2,10 +2,10 @@
 
 Runs a project's tests and surfaces the coverage report in the GitHub Actions job summary, so consumers see coverage without an external service. Two variants cover the common ecosystems.
 
-- [`reusable-python-coverage.yaml`](#python) — pytest with pytest-cov
-- [`reusable-nodejs-coverage.yaml`](#nodejs) — Vitest or Jest via the Istanbul `json-summary` report
+- [`reusable-python-coverage.yaml`](#python): `pytest` with `pytest-cov`
+- [`reusable-nodejs-coverage.yaml`](#nodejs): `Vitest` or Jest via the Istanbul `json-summary` report
 
-Both render a Markdown table into `$GITHUB_STEP_SUMMARY`—even when the tests fail—and expose an optional `fail-under` gate.
+Both render a Markdown table into `$GITHUB_STEP_SUMMARY` (even when the tests fail) and expose an optional `fail-under` gate.
 
 ---
 
@@ -36,7 +36,7 @@ jobs:
 ```
 
 !!! tip "json-summary report"
-    The `test-command` (default `npm test`) must write an Istanbul `json-summary` report to `coverage-summary-path` (default `coverage/coverage-summary.json`). Both Vitest (`--coverage.reporter=json-summary`) and Jest (`--coverageReporters=json-summary`) emit this format.
+    The `test-command` (default `npm test`) must write an Istanbul `json-summary` report to `coverage-summary-path` (default `coverage/coverage-summary.json`). Both `Vitest` (`--coverage.reporter=json-summary`) and Jest (`--coverageReporters=json-summary`) emit this format.
 
 ---
 
