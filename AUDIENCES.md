@@ -18,7 +18,7 @@ asset classes for downstream GitHub repositories:
    consumed via `github>nolte/gh-plumbing//renovate-configs/common`.
 
 **Inside the boundary:** the contents of `.github/workflows/reusable-*`,
-`.github/commons-*.yml`, `renovate-configs/`, and the MkDocs site
+`.github/commons-*.yml`, `renovate-configs/`, and the `MkDocs` site
 (`docs/`, `mkdocs.yml`) that documents the published surface.
 
 **Outside the boundary:** this repository's own dog-fooding wrapper
@@ -120,7 +120,7 @@ peripheral). Mark a whole category as `none — <reason>` when it doesn't apply.
     downstream organisations) the maintainer should communicate with
     directly?
 - **Open-source readers seeking patterns**, _category_: indirect ·
-  _surface_: published MkDocs site (`has_pages: true`); public README;
+  _surface_: published `MkDocs` site (`has_pages: true`); public README;
   browsing the GitHub repository · _expects_: working examples of
   reusable workflows and Probot `_extends:` for adoption in their own
   projects · _status_: `assumed` · _criticality_: peripheral
@@ -132,7 +132,7 @@ peripheral). Mark a whole category as `none — <reason>` when it doesn't apply.
   tag-pinning behaviour. Concrete contracts (which inputs and secrets
   each reusable workflow guarantees stable; deprecation policy length)
   aren't yet codified in any spec.
-- The MkDocs site doubles as I2's interaction surface but lacks an audit
+- The `MkDocs` site doubles as I2's interaction surface but lacks an audit
   for that audience, so see `docs-freshness-checker` for routine drift
   checks.
 
