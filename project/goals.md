@@ -1,12 +1,13 @@
 # Vision
 
 `gh-plumbing` is the `nolte` portfolio's single source of reusable CI/CD and
-repository-governance configuration: a library of reusable GitHub Actions
-workflows, shared `Probot` app configuration commons, and shared `Renovate`
-presets that downstream `nolte/*` repositories consume **by reference** (workflow
-`uses:`, `Probot` `_extends:`, `Renovate` `extends:`) so they get consistent
-pipelines and governance without duplicating boilerplate. It's a
-configuration-only repository with no application code and no running service.
+repository-governance configuration. It publishes a library of reusable GitHub
+Actions workflows, shared `Probot` app configuration commons, and shared
+`Renovate` presets. Downstream `nolte/*` repositories consume these **by
+reference** (workflow `uses:`, `Probot` `_extends:`, `Renovate` `extends:`).
+They get consistent pipelines and governance without duplicating boilerplate.
+The repository holds configuration only, with no application code and no running
+service.
 
 ## Outcomes
 
