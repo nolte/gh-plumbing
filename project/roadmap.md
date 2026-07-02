@@ -16,7 +16,7 @@ adopted, because `gh-plumbing` is a mature, portfolio-wide configuration source.
 They're recorded here retroactively as `status: done`, mapped to sprint 1, so the
 mission MVP resolves. See `project/mission.md` §Source.
 
-## Phase 1: Shared CI/CD and governance baseline
+## Phase 1: Shared delivery and governance baseline
 
 ### R-1: Reusable GitHub Actions workflow library
 
