@@ -78,6 +78,22 @@ labels:
     color: "#caa7e8"
     description: Update documentation.
 
+  - name: frontend
+    color: "#d876e3"
+    description: Touches frontend / UI code (`src/frontend/**`).
+
+  - name: backend
+    color: "#0e8a16"
+    description: Touches backend / server-side code (`src/backend/**`).
+
+  - name: test
+    color: "#f9d0c4"
+    description: Touches automated tests.
+
+  - name: security
+    color: "#d93f0b"
+    description: Security-relevant change or fix.
+
   - name: cicd
     color: "#fbca04"
     description: ci/cd process functionality.
