@@ -7,7 +7,11 @@
 # file as well (a comment touch is enough) so the App re-runs the merge.
 # Tracked by https://github.com/nolte/gh-plumbing/issues/331.
 #
-# Last propagation: 2026-06-14 — declare this repo's own required status
+# Last propagation: 2026-07-22 — propagate new commons labels (frontend,
+# backend, test, security) added to commons-settings.yml so the Settings
+# App re-runs the `_extends` merge and creates them portfolio-wide.
+#
+# Previous propagation: 2026-06-14 — declare this repo's own required status
 # checks on develop. commons-settings.yml leaves develop's
 # `required_status_checks.contexts` empty by portfolio policy ("Consumers
 # MUST declare their own required-check contexts in their per-repo
