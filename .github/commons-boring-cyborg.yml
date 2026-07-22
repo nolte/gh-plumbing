@@ -14,4 +14,10 @@ labelPRBasedOnFilePath:
     - .github/pull_request_template.md
   spec:
     - spec/**
+  frontend:
+    - src/frontend/**
+    - frontend/**
+  backend:
+    - src/backend/**
+    - backend/**
 # <!--td-commons-settings-labels-end-->

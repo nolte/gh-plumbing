@@ -34,6 +34,14 @@ jobs:
       tag: ${{ inputs.tag }}
       dry_run: ${{ inputs.dry_run }}
       app-id: ${{ vars.PORTFOLIO_APP_ID }}
+      # Opt in to the workflow-driven primary path: when the App token is
+      # available the reusable aligns every version-bearing file, commits
+      # `chore(release): <tag>` on develop, and pushes (spec/project/
+      # release-automation/ §Version-bearing file alignment → Primary path).
+      # nolte-portfolio-app is a declared bypass actor on develop
+      # (.github/commons-settings.yml restrictions.apps); a push rejected by
+      # branch protection degrades gracefully to the operator fallback path.
+      auto-align: true
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}
       app-private-key: ${{ secrets.PORTFOLIO_APP_PRIVATE_KEY }}

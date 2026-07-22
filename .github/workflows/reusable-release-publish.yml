@@ -46,6 +46,29 @@ on:
         required: false
         type: string
         default: ""
+      auto-align:
+        description: |
+          Opt-in to the spec's "Primary path: Workflow-driven"
+          (spec/project/release-automation/ §Version-bearing file
+          alignment). When true AND an App installation token is
+          available (inputs.app-id set + secrets.app-private-key valid),
+          the reusable updates every version-bearing file to the target
+          tag under its transform, commits `chore(release): <tag>` on
+          develop authored by the App, pushes, and realigns the draft's
+          target_commitish to the new SHA. When false (the default) — or
+          when no App token is present — the reusable only verifies
+          alignment and leaves the `chore(release): <tag>` commit to the
+          operator fallback path. The opt-in plus the App-token presence
+          together enforce the spec's "MUST NOT be enabled until the
+          portfolio App/PAT is installed and `.github/settings.yml`
+          explicitly names the credential as a bypass actor": no token or
+          no opt-in ⇒ no write ⇒ fallback. A push rejected by develop's
+          branch protection degrades gracefully — the step warns and the
+          Verify step below produces the operator-fallback message rather
+          than wedging the release.
+        required: false
+        type: boolean
+        default: false
     secrets:
       token:
         required: true
@@ -168,8 +191,21 @@ jobs:
 
           if pathlib.Path(".claude-plugin/plugin.json").exists():
               entries = [{"path": ".claude-plugin/plugin.json", "selector": "version", "transform": "strip-leading-v", "format": "json"}]
-              if pathlib.Path(".claude-plugin/marketplace.json").exists():
+              mp = pathlib.Path(".claude-plugin/marketplace.json")
+              if mp.exists():
                   entries.append({"path": ".claude-plugin/marketplace.json", "selector": "metadata.version", "transform": "strip-leading-v", "format": "json"})
+                  # Per spec/project/release-automation/ §Version-bearing files the
+                  # marketplace.json selector is `$.metadata.version` AND `$.plugins[].version`.
+                  # Guard on existence: only emit the array selector when EVERY plugins[]
+                  # entry actually declares a version key, so single-plugin repos and repos
+                  # whose plugins[] omit version (the claude-shared workaround) don't start
+                  # failing verification on a key the wildcard read would not find.
+                  try:
+                      plugins = (json.loads(mp.read_text()) or {}).get("plugins", [])
+                  except (ValueError, OSError):
+                      plugins = []
+                  if isinstance(plugins, list) and plugins and all(isinstance(p, dict) and "version" in p for p in plugins):
+                      entries.append({"path": ".claude-plugin/marketplace.json", "selector": "plugins[].version", "transform": "strip-leading-v", "format": "json"})
               json.dump({"source": "claude-plugin", "entries": entries}, sys.stdout)
               sys.exit(0)
 
@@ -207,15 +243,200 @@ jobs:
           echo "Detected project type: $source ($count version-bearing file(s))"
           jq . vbf.json
 
+      # Shared version-bearing selector grammar, written once and imported by
+      # BOTH the align (write) and verify (read) steps so the dot-path + array-
+      # wildcard grammar can never drift between them. Grammar: dot-separated
+      # parts; a part may carry a trailing `[]` or `[*]` meaning "every element
+      # of this array" (spec/project/release-automation/ §Version-bearing files
+      # lists `$.plugins[].version`). refs(data, selector) returns (container,
+      # key) leaf refs — read via container[key], written via container[key]=v.
+      - name: Prepare selector helper
+        if: steps.vbf.outputs.count != '0'
+        run: |
+          set -euo pipefail
+          cat > selectorlib.py <<'PY'
+          def refs(data, selector):
+              """Return [(container, key), ...] scalar-leaf refs for a dot-path
+              selector with optional `[]`/`[*]` array wildcards. Raises
+              KeyError/TypeError/IndexError on a path that does not resolve."""
+              parts = [p for p in selector.split(".") if p]
+              nodes = [data]
+              for i, raw in enumerate(parts):
+                  if raw.endswith("[]"):
+                      key, wild = raw[:-2], True
+                  elif raw.endswith("[*]"):
+                      key, wild = raw[:-3], True
+                  else:
+                      key, wild = raw, False
+                  last = i == len(parts) - 1
+                  nxt = []
+                  for n in nodes:
+                      child = n[key]
+                      if wild:
+                          if not isinstance(child, list):
+                              raise TypeError(f"selector part '{raw}' is not an array")
+                          if last:
+                              nxt.extend((child, idx) for idx in range(len(child)))
+                          else:
+                              nxt.extend(child)
+                      else:
+                          nxt.append((n, key) if last else child)
+                  nodes = nxt
+              return nodes
+          PY
+
+      # Primary path (spec/project/release-automation/ §Version-bearing file
+      # alignment → "Primary path: Workflow-driven"). Runs only when the caller
+      # opts in (inputs.auto-align) AND a bypass App token is available
+      # (steps.app-token.outputs.token != ''): the workflow then aligns every
+      # version-bearing file to the target tag, commits `chore(release): <tag>`
+      # on develop authored by the App, and pushes — automating the last manual
+      # link end-to-end. The opt-in plus the App-token presence together enforce
+      # the spec's enablement gate ("MUST NOT be enabled until the App is
+      # installed and named as a bypass actor"): no opt-in or no token ⇒ this
+      # step is skipped and the Verify step's operator-fallback message governs
+      # (the fallback path stays byte-for-byte unchanged).
+      - name: Align version-bearing files (primary path)
+        id: align
+        if: ${{ inputs.auto-align && steps.app-token.outputs.token != '' && steps.vbf.outputs.count != '0' }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
+          TAG: ${{ inputs.tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+          # Edit every version-bearing file in the checked-out develop tree to the
+          # target tag, honouring each file's existing v-prefix convention and
+          # every selector match (incl. array wildcards). Format-preserving:
+          # JSON via an indent-detecting round-trip, TOML via a targeted regex on
+          # the version line — minimal diffs, no whole-file reformat, no tomlkit.
+          python3 - <<'PY'
+          import json, os, re, sys
+          from selectorlib import refs
+
+          tag = os.environ["TAG"]
+
+          with open("vbf.json") as f:
+              vbf = json.load(f)
+
+          def target_value(existing, tag):
+              # strip-leading-v: keep the file's existing convention — write the
+              # v-prefixed tag only when the current value already uses a v
+              # (spec SHOULD: the workflow MUST NOT silently rewrite the convention).
+              return tag if str(existing).startswith("v") else tag.lstrip("v")
+
+          for e in vbf["entries"]:
+              path, selector, fmt = e["path"], e["selector"], e["format"]
+              raw = open(path).read()
+              if fmt == "json":
+                  data = json.loads(raw)
+                  targets = refs(data, selector)
+                  if not targets:
+                      continue
+                  for c, k in targets:
+                      c[k] = target_value(c[k], tag)
+                  # Preserve the file's exact indent unit (spaces or tabs):
+                  # json.dumps accepts a string indent and uses it verbatim, so a
+                  # tab-indented manifest stays tab-indented instead of silently
+                  # collapsing to 2 spaces. Default to 2 spaces when undetectable.
+                  m = re.search(r"\n([ \t]+)\S", raw)
+                  indent = m.group(1) if m else 2
+                  open(path, "w").write(json.dumps(data, indent=indent, ensure_ascii=False) + "\n")
+              elif fmt == "toml":
+                  # tomllib is read-only; rewrite the single `<key> = "<value>"`
+                  # line in place with a targeted regex (no tomlkit dependency).
+                  import tomllib
+                  data = tomllib.loads(raw)
+                  for c, k in refs(data, selector):
+                      existing = str(c[k])
+                      newval = target_value(existing, tag)
+                      pat = re.compile(r'^(\s*' + re.escape(k) + r'\s*=\s*)"' + re.escape(existing) + r'"', re.M)
+                      raw, n = pat.subn(lambda mo: mo.group(1) + '"' + newval + '"', raw, count=1)
+                      if n == 0:
+                          print(f"::error::Could not rewrite {k} in {path} (format-preserving regex matched nothing).", file=sys.stderr)
+                          sys.exit(1)
+                  open(path, "w").write(raw)
+              else:
+                  print(f"::error::Unsupported format '{fmt}' for {path}", file=sys.stderr)
+                  sys.exit(1)
+          PY
+
+          mapfile -t paths < <(jq -r '.entries[].path' vbf.json | sort -u)
+
+          if git diff --quiet -- "${paths[@]}"; then
+            # Already aligned at develop HEAD (a prior primary run or a merged
+            # fallback `chore(release)` PR). No commit needed; the draft target is
+            # realigned to develop HEAD below so Verify reads the aligned tree.
+            committed=false
+            new_sha=$(git rev-parse HEAD)
+            echo "Version-bearing files already aligned at $new_sha; no commit needed."
+          else
+            committed=true
+            slug="${APP_SLUG:-github-actions}"
+            uid=$(gh api "/users/${slug}[bot]" --jq .id 2>/dev/null || echo "")
+            git config user.name "${slug}[bot]"
+            if [[ -n "$uid" ]]; then
+              git config user.email "${uid}+${slug}[bot]@users.noreply.github.com"
+            else
+              git config user.email "${slug}[bot]@users.noreply.github.com"
+            fi
+            git add -- "${paths[@]}"
+            git commit -m "chore(release): $TAG"
+            new_sha=$(git rev-parse HEAD)
+            echo "Committed chore(release): $TAG at $new_sha."
+          fi
+
+          if [[ "$DRY_RUN" == "true" ]]; then
+            # Dry run: expose the locally-built commit so the Verify step can read
+            # the aligned tree via `git show`, but never push or realign the draft.
+            echo "target_sha=$new_sha" >> "$GITHUB_OUTPUT"
+            echo "::notice::Dry run — aligned locally at ${new_sha:0:8}; not pushing to develop or realigning the draft."
+            { echo; echo "### Alignment (dry run)"; echo; echo "- Would commit/push \`chore(release): $TAG\` and realign the draft to \`${new_sha:0:8}\`."; } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # Push the alignment commit (if any). The push authority is the App being
+          # a declared bypass actor on develop (branch-protection config, not a
+          # workflow `permissions:` key); per spec the push respects
+          # `enforce_admins: true` — the bypass is declared, not stolen.
+          #
+          # A rejected push (e.g. develop's branch protection refuses a direct push
+          # because the App is not a permitted bypass actor) MUST NOT wedge the
+          # release. Degrade to the operator fallback path: warn, emit no
+          # target_sha, and skip the draft realign so the Verify step below falls
+          # back to steps.draft.outputs.target_sha — the unaligned draft tree — and
+          # surfaces the operator-fallback message
+          # (spec/project/release-automation/ §Fallback path).
+          if [[ "$committed" == "true" ]]; then
+            if ! git push origin HEAD:develop; then
+              msg="Primary-path push of 'chore(release): $TAG' to develop was rejected (the App may not be a permitted bypass actor for direct pushes to develop). Falling back to the operator path: open a 'chore(release): $TAG' PR aligning every version-bearing file (spec/project/release-automation/ §Fallback path), then re-run release-publish."
+              echo "::warning::$msg"
+              { echo; echo "### ⚠️ Alignment push rejected (operator fallback)"; echo; echo "$msg"; } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "::notice::Pushed alignment commit to develop."
+          fi
+
+          # Push succeeded, or no commit was needed because the tree was already
+          # aligned at develop HEAD — in both cases new_sha is reachable on develop.
+          # Expose it and realign the draft target to that exact SHA so the
+          # published tag is cut from this commit.
+          echo "target_sha=$new_sha" >> "$GITHUB_OUTPUT"
+          gh release edit "$TAG" --target "$new_sha"
+          echo "::notice::Realigned draft '$TAG' target to ${new_sha:0:8}."
+          { echo; echo "### Alignment"; echo; echo "- Aligned version-bearing files and set draft '$TAG' target to \`${new_sha:0:8}\`."; } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Verify version-bearing-file alignment
         if: steps.vbf.outputs.count != '0'
         env:
           TAG: ${{ inputs.tag }}
-          TARGET_SHA: ${{ steps.draft.outputs.target_sha }}
+          TARGET_SHA: ${{ steps.align.outputs.target_sha || steps.draft.outputs.target_sha }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
           import json, os, subprocess, sys
+          from selectorlib import refs
 
           tag = os.environ["TAG"]
           sha = os.environ["TARGET_SHA"]
@@ -223,21 +444,17 @@ jobs:
           with open("vbf.json") as f:
               vbf = json.load(f)
 
-          def value_at_sha(path, sha, fmt, selector):
+          def data_at_sha(path, sha, fmt):
               raw = subprocess.run(
                   ["git", "show", f"{sha}:{path}"],
                   capture_output=True, text=True, check=True,
               ).stdout
               if fmt == "json":
-                  data = json.loads(raw)
+                  return json.loads(raw)
               elif fmt == "toml":
                   import tomllib
-                  data = tomllib.loads(raw)
-              else:
-                  raise SystemExit(f"::error::Unsupported format '{fmt}' for {path}")
-              for part in [p for p in selector.split(".") if p]:
-                  data = data[part]
-              return str(data)
+                  return tomllib.loads(raw)
+              raise SystemExit(f"::error::Unsupported format '{fmt}' for {path}")
 
           def aligned(actual, tag):
               # transform=strip-leading-v: accept either form, matching the file's existing convention
@@ -246,15 +463,18 @@ jobs:
           errors = []
           for e in vbf["entries"]:
               try:
-                  actual = value_at_sha(e["path"], sha, e["format"], e["selector"])
+                  data = data_at_sha(e["path"], sha, e["format"])
+                  # Every selector match (incl. array wildcards) MUST equal the tag.
+                  values = [str(c[k]) for c, k in refs(data, e["selector"])]
               except subprocess.CalledProcessError:
                   errors.append(f"  - {e['path']}: file missing at {sha[:8]}")
                   continue
-              except (KeyError, TypeError) as exc:
+              except (KeyError, TypeError, IndexError) as exc:
                   errors.append(f"  - {e['path']}: selector '{e['selector']}' not found ({exc})")
                   continue
-              if not aligned(actual, tag):
-                  errors.append(f"  - {e['path']}: {e['selector']} is '{actual}', expected '{tag}' (or '{tag.lstrip('v')}')")
+              for actual in values:
+                  if not aligned(actual, tag):
+                      errors.append(f"  - {e['path']}: {e['selector']} is '{actual}', expected '{tag}' (or '{tag.lstrip('v')}')")
 
           if errors:
               print("::error::Version-bearing files not aligned to target tag:")
@@ -266,12 +486,12 @@ jobs:
           print(f"All {len(vbf['entries'])} version-bearing file(s) aligned to {tag}.")
 
           paths = [e["path"] for e in vbf["entries"]]
-          log_args = ["git", "log", "-1", "--pretty=%s", "origin/develop", "--"] + paths
+          log_args = ["git", "log", "-1", "--pretty=%s", sha, "--"] + paths
           subject = subprocess.run(log_args, capture_output=True, text=True, check=True).stdout.strip()
 
           expected_prefix = f"chore(release): {tag}"
           if not subject.startswith(expected_prefix):
-              print(f"::error::No 'chore(release): {tag}' alignment commit on origin/develop touching the version-bearing files.")
+              print(f"::error::No 'chore(release): {tag}' alignment commit at {sha[:8]} touching the version-bearing files.")
               print(f"::error::Most recent commit subject on these paths: '{subject}'")
               print(f"::error::Per spec/project/release-automation/ §Pre-publish verification, the alignment commit subject must start with '{expected_prefix}'.")
               sys.exit(1)
@@ -283,7 +503,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
           TAG: ${{ inputs.tag }}
-          TARGET_SHA: ${{ steps.draft.outputs.target_sha }}
+          TARGET_SHA: ${{ steps.align.outputs.target_sha || steps.draft.outputs.target_sha }}
           DRY_RUN: ${{ inputs.dry_run }}
           VBF_SOURCE: ${{ steps.vbf.outputs.source }}
           VBF_COUNT: ${{ steps.vbf.outputs.count }}
@@ -329,7 +549,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
           TAG: ${{ inputs.tag }}
-          TARGET_SHA: ${{ steps.draft.outputs.target_sha }}
+          TARGET_SHA: ${{ steps.align.outputs.target_sha || steps.draft.outputs.target_sha }}
           DRY_RUN: ${{ inputs.dry_run }}
           ASSET_FILENAME: ${{ inputs.asset-filename }}
         run: |
@@ -427,28 +647,61 @@ jobs:
             echo "- \`gh release edit --draft=false\` was **not** called."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Pitfall 1: re-read isDraft after the flip and fail loudly if the release
+      # is still a draft. `gh release edit --draft=false` (and any automerge-style
+      # wrapper around it) can exit 0 without the draft actually flipping — the
+      # silent-success footgun #375 names. Never trust the publish step's exit
+      # code alone; verify the observable state.
       - name: Post-publish sanity
         if: ${{ inputs.dry_run != true }}
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
           TAG: ${{ inputs.tag }}
-          TARGET_SHA: ${{ steps.draft.outputs.target_sha }}
         run: |
           set -euo pipefail
           is_draft=$(gh release view "$TAG" --json isDraft --jq .isDraft)
           if [[ "$is_draft" != "false" ]]; then
-            echo "::error::Post-publish check failed: gh release view '$TAG' returned isDraft=$is_draft (expected false)."
+            echo "::error::Post-publish check failed: '$TAG' still reports isDraft=$is_draft after the flip (expected false). The publish step exited 0 but the draft did not flip — re-run release-publish or flip the draft manually (gh release edit '$TAG' --draft=false)."
             exit 1
           fi
           echo "Post-publish: isDraft=false confirmed."
 
-          # release-cd-refresh-master cascade check (SHOULD per spec; warning, not error).
-          # GITHUB_TOKEN-authored release:published events do not cascade to other workflows
-          # per spec/project/workflow-health/ §Known platform constraints.
+      # Pitfall 2: deterministic cascade-gap warning bound to the fallback
+      # condition itself. steps.app-token.outputs.token is empty in exactly the
+      # two cases the issue names — inputs.app-id unset (mint step skipped) or
+      # the App-token mint failed (continue-on-error) — so this fires precisely
+      # when the release:published event was authored by GITHUB_TOKEN and will
+      # NOT cascade. Surfaced in the job summary, not just the log.
+      - name: Warn on GITHUB_TOKEN cascade gap
+        if: ${{ inputs.dry_run != true && steps.app-token.outputs.token == '' }}
+        run: |
+          set -euo pipefail
+          msg="Published under GITHUB_TOKEN (no portfolio App token: inputs.app-id unset or the App-token mint failed). The release:published event will NOT cascade to release-cd-refresh-master.yml / release-cd-deliver-docs.yml — main and the docs will not refresh automatically. Dispatch release-cd-refresh-master.yml manually to fast-forward main (spec/project/workflow-health/ §Known platform constraints, #330)."
+          echo "::warning::$msg"
+          {
+            echo
+            echo "### ⚠️ Cascade gap (GITHUB_TOKEN fallback)"
+            echo
+            echo "$msg"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Belt-and-suspenders runtime probe — only when an App token WAS used and
+      # the cascade is therefore expected to fire. Gating on token != '' keeps
+      # this neutral/informational note from contradicting the deterministic
+      # cascade-gap warning above (the two conditions are mutually exclusive).
+      - name: Probe cascade run (App token path)
+        if: ${{ inputs.dry_run != true && steps.app-token.outputs.token != '' }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
+          TARGET_SHA: ${{ steps.align.outputs.target_sha || steps.draft.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+          # The cascade run may not have registered yet; this is a best-effort
+          # probe, never an error (spec/project/workflow-health/ §Known platform constraints).
           sleep 30
           refresh_run=$(gh run list --workflow=release-cd-refresh-master.yml --limit 1 --json status,createdAt,headSha --jq '.[0]')
           if [[ -z "$refresh_run" || "$refresh_run" == "null" ]]; then
-            echo "::warning::release-cd-refresh-master.yml has no recent run on $TARGET_SHA. Cascade gap is a known platform constraint with GITHUB_TOKEN — manual fast-forward of main may be required (spec/project/workflow-health/ §Known platform constraints)."
+            echo "::notice::No recent release-cd-refresh-master.yml run observed yet for $TARGET_SHA. The App-authored release:published event should cascade shortly; if main does not refresh, dispatch release-cd-refresh-master.yml manually."
           else
             echo "release-cd-refresh-master.yml run detected: $refresh_run"
           fi

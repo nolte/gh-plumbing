@@ -243,7 +243,9 @@ Wenn ein Cascade immer noch nicht triggert, prüfen:
 3. Der reusable-Run zeigt den `Mint App installation token`-Step als
    `success` (nicht `skipped`). Skipped Step bedeutet, der App-ID-Input
    war leer und der Fallback-Pfad griff (`GITHUB_TOKEN` =
-   Cascade-Lücke).
+   Cascade-Lücke). Greift der Fallback-Pfad, trägt die Job-Summary des
+   Runs eine explizite **"Cascade gap (GITHUB_TOKEN fallback)"**-Warnung,
+   die auf den manuellen Fast-Forward-Notausgang hinweist.
 
 ---
 
@@ -297,6 +299,49 @@ Derselbe Block gilt für `master`.
     App kann nichts bypassen; der einzige Effekt einer zu frühen
     Phase 2 wäre, direkte Pushes von allen anderen Actors zu
     blockieren.
+
+---
+
+## Versionstragende Datei-Ausrichtung (Primärpfad)
+
+Sobald die App installiert **und** als `develop`-Bypass-Actor benannt
+ist (der Phase-2-Block oben), kann ein Aufrufer den
+**workflow-getriebenen Primärpfad** für die Ausrichtung versionstragender
+Dateien (`spec/project/release-automation/` §Version-bearing file
+alignment) aktivieren, indem er `auto-align: true` an
+`reusable-release-publish.yml` übergibt. Mit gesetztem Opt-in und
+vorhandenem App-Token führt das Reusable vor der Verifikation nun aus:
+
+1. aktualisiert jede versionstragende Datei auf den Ziel-Tag gemäß ihrer
+   Transformation—unter Wahrung der bestehenden `v`-Präfix-Konvention
+   jeder Datei und mit Anpassung **jedes** Treffers eines Array-Selektors
+   wie `$.plugins[].version` in einer Multi-Plugin-`marketplace.json`;
+2. committet die Gesamtänderung als `chore(release): <tag>` auf
+   `develop`, autorisiert durch die App;
+3. pusht sie über den deklarierten Bypass und richtet das
+   `target_commitish` des Drafts auf den neuen Commit aus, damit der
+   veröffentlichte Tag exakt vom ausgerichteten Baum geschnitten wird.
+
+Das **Opt-in zusammen mit dem App-Token ist der Freischalt-Gate**: Der
+Align-Schritt läuft nur, wenn `auto-align: true` gesetzt ist **und** der
+Mint-Schritt ein Token erzeugt hat. Ohne das Opt-in, ohne die App oder
+bei einem Mint-Fehler wird der Schritt übersprungen und der Workflow
+fällt auf den **Operator-Pfad** zurück—ein Mensch
+öffnet einen `chore(release): <tag>`-PR, squash-merged ihn über die UI
+und dispatcht dann `release-publish`. Beide Pfade landen denselben
+`chore(release): <tag>`-Commit; nur die erzeugende Credential
+unterscheidet sich. Ein `dry_run`-Dispatch richtet lokal auf dem Runner
+aus und verifiziert, pusht aber nie und richtet den Draft nicht neu aus.
+
+!!! warning "Der erste echte Lauf validiert den geschützten Push"
+    Ein direkter Push auf `develop` unter `enforce_admins: true` mit
+    erforderlichen Status-Checks wird nur akzeptiert, wenn die App ein
+    echter Bypass-Actor ist. `dry_run` kann das nicht ausüben. Wird der
+    erste echte Push abgelehnt, ist die Abhilfe die Bypass-Actor-
+    Einstellung der Branch-Protection (der Phase-2-Block, über die
+    GitHub-UI angewendet, wenn die Probot-App ein Schutzfeld nicht
+    synchronisiert), keine Workflow-Änderung; der Lauf degradiert auf den
+    Operator-Fallback, statt das Release zu blockieren.
 
 ---
 
