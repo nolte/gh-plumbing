@@ -20,7 +20,7 @@ on:
 
 jobs:
   publish_docs:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-mkdocs.yaml@fix/388-pin-third-party-actions
+    uses: nolte/gh-plumbing/.github/workflows/reusable-mkdocs.yaml@develop
     with:
       app-id: ${{ vars.PORTFOLIO_APP_ID }}
     secrets:

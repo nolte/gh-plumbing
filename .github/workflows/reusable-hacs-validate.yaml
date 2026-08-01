@@ -14,7 +14,7 @@ name: Reusable — HACS Validate
 #
 #   jobs:
 #     validate:
-#       uses: nolte/gh-plumbing/.github/workflows/reusable-hacs-validate.yaml@fix/388-pin-third-party-actions
+#       uses: nolte/gh-plumbing/.github/workflows/reusable-hacs-validate.yaml@develop
 
 on:
   workflow_call:

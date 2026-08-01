@@ -21,7 +21,7 @@ on:
 
 jobs:
   update_release_draft:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-release-drafter.yml@fix/388-pin-third-party-actions
+    uses: nolte/gh-plumbing/.github/workflows/reusable-release-drafter.yml@develop
     with:
       app-id: ${{ vars.PORTFOLIO_APP_ID }}
     secrets:

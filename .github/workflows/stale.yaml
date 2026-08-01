@@ -6,6 +6,6 @@ on:
 
 jobs:
   stale:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-stale.yaml@fix/388-pin-third-party-actions
+    uses: nolte/gh-plumbing/.github/workflows/reusable-stale.yaml@develop
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}

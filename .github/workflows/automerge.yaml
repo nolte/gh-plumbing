@@ -41,7 +41,7 @@ on:
 
 jobs:
   automerge:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-automerge.yaml@fix/388-pin-third-party-actions
+    uses: nolte/gh-plumbing/.github/workflows/reusable-automerge.yaml@develop
     with:
       app-id: ${{ vars.PORTFOLIO_APP_ID }}
     secrets:

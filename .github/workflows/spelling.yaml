@@ -8,4 +8,4 @@ permissions:
 
 jobs:
   spelling:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-spelling-vale.yaml@fix/388-pin-third-party-actions
+    uses: nolte/gh-plumbing/.github/workflows/reusable-spelling-vale.yaml@develop
