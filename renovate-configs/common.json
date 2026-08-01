@@ -15,6 +15,15 @@
   "customManagers": [
     {
       "customType": "regex",
+      "description": "Age the hacs/action digest that reusable-hacs-validate.yaml holds in a workflow_call input default. Renovate's github-actions manager only parses `uses:` lines, so without this manager that one pin is the only digest in the repository that would never be proposed for a bump.",
+      "managerFilePatterns": ["/(^|/)reusable-hacs-validate\\.yaml$/"],
+      "matchStrings": ["default:\\s+\"(?<currentDigest>[0-9a-f]{40})\"\\s+#\\s+(?<currentValue>\\S+)"],
+      "depNameTemplate": "hacs/action",
+      "packageNameTemplate": "https://github.com/hacs/action",
+      "datasourceTemplate": "git-refs"
+    },
+    {
+      "customType": "regex",
       "managerFilePatterns": ["/(^|/)\\.vale\\.ini$/"],
       "matchStrings": ["nolte/vale-style/releases/download/(?<currentValue>v[0-9.]+)/"],
       "depNameTemplate": "nolte/vale-style",

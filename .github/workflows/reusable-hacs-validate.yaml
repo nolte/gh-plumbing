@@ -57,8 +57,11 @@ on:
         type: string
         # main's head rather than a tag: hacs/action's newest tag (22.5.0) dates
         # from 2022 and sits 15 commits behind, so pinning to it would trade
-        # mutability for a four-year rollback.
-        default: "1ebf01c408f29afcb6406bd431bc98fd8cbb15aa" # main @ 2026-06-08
+        # mutability for a four-year rollback. Pinned 2026-08-01 from a main head
+        # dated 2026-06-08. The comment below names the branch and nothing else,
+        # because Renovate rewrites the digest but would leave a date to go stale;
+        # the renovate-configs/common.json customManager reads this exact shape.
+        default: "1ebf01c408f29afcb6406bd431bc98fd8cbb15aa" # main
 
 permissions:
   contents: read
@@ -92,5 +95,7 @@ jobs:
       # mutable, so it is pinned here instead. home-assistant/actions carries no
       # usable release tag: 1.0.0 dates from 2020 and sits 158 commits behind
       # master, so the pin tracks master's head and Renovate bumps it visibly.
+      # Pinned 2026-08-01 from a master head dated 2026-07-30; the comment names
+      # the branch only, so a Renovate digest bump can't leave a date behind.
       - name: Hassfest validation
-        uses: home-assistant/actions/hassfest@ab22029681aa532bfe7de5774a9972d67bfbd2c0 # master @ 2026-07-30 (no usable release tag)
+        uses: home-assistant/actions/hassfest@ab22029681aa532bfe7de5774a9972d67bfbd2c0 # master
