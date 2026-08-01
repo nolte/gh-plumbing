@@ -1,0 +1,22 @@
+name: Gate probe (temporary)
+
+# TEMPORARY. Deliberately invalid: an expression in a step's `uses:`, the exact
+# defect that made reusable-hacs-validate.yaml unparseable for five weeks.
+# Pushed to prove the actionlint gate fails on it, then removed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        required: false
+        type: string
+        default: main
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@${{ inputs.ref }}
