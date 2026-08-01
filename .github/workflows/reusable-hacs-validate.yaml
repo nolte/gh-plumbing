@@ -47,12 +47,18 @@ on:
         default: true
       hacs_action_ref:
         description: |
-          Git ref of hacs/action to pin. Defaults to "main" (the action's own
-          moving default). Override with a tag or commit SHA to harden, matching
-          spec/ha/hacs-release §CI validation (SHOULD pin hacs/action).
+          Git ref of hacs/action. Defaults to a full-length commit digest, so an
+          unconfigured caller gets an immutable reference per
+          spec/project/github-actions-best-practices §A and never executes code
+          from a moving branch. A tag or branch name is still accepted, but
+          leaves the reference unpinned — the escape hatch is for testing a
+          pre-release, not for tracking "main" indefinitely.
         required: false
         type: string
-        default: main
+        # main's head rather than a tag: hacs/action's newest tag (22.5.0) dates
+        # from 2022 and sits 15 commits behind, so pinning to it would trade
+        # mutability for a four-year rollback.
+        default: "1ebf01c408f29afcb6406bd431bc98fd8cbb15aa" # main @ 2026-06-08
 
 permissions:
   contents: read
