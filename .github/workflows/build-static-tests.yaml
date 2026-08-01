@@ -37,6 +37,16 @@ concurrency:
 # Consumers cannot copy this form -- the file lives in another repository. The
 # consumer pattern is `@<tag>` and is documented under docs/*/workflows/.
 jobs:
+  actionlint:
+    permissions:
+      contents: read
+      # Required, not optional. The called workflow's job asks for
+      # `checks: write` so reviewdog can report findings inline. A caller that
+      # does not grant it does not get a downgraded token -- GitHub refuses to
+      # start the workflow at all, with `startup_failure` and no jobs. Consumers
+      # calling reusable-actionlint must grant this too.
+      checks: write
+    uses: ./.github/workflows/reusable-actionlint.yaml
   static:
     uses: ./.github/workflows/reusable-pre-commit.yaml
   docs:

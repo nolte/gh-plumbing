@@ -7,7 +7,13 @@
 # file as well (a comment touch is enough) so the App re-runs the merge.
 # Tracked by https://github.com/nolte/gh-plumbing/issues/331.
 #
-# Last propagation: 2026-07-22 — propagate new commons labels (frontend,
+# Last propagation: 2026-08-01 — add the `actionlint / Workflow Lint` required
+# context (issue #398). Verify the result through the API rather than the
+# settings page: issue #387 found that five of nine consumers silently drift
+# between declared and live protection, so a declaration landing here is not
+# evidence that it applied.
+#
+# Previous propagation: 2026-07-22 — propagate new commons labels (frontend,
 # backend, test, security) added to commons-settings.yml so the Settings
 # App re-runs the `_extends` merge and creates them portfolio-wide.
 #
@@ -36,7 +42,8 @@ branches:
   # required_status_checks.contexts is overridden here. The check
   # contexts are "<caller-job-id> / <reusable-job-display-name>":
   # `static` job → reusable-pre-commit's "Static CI Tests";
-  # `docs` job → reusable-mkdocs-build's "MkDocs Build".
+  # `docs` job → reusable-mkdocs-build's "MkDocs Build";
+  # `actionlint` job → reusable-actionlint's "Workflow Lint".
   - name: develop
     protection:
       required_status_checks:
@@ -44,3 +51,4 @@ branches:
         contexts:
           - static / Static CI Tests
           - docs / MkDocs Build
+          - actionlint / Workflow Lint

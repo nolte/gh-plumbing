@@ -15,9 +15,9 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Age the hacs/action digest that reusable-hacs-validate.yaml holds in a workflow_call input default. Renovate's github-actions manager only parses `uses:` lines, so without this manager that one pin is the only digest in the repository that would never be proposed for a bump.",
+      "description": "Age the hacs/action digest. Its comment names a branch rather than a version, because hacs/action's newest tag dates from 2022, and the github-actions manager resolves a comment through the github-tags datasource where a branch name finds nothing. This manager resolves the same line through git-refs instead.",
       "managerFilePatterns": ["/(^|/)reusable-hacs-validate\\.yaml$/"],
-      "matchStrings": ["default:\\s+\"(?<currentDigest>[0-9a-f]{40})\"\\s+#\\s+(?<currentValue>\\S+)"],
+      "matchStrings": ["uses:\\s+hacs/action@(?<currentDigest>[0-9a-f]{40})\\s+#\\s+(?<currentValue>\\S+)"],
       "depNameTemplate": "hacs/action",
       "packageNameTemplate": "https://github.com/hacs/action",
       "datasourceTemplate": "git-refs"

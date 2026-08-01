@@ -1,0 +1,60 @@
+name: Reusable — Workflow Lint
+
+# Lints every workflow file with actionlint. This exists because an invalid
+# workflow file can sit on the default branch indefinitely without anything
+# noticing: GitHub reports it as a run named after the file path, carrying zero
+# jobs, which blocks nothing and is easy to miss. `reusable-hacs-validate.yaml`
+# sat broken that way from 2026-06-26 to 2026-08-01 (issue #398).
+#
+# actionlint also catches what GitHub's own validation does not: invalid
+# expression contexts, unknown `uses:` shapes, shell problems in `run:` blocks
+# via shellcheck, and type errors in inputs.
+
+on:
+  workflow_call:
+    inputs:
+      fail_level:
+        description: |
+          Severity at which the job fails. Defaults to `error`, which is the
+          point of the workflow -- an advisory lint here would repeat the
+          failure this exists to prevent. Lower it only to stage an adoption.
+        required: false
+        type: string
+        default: error
+      actionlint_flags:
+        description: |
+          Extra flags for actionlint, for example `-ignore <regex>` to suppress
+          a finding that cannot be fixed. Prefer fixing; a suppression here is
+          invisible to the reader of the workflow it applies to.
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    name: Workflow Lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # reviewdog reports through the Checks API so findings appear inline.
+      checks: write
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Run actionlint
+        uses: reviewdog/action-actionlint@50842263c20a7c46bd0065b9e624d3c569db061e # v1.73.0
+        with:
+          # `nofilter`, not the `file` default: the default reports only on
+          # changed files, so a workflow that was already invalid before this
+          # pull request would pass silently -- which is exactly the gap this
+          # workflow closes.
+          filter_mode: nofilter
+          reporter: github-check
+          level: error
+          fail_level: ${{ inputs.fail_level }}
+          fail_on_error: true
+          actionlint_flags: ${{ inputs.actionlint_flags }}
