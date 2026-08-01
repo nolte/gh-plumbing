@@ -53,15 +53,15 @@ jobs:
         # Phase 0 (variable + secret) before this workflow can
         # succeed on a fully-restricted master.
         continue-on-error: true
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
         with:
           app-id: ${{ inputs.app-id }}
           private-key: ${{ secrets.app-private-key }}
 
       - name: Checkout master
-        uses: actions/checkout@v6.0.0
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - name: Merge Tag -> Master
-        uses: devmasx/merge-branch@1.4.0
+        uses: devmasx/merge-branch@854d3ac71ed1e9deb668e0074781b81fdd6e771f # 1.4.0
         with:
           type: now
           from_branch: ${{ inputs.from_branch }}

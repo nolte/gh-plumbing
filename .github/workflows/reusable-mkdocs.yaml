@@ -68,13 +68,13 @@ jobs:
         # gh-pages push keeps working, only the audit-trail consistency
         # with the rest of the release toolchain is lost.
         continue-on-error: true
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
         with:
           app-id: ${{ inputs.app-id }}
           private-key: ${{ secrets.app-private-key }}
 
       - name: Checkout master
-        uses: actions/checkout@v6.0.0
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       # Optional pre-build hook. Runs on the runner host before the
       # Dockerised deploy action; files it writes into the workspace
@@ -82,7 +82,7 @@ jobs:
       # picked up by mkdocs gh-deploy.
       - name: Set up Python for pre-build
         if: ${{ inputs.pre-build-command != '' }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: ${{ inputs.python-version }}
 
@@ -93,7 +93,7 @@ jobs:
           ${{ inputs.pre-build-command }}
 
       - name: Deploy docs
-        uses: mhausenblas/mkdocs-deploy-gh-pages@1.26
+        uses: mhausenblas/mkdocs-deploy-gh-pages@d77dd03172e96abbcdb081d8c948224762033653 # 1.26
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
           REQUIREMENTS: ${{ inputs.requirements }}
