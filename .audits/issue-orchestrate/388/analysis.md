@@ -168,4 +168,18 @@ P1 first (smallest diff, removes the actual exposure), then P2 (widest blast rad
 
 ## Dispatch log
 
-<!-- Appended during operation 5; one line per package once its specialist reports. -->
+Operator granted a standing dispatch authorisation for P1–P5 on 2026-08-01, with a mandatory halt before P6. Recorded per §Resumption and operator gating; the per-package gate was exercised as one recorded decision covering the five packages, not waived.
+
+- **2026-08-01 P1** dispatched to `nolte-shared:cicd-pipeline-design` — done, commit `66b8592`. **Hypothesis partially refuted.** The brief assumed all three branch references should move to their latest release tag. Two of the three did, but `home-assistant/actions/hassfest` could not: its only tag, `1.0.0`, dates from 2020-04-16 and sits **158 commits behind** a `master` head from 2026-07-30. Pinning to it would have traded mutability for a six-year rollback, so the pin tracks `master`'s head digest with a `# master @ <date>` comment instead. Contradicting evidence also *reduced* one recorded risk: `errata-ai/vale-action`'s `reviewdog` branch head is currently **exactly `v2.1.2`** (`85f9f7f2…`), so P1 AC-4's input-compatibility risk does not arise — that pin is behaviour-neutral.
+- **2026-08-01 P2** dispatched to `nolte-shared:cicd-pipeline-design` — done, commit `bdb0d70`. The four workflows behind `static / Static CI Tests` pinned; `actions/checkout` normalised from mixed `@v6` / `@v6.0.0`.
+- **2026-08-01 P3** dispatched to `nolte-shared:cicd-pipeline-design` — done, commit `0177d6e`. Balance of the inventory pinned, including the two references the issue omits. `actions/checkout` normalised repository-wide from `@v4` / `@v6` / `@v6.0.0` to one digest (v6.1.0).
+- **2026-08-01 P4** dispatched to `nolte-shared:cicd-pipeline-design` — done, commit `b1c770f`. **Same refutation shape as P1**: the `22.5.0` tag dates from 2022 and sits 15 commits behind `main`, so the input default is `main`'s head digest, not the tag. Input retained as an escape hatch; description now states that a non-digest value is accepted but unpinned.
+- **2026-08-01 P5** handled by the generalist — done, commit `8467913`. No matching specialised agent; operator confirmed generalist remediation rather than authoring a specialist, since the three-recurrence rule is not met. Scoped to the `github-actions` manager via `packageRules` rather than set globally.
+
+### Digest verification (§A `MUST`, recorded in the pinning change)
+
+All **28 source repositories** independently re-resolved: every pinned digest is reachable inside the action's own repository, and every one of those repositories reports `fork: false`. No digest resolves to a fork. Verification command and full output are reproducible with `gh api repos/<owner>/<repo>/commits/<digest>` per reference.
+
+### Spec deviation recorded
+
+`spec/project/github-actions-best-practices/` §A requires a comment "naming the human-readable version" a digest corresponds to. Two pins carry no such version because none exists upstream: `home-assistant/actions/hassfest` and the `hacs/action` input default both pin a branch head whose commit has no tag. Their comments name the branch and the commit date (`# master @ 2026-07-30`, `# main @ 2026-06-08`) as the closest available human-readable identity. Consequence to watch: Renovate reads the version comment to drive a bump, so digest updates for these two are best-effort rather than guaranteed — an argument for revisiting them if either upstream resumes tagging.
