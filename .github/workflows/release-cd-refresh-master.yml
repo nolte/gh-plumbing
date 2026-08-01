@@ -20,7 +20,7 @@ permissions:
 
 
 # This wrapper pushes a fast-forward merge to master through
-# `devmasx/merge-branch`. After Phase 2 of issue #330 lands its
+# the force-with-lease push. After Phase 2 of issue #330 lands its
 # push-restriction (`restrictions.apps: [nolte-portfolio-app]`) on
 # master, `GITHUB_TOKEN` no longer has the right to push to master —
 # the App token is now mandatory. Forwarding `vars.PORTFOLIO_APP_ID`
@@ -39,7 +39,10 @@ jobs:
       contents: write # the called workflow pushes to the presentation branch
     uses: nolte/gh-plumbing/.github/workflows/reusable-release-cd-refresh-master.yml@develop
     with:
-      from_branch: ${{ inputs.tag || github.event.ref }}
+      # github.event.release.tag_name, not github.event.ref: the release
+      # payload carries no top-level `ref`, so the old expression resolved
+      # to the empty string on every release-triggered run.
+      from_branch: ${{ inputs.tag || github.event.release.tag_name }}
       app-id: ${{ vars.PORTFOLIO_APP_ID }}
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}
