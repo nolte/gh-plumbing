@@ -17,10 +17,11 @@ uses: nolte/gh-plumbing/.github/workflows/reusable-<name>.yaml@<tag>
     auf, worauf der Branch zur Laufzeit zeigt — eine Änderung hier erreicht
     deine CI sofort und ungeprüft.
 
-    Die Wrapper-Workflows dieses Repositories nutzen weiterhin `@develop`. Das
-    ist bewusstes Dogfooding des unveröffentlichten Stands, wird
-    [separat verfolgt](https://github.com/nolte/gh-plumbing/issues/392) und ist
-    kein Muster zum Nachbauen.
+    Die Wrapper-Workflows dieses Repositories nutzen eine lokale Pfadangabe,
+    etwa `uses: ./.github/workflows/reusable-trivy.yaml`. Diese Form löst gegen
+    den aktuellen Commit auf, ein Pull Request hier testet also die Workflows,
+    die er ändert. Für Consumer ist sie nicht nutzbar, weil die Datei in einem
+    anderen Repository liegt.
 
 ---
 

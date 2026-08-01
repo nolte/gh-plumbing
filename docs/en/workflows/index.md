@@ -17,10 +17,10 @@ uses: nolte/gh-plumbing/.github/workflows/reusable-<name>.yaml@<tag>
     reference resolves to whatever that branch points at when your workflow
     runs, so a change here reaches your CI immediately and without review.
 
-    This repository's own wrapper workflows still use `@develop`. That is
-    deliberate dog-fooding of the unreleased state, is
-    [tracked separately](https://github.com/nolte/gh-plumbing/issues/392), and
-    is not a pattern to copy.
+    This repository's own wrapper workflows use a local path, such as
+    `uses: ./.github/workflows/reusable-trivy.yaml`. That form resolves against
+    the current commit, so a pull request here tests the workflows it changes.
+    A consumer can't use it, because the file lives in another repository.
 
 ---
 
