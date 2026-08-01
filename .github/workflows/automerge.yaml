@@ -18,6 +18,11 @@ on:
     types:
       - completed
   status: {}
+# Explicit permissions per spec/project/github-actions-best-practices §B:
+# workflow level is the minimum, write scopes are granted per job.
+permissions:
+  contents: read
+
 
 # When `vars.PORTFOLIO_APP_ID` is set in this repo (or organisation-wide),
 # the reusable mints a short-lived GitHub-App installation token from
@@ -41,6 +46,9 @@ on:
 
 jobs:
   automerge:
+    permissions:
+      contents: write # squash-merges the PR
+      pull-requests: write # reads and updates PR state
     uses: nolte/gh-plumbing/.github/workflows/reusable-automerge.yaml@develop
     with:
       app-id: ${{ vars.PORTFOLIO_APP_ID }}

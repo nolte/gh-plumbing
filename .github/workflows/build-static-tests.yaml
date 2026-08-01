@@ -3,6 +3,11 @@ name: Static CI Tests
 on:
   push:
   workflow_dispatch:
+# Explicit permissions per spec/project/github-actions-best-practices §B:
+# workflow level is the minimum, write scopes are granted per job.
+permissions:
+  contents: read
+
 
 # Pre-merge feedback, so cancel-in-progress is true: a superseded run on the
 # same ref has nothing left to tell us and only delays the run that matters.
@@ -23,6 +28,10 @@ jobs:
   docs:
     uses: nolte/gh-plumbing/.github/workflows/reusable-mkdocs-build.yaml@develop
   security:
+    permissions:
+      contents: read
+      security-events: write # reusable-trivy uploads SARIF to the Security tab
+      actions: read # required by upload-sarif on private repositories
     uses: nolte/gh-plumbing/.github/workflows/reusable-trivy.yaml@develop
   chain-bench:
     uses: nolte/gh-plumbing/.github/workflows/reusable-chain-bench.yaml@develop

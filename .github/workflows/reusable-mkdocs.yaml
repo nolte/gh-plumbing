@@ -50,6 +50,11 @@ on:
           PEM-encoded private key for the App identified by `inputs.app-id`.
           Required when `app-id` is set; ignored otherwise.
         required: false
+# Explicit permissions per spec/project/github-actions-best-practices §B:
+# workflow level is the minimum, write scopes are granted per job.
+permissions:
+  contents: read
+
 
 # The deploy pushes to gh-pages, so concurrent runs race on one branch
 # regardless of which ref triggered them -- hence a static group rather than a
@@ -64,6 +69,8 @@ concurrency:
 
 jobs:
   publish_docs:
+    permissions:
+      contents: write # the mkdocs deploy pushes the built site to gh-pages
     name: "Publish the HTML Documentation"
     runs-on: ubuntu-latest
     steps:

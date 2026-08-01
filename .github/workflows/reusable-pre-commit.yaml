@@ -2,6 +2,11 @@ name: Reusable — Pre-Commit
 
 on:
   workflow_call:
+# Explicit permissions per spec/project/github-actions-best-practices §B:
+# workflow level is the minimum, write scopes are granted per job.
+permissions:
+  contents: read # checkout + pre-commit; the hooks never push
+
 
 jobs:
   static:

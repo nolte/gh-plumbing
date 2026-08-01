@@ -26,6 +26,11 @@ on:
           PEM-encoded private key for the App identified by `inputs.app-id`.
           Required when `app-id` is set; ignored otherwise.
         required: false
+# Explicit permissions per spec/project/github-actions-best-practices §B:
+# workflow level is the minimum, write scopes are granted per job.
+permissions:
+  contents: read
+
 
 # release-drafter rewrites the whole draft body, so this reusable brackets the
 # call with a capture/restore of the project-context block (see the `jobs:`
@@ -43,6 +48,9 @@ concurrency:
 
 jobs:
   update_release_draft:
+    permissions:
+      contents: write # a release draft is a contents-scope object
+      pull-requests: read # release-drafter categorises merged PRs into the changelog
     name: Update Release Draft
     runs-on: ubuntu-latest
     steps:

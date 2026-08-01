@@ -21,9 +21,16 @@ on:
     secrets:
       token:
         required: true
+# Explicit permissions per spec/project/github-actions-best-practices §B:
+# workflow level is the minimum, write scopes are granted per job.
+permissions:
+  contents: read
+
 
 jobs:
   publish_docs:
+    permissions:
+      contents: write # github-pages-deploy-action pushes the built site to gh-pages
     name: "Publish the HTML Documentation"
     runs-on: ubuntu-latest
     steps:

@@ -5,6 +5,11 @@ on:
   push:
     branches:
       - develop
+# Explicit permissions per spec/project/github-actions-best-practices §B:
+# workflow level is the minimum, write scopes are granted per job.
+permissions:
+  contents: read
+
 
 # When `vars.PORTFOLIO_APP_ID` is set, the reusable mints a short-lived
 # GitHub-App installation token from `secrets.PORTFOLIO_APP_PRIVATE_KEY`
@@ -21,6 +26,9 @@ on:
 
 jobs:
   update_release_draft:
+    permissions:
+      contents: write # the called workflow edits the release draft
+      pull-requests: read # release-drafter categorises merged PRs
     uses: nolte/gh-plumbing/.github/workflows/reusable-release-drafter.yml@develop
     with:
       app-id: ${{ vars.PORTFOLIO_APP_ID }}
