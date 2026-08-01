@@ -2,8 +2,8 @@
 
 Two reusable workflows cover container work. `reusable-docker-lint-build.yaml` lints the
 `Dockerfile` and dry-builds it for pull-request feedback. `reusable-docker-publish.yaml`
-builds a multi-architecture image, pushes it to a registry, and attests its
-build provenance.
+builds an image, pushes it to a registry, and attests its build provenance.
+It builds `linux/amd64` only unless the caller passes `platforms`.
 
 ## Usage
 
@@ -67,6 +67,21 @@ Verify a published image with:
 gh attestation verify oci://ghcr.io/<owner>/<image>:<tag> --owner <owner>
 ```
 
+For a package that isn't public, the `gh` login needs the `read:packages`
+scope or the command can't reach the image.
+
+!!! warning "Verify against the tag or the index digest, not a per-architecture one"
+
+    A multi-architecture build publishes an image index, and every tag points at
+    that index. The attestation names the **index** digest, which is what the
+    workflow also emits as its `digest` output.
+
+    Individual per-architecture manifests inside the index carry their own
+    digests, and `docker buildx imagetools inspect` shows them. No attestation
+    exists for those, so verifying one reports nothing found even though the
+    image is attested. Integrity still covers them through the index; only
+    discoverability does not.
+
 !!! note "An attestation records origin, not safety"
 
     It tells you which workflow, commit and runner produced an image. It makes
@@ -76,11 +91,25 @@ gh attestation verify oci://ghcr.io/<owner>/<image>:<tag> --owner <owner>
 ## Tags
 
 The metadata step publishes an immutable `type=sha` tag and, for releases,
-`type=semver` tags. It also sets `latest` on a non-prerelease publish.
+`type=semver` tags.
 
-`latest` is a convenience alias for humans and **never** a deployment
-reference: it moves independently of any artifact. Deployments consume the
-immutable digest or the `type=semver` tag published alongside it.
+It sets `latest` on two paths, not one: a non-prerelease release publish, and
+a `workflow_dispatch` fired against a non-prerelease `type=semver` tag ref. The second
+path is easy to forget and has already moved `latest` unexpectedly once, in
+`nolte/reachy-mini-mcp` v0.1.1.
+
+Three of the published tags move and two don't:
+
+| Tag | Moves? |
+|---|---|
+| `type=sha` | no |
+| `type=semver` | no |
+| `latest` | yes, on either path above |
+| `type=ref,event=branch` | yes, on every push to that branch |
+| `type=ref,event=pr` | yes, on every push to that pull request |
+
+A moving tag is a convenience alias for humans and **never** a deployment
+reference. Deployments consume the index digest or a `type=semver` tag.
 
 ## Dry builds
 

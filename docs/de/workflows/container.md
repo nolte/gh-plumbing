@@ -2,8 +2,9 @@
 
 Zwei Reusables decken die Container-Arbeit ab. `reusable-docker-lint-build.yaml`
 lintet das Dockerfile und baut es für Pull-Request-Feedback ohne Push.
-`reusable-docker-publish.yaml` baut ein Multi-Architektur-Image, pusht es in eine
-Registry und attestiert dessen Build-Provenance.
+`reusable-docker-publish.yaml` baut ein Image, pusht es in eine Registry und
+attestiert dessen Build-Provenance. Ohne `platforms` vom Aufrufer baut er nur
+`linux/amd64`.
 
 ## Verwendung
 
@@ -67,6 +68,21 @@ Ein veröffentlichtes Image prüfst du mit:
 gh attestation verify oci://ghcr.io/<owner>/<image>:<tag> --owner <owner>
 ```
 
+Bei einem nicht-öffentlichen Package braucht der `gh`-Login den Scope
+`read:packages`, sonst erreicht der Befehl das Image nicht.
+
+!!! warning "Gegen den Tag oder den Index-Digest prüfen, nicht gegen einen Architektur-Digest"
+
+    Ein Multi-Architektur-Build veröffentlicht einen Image-Index, und jeder Tag
+    zeigt auf diesen Index. Die Attestation benennt den **Index**-Digest — den
+    gibt der Workflow auch als `digest`-Output aus.
+
+    Die einzelnen Architektur-Manifeste im Index tragen eigene Digests, die
+    `docker buildx imagetools inspect` anzeigt. Für sie existiert keine
+    Attestation, eine Prüfung dagegen meldet also „nichts gefunden", obwohl das
+    Image attestiert ist. Die Integrität deckt sie über den Index weiterhin ab,
+    die Auffindbarkeit nicht.
+
 !!! note "Eine Attestation belegt Herkunft, nicht Sicherheit"
 
     Sie sagt dir, welcher Workflow, welcher Commit und welcher Runner ein Image
@@ -76,13 +92,27 @@ gh attestation verify oci://ghcr.io/<owner>/<image>:<tag> --owner <owner>
 ## Tags
 
 Der Metadata-Schritt veröffentlicht einen unveränderlichen `type=sha`-Tag und bei
-Releases zusätzlich `type=semver`-Tags. Bei einem Nicht-Prerelease setzt er
-außerdem `latest`.
+Releases zusätzlich `type=semver`-Tags.
 
-`latest` ist ein Komfort-Alias für Menschen und **niemals** eine
-Deployment-Referenz: er bewegt sich unabhängig von jedem Artefakt. Deployments
-konsumieren den unveränderlichen Digest oder den daneben veröffentlichten
-Semver-Tag.
+`latest` setzt er auf zwei Wegen, nicht auf einem: bei einem
+Nicht-Prerelease-Release und bei einem `workflow_dispatch` gegen eine
+Nicht-Prerelease-Semver-Tag-Ref. Der zweite Weg wird leicht übersehen und hat
+`latest` bereits einmal unerwartet verschoben, bei `nolte/reachy-mini-mcp`
+v0.1.1.
+
+Drei der veröffentlichten Tags bewegen sich, zwei nicht:
+
+| Tag | Beweglich? |
+|---|---|
+| `type=sha` | nein |
+| `type=semver` | nein |
+| `latest` | ja, auf beiden Wegen oben |
+| `type=ref,event=branch` | ja, bei jedem Push auf den Branch |
+| `type=ref,event=pr` | ja, bei jedem Push auf den Pull Request |
+
+Ein beweglicher Tag ist ein Komfort-Alias für Menschen und **niemals** eine
+Deployment-Referenz. Deployments konsumieren den Index-Digest oder einen
+`type=semver`-Tag.
 
 ## Trockenbau
 
