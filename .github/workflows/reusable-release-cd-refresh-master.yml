@@ -34,6 +34,20 @@ on:
           Required when `app-id` is set; ignored otherwise.
         required: false
 
+# Every run of this workflow updates the same presentation branch, so two
+# releases published close together race on one target. The group is static
+# rather than ref-derived on purpose: the contended resource is the target
+# branch, not the ref that triggered the run, and two runs from different tags
+# still collide. Matches the `release-publish` group in
+# reusable-release-publish.yml.
+#
+# cancel-in-progress stays false per spec/project/github-actions-best-practices
+# §F: a delivery workflow must never cancel an in-flight run.
+concurrency:
+  group: release-cd-refresh-master
+  cancel-in-progress: false
+
+
 jobs:
   refresh_presentation_branch:
     name: "Publish the the Release to Master"

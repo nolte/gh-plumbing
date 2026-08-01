@@ -4,6 +4,19 @@ on:
   push:
   workflow_dispatch:
 
+# Pre-merge feedback, so cancel-in-progress is true: a superseded run on the
+# same ref has nothing left to tell us and only delays the run that matters.
+# This is the §F SHOULD, not the MUST -- the four jobs below are read-only and
+# would not corrupt anything by overlapping, they would merely waste a runner.
+#
+# This block lives in the wrapper rather than in the four reusables it calls.
+# Putting it in each reusable would give all four the same group and serialise
+# them against each other, turning a parallel fan-out into a queue. Consumers
+# copying this wrapper should carry the block with it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   static:
     uses: nolte/gh-plumbing/.github/workflows/reusable-pre-commit.yaml@develop

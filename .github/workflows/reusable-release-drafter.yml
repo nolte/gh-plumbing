@@ -27,6 +27,20 @@ on:
           Required when `app-id` is set; ignored otherwise.
         required: false
 
+# release-drafter rewrites the whole draft body, so this reusable brackets the
+# call with a capture/restore of the project-context block (see the `jobs:`
+# below). That read-modify-write is not atomic: two pushes to develop in quick
+# succession would interleave and one run would overwrite the other's restored
+# block, silently shipping release notes with a section missing. Serialise per
+# ref so the sequence runs to completion.
+#
+# cancel-in-progress stays false: cancelling mid-sequence is what would leave
+# the draft body in the half-written state this group exists to prevent.
+concurrency:
+  group: release-drafter-${{ github.ref }}
+  cancel-in-progress: false
+
+
 jobs:
   update_release_draft:
     name: Update Release Draft
