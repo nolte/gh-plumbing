@@ -6,12 +6,12 @@ on:
 
 jobs:
   static:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-pre-commit.yaml@develop
+    uses: nolte/gh-plumbing/.github/workflows/reusable-pre-commit.yaml@fix/388-pin-third-party-actions
   docs:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-mkdocs-build.yaml@develop
+    uses: nolte/gh-plumbing/.github/workflows/reusable-mkdocs-build.yaml@fix/388-pin-third-party-actions
   security:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-trivy.yaml@develop
+    uses: nolte/gh-plumbing/.github/workflows/reusable-trivy.yaml@fix/388-pin-third-party-actions
   chain-bench:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-chain-bench.yaml@develop
+    uses: nolte/gh-plumbing/.github/workflows/reusable-chain-bench.yaml@fix/388-pin-third-party-actions
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}

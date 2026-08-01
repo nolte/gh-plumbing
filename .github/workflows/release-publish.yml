@@ -29,7 +29,7 @@ on:
 
 jobs:
   publish:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-release-publish.yml@develop
+    uses: nolte/gh-plumbing/.github/workflows/reusable-release-publish.yml@fix/388-pin-third-party-actions
     with:
       tag: ${{ inputs.tag }}
       dry_run: ${{ inputs.dry_run }}

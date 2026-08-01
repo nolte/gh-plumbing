@@ -30,7 +30,7 @@ on:
 
 jobs:
   refresh_presentation_branch:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-release-cd-refresh-master.yml@develop
+    uses: nolte/gh-plumbing/.github/workflows/reusable-release-cd-refresh-master.yml@fix/388-pin-third-party-actions
     with:
       from_branch: ${{ inputs.tag || github.event.ref }}
       app-id: ${{ vars.PORTFOLIO_APP_ID }}
