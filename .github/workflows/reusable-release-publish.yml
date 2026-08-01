@@ -79,7 +79,7 @@ on:
         required: false
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-publish
@@ -89,6 +89,8 @@ jobs:
   publish:
     name: Publish Release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # flips the release draft to published
     steps:
       # Mint an App installation token only when the caller has set
       # inputs.app-id. The output token (when present) replaces

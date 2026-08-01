@@ -46,7 +46,9 @@ jobs:
 
   build:
     name: Dry-build ${{ inputs.dockerfile }}
-    needs: hadolint
+    # No `needs: hadolint`: the two are independent checks, and gating the
+    # build on the lint meant a hadolint finding hid a broken build until the
+    # next push. One run should surface every class of problem.
     runs-on: ubuntu-latest
     permissions:
       contents: read

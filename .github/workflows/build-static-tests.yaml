@@ -22,6 +22,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Stage omissions, declared rather than left silent: this repository ships
+# configuration only -- no application code and no build artifact -- so the
+# canonical test and package stages have nothing to run and are left out
+# deliberately. The four jobs below are the lint, docs, and securing stages.
 jobs:
   static:
     uses: nolte/gh-plumbing/.github/workflows/reusable-pre-commit.yaml@develop

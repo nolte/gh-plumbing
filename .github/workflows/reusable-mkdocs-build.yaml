@@ -7,7 +7,10 @@ on:
         description: Python version passed to actions/setup-python.
         required: false
         type: string
-        default: "3.x"
+        # Concrete rather than "3.x": a floating interpreter means the same
+        # commit can resolve differently over time, and .tool-versions already
+        # pins 3.14 for local work. Consumers override via this input.
+        default: "3.14"
       requirements:
         description: |
           Path to the pip requirements file that installs the MkDocs

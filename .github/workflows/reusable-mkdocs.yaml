@@ -27,7 +27,10 @@ on:
           pre-build-command is set.
         required: false
         type: string
-        default: "3.x"
+        # Concrete rather than "3.x": a floating interpreter means the same
+        # commit can resolve differently over time, and .tool-versions already
+        # pins 3.14 for local work. Consumers override via this input.
+        default: "3.14"
       app-id:
         description: |
           Numeric GitHub App ID of the portfolio App. When set, the

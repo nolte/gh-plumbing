@@ -25,12 +25,14 @@ on:
         required: false
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   automerge:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # squash-merges the pull request
+      pull-requests: write # reads and updates pull-request state
     steps:
       # Mint an App installation token only when the caller has set
       # inputs.app-id. The output token is consumed by the next step
