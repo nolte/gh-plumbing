@@ -115,6 +115,11 @@ jobs:
             #     semver tag ref (no `-` qualifier in the tag name).
             # Both paths converge on the same intent: production releases
             # always own `:latest`, prereleases and branch-refs never do.
+            #
+            # `latest` is a convenience alias for humans and is NEVER a
+            # deployment reference: it moves independently of any artifact.
+            # Deployments consume the immutable `type=sha` or `type=semver`
+            # tag published alongside it.
             type=raw,value=latest,enable=${{ (github.event_name == 'release' && !github.event.release.prerelease) || (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/') && !contains(github.ref, '-')) }}
             ${{ inputs.tag_extra }}
 

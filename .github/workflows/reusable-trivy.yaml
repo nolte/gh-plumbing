@@ -21,8 +21,12 @@ jobs:
         with:
           scan-type: 'fs'
           ignore-unfixed: true
-          format: 'template'
-          template: '@/contrib/sarif.tpl'
+          # `format: sarif` is native. The previous `format: template` plus
+          # `template: '@/contrib/sarif.tpl'` only still worked through a Trivy
+          # compatibility shim -- sarif.tpl was removed from
+          # aquasecurity/trivy/contrib, and every run logged
+          # "Using --template sarif.tpl is deprecated".
+          format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL'
 

@@ -7,7 +7,9 @@ on:
         description: Node.js version passed to actions/setup-node.
         required: false
         type: string
-        default: "lts/*"
+        # Concrete rather than "lts/*": that alias moves whenever a new LTS is
+        # promoted, so a green pipeline can turn red without any commit.
+        default: "24"
       working-directory:
         description: Directory the install and test commands run in.
         required: false

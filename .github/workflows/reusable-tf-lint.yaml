@@ -2,13 +2,30 @@ name: Reusable — Terraform Lint
 
 on:
   workflow_call:
+    inputs:
+      tflint_version:
+        description: TFLint release to install, and part of the cache key.
+        required: false
+        type: string
+        default: v0.44.1
+      config_path:
+        description: |
+          Path to the TFLint config that determines which plugins get
+          installed. It is part of the cache key, so a consumer whose config
+          lives elsewhere must set this -- otherwise `hashFiles` returns the
+          empty string and the key stops discriminating on config entirely.
+        required: false
+        type: string
+        default: .tflint.hcl
     secrets:
       token:
         required: true
 
 permissions:
-  contents: write
-  pull-requests: write
+  # The job checks out, restores a cache and runs `tflint --init` / `tflint
+  # -f compact`. None of that writes, so the previous `contents: write` plus
+  # `pull-requests: write` were two privileges nothing needed.
+  contents: read
 
 jobs:
   tflint:
@@ -26,12 +43,16 @@ jobs:
       name: Cache plugin dir
       with:
         path: ~/.tflint.d/plugins
-        key: ${{ matrix.os }}-tflint-${{ hashFiles('.tflint.hcl') }}
+        # The tflint version is in the key because the cached plugin binaries
+        # are built against it. Without it, bumping tflint_version silently
+        # reused the previous version's plugins -- and a cache hit writes no
+        # new entry, so the stale set would have persisted indefinitely.
+        key: ${{ matrix.os }}-tflint-${{ inputs.tflint_version }}-${{ hashFiles(inputs.config_path) }}
 
     - uses: terraform-linters/setup-tflint@6e1e0642c0289bd619021bf6b34e3c08ed1e005a # v6.3.0
       name: Setup TFLint
       with:
-        tflint_version: v0.44.1
+        tflint_version: ${{ inputs.tflint_version }}
 
     - name: Show version
       run: tflint --version
