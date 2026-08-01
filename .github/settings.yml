@@ -7,7 +7,12 @@
 # file as well (a comment touch is enough) so the App re-runs the merge.
 # Tracked by https://github.com/nolte/gh-plumbing/issues/331.
 #
-# Last propagation: 2026-08-01 — add the `actionlint / Workflow Lint` required
+# Last propagation: 2026-08-01 (second) — propagate the new `experimental`
+# label from commons-settings.yml so the Settings App creates it portfolio-wide.
+# The `exp/` autolabeler in commons-release-drafter.yml is inert until the label
+# exists in the repository it fires in.
+#
+# Previous propagation: 2026-08-01 — add the `actionlint / Workflow Lint` required
 # context (issue #398). Verify the result through the API rather than the
 # settings page: issue #387 found that five of nine consumers silently drift
 # between declared and live protection, so a declaration landing here is not

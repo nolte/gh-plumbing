@@ -66,9 +66,16 @@ autolabeler:
   - label: "release"
     title:
       - '/^chore\(release\):/'
+  # Exploratory work is not something a consumer shipped, so it does not belong
+  # in the changelog. Without this pairing an `exp/` pull request landed
+  # uncategorised in the "shipped" section, which reads as a delivered change.
+  - label: "experimental"
+    branch:
+      - '/^exp\//'
 
 exclude-labels:
   - "release"
+  - "experimental"
 
 template: |
   ## Changes
