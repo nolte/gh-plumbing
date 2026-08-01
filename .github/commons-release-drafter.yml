@@ -1,18 +1,63 @@
 ---
-name-template: v$NEXT_PATCH_VERSION
-tag-template: v$NEXT_PATCH_VERSION
+# Portfolio-wide release-drafter commons. Every repository extends this via
+# `_extends: gh-plumbing:.github/commons-release-drafter.yml`, so a change here
+# reaches the whole portfolio on the next Probot sync.
+
+# $RESOLVED_VERSION, not $NEXT_PATCH_VERSION. Before the resolver below existed
+# every release was a patch regardless of what landed, so a `breaking-change`
+# label had no effect on the version. That combination is worse than it sounds:
+# consumers pin by tag and update through Renovate, and a patch bump is the
+# update class most likely to be automerged or waved through -- so the change
+# least likely to be scrutinised was the one carrying the break.
+name-template: v$RESOLVED_VERSION
+tag-template: v$RESOLVED_VERSION
+
+version-resolver:
+  major:
+    labels:
+      - breaking-change
+  minor:
+    labels:
+      - feat
+      - enhancement
+  patch:
+    labels:
+      - fix
+      - bug
+      - chore
+      - docs
+      - documentation
+      - project-config
+      - cicd
+      - dependencies
+      - security
+  default: patch
+
 branches:
   - master
   - develop
+
+# The label lists carry both the Conventional-Commits labels the portfolio
+# actually applies (`feat`, `fix`) and the GitHub defaults (`enhancement`,
+# `bug`). Previously the categories matched only the defaults, so a PR labelled
+# `fix` -- the portfolio convention -- fell into the uncategorised remainder of
+# the changelog and never appeared under a heading.
 categories:
   - title: 🚀 Features
-    label: enhancement
+    labels:
+      - "feat"
+      - "enhancement"
   - title: 🐛 Bug Fixes
-    label: bug
+    labels:
+      - "fix"
+      - "bug"
   - title: 🧰 Maintenance
     labels:
       - "chore"
-      - "documentations"
+      # `docs` and `documentation` are the labels that exist; the previous
+      # `documentations` entry matched nothing in any portfolio repository.
+      - "docs"
+      - "documentation"
       - "project-config"
       - "cicd"
       - "dependencies"
