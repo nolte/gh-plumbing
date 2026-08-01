@@ -8,4 +8,4 @@ permissions:
 
 jobs:
   dependency-review:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-dependency-review.yaml@fix/393-pipeline-hardening
+    uses: nolte/gh-plumbing/.github/workflows/reusable-dependency-review.yaml@develop
