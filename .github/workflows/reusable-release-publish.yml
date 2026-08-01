@@ -101,13 +101,13 @@ jobs:
         # is empty and the fallback to secrets.token kicks in — release-
         # publish keeps working, the cascade gap returns silently.
         continue-on-error: true
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
         with:
           app-id: ${{ inputs.app-id }}
           private-key: ${{ secrets.app-private-key }}
 
       - name: Checkout develop
-        uses: actions/checkout@v6.0.0
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: develop
           fetch-depth: 0

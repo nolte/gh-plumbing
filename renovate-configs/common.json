@@ -5,7 +5,32 @@
     ":enablePreCommit"
   ],
   "labels": ["chore","dependencies"],
+  "packageRules": [
+    {
+      "description": "Pin GitHub Actions to full-length commit digests. A tag is mutable even from a trusted publisher (CVE-2025-30066), so a digest is the only immutable action reference; pinDigests also makes each pin age as a reviewable pull request instead of silently.",
+      "matchManagers": ["github-actions"],
+      "pinDigests": true
+    }
+  ],
   "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Age the hacs/action digest that reusable-hacs-validate.yaml holds in a workflow_call input default. Renovate's github-actions manager only parses `uses:` lines, so without this manager that one pin is the only digest in the repository that would never be proposed for a bump.",
+      "managerFilePatterns": ["/(^|/)reusable-hacs-validate\\.yaml$/"],
+      "matchStrings": ["default:\\s+\"(?<currentDigest>[0-9a-f]{40})\"\\s+#\\s+(?<currentValue>\\S+)"],
+      "depNameTemplate": "hacs/action",
+      "packageNameTemplate": "https://github.com/hacs/action",
+      "datasourceTemplate": "git-refs"
+    },
+    {
+      "customType": "regex",
+      "description": "Age the hassfest digest. Its comment names a branch rather than a version, because home-assistant/actions has no usable release tag, and the github-actions manager resolves a comment through the github-tags datasource -- where a branch name finds nothing and no bump is ever proposed. This manager resolves the same line through git-refs instead, so the pin ages like every other one.",
+      "managerFilePatterns": ["/(^|/)reusable-hacs-validate\\.yaml$/"],
+      "matchStrings": ["uses:\\s+home-assistant/actions/hassfest@(?<currentDigest>[0-9a-f]{40})\\s+#\\s+(?<currentValue>\\S+)"],
+      "depNameTemplate": "home-assistant/actions",
+      "packageNameTemplate": "https://github.com/home-assistant/actions",
+      "datasourceTemplate": "git-refs"
+    },
     {
       "customType": "regex",
       "managerFilePatterns": ["/(^|/)\\.vale\\.ini$/"],
