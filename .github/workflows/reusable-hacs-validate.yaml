@@ -94,8 +94,11 @@ jobs:
       # The Home Assistant docs reference hassfest as @master, but a branch is
       # mutable, so it is pinned here instead. home-assistant/actions carries no
       # usable release tag: 1.0.0 dates from 2020 and sits 158 commits behind
-      # master, so the pin tracks master's head and Renovate bumps it visibly.
-      # Pinned 2026-08-01 from a master head dated 2026-07-30; the comment names
-      # the branch only, so a Renovate digest bump can't leave a date behind.
+      # master, so the pin tracks master's head. Pinned 2026-08-01 from a master
+      # head dated 2026-07-30. The comment names the branch only, so a Renovate
+      # digest bump can't leave a date behind -- and because a branch name is not
+      # a tag, the github-actions manager's github-tags lookup finds nothing here;
+      # renovate-configs/common.json carries a git-refs customManager that reads
+      # this exact line so the pin still ages.
       - name: Hassfest validation
         uses: home-assistant/actions/hassfest@ab22029681aa532bfe7de5774a9972d67bfbd2c0 # master
