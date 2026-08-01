@@ -3,9 +3,17 @@ name: Stale
 on:
   schedule:
   - cron: "0 0 * * *"
+# Explicit permissions per spec/project/github-actions-best-practices §B:
+# workflow level is the minimum, write scopes are granted per job.
+permissions:
+  contents: read
+
 
 jobs:
   stale:
+    permissions:
+      issues: write # the called workflow labels and closes stale issues
+      pull-requests: write # ... and stale PRs
     uses: nolte/gh-plumbing/.github/workflows/reusable-stale.yaml@develop
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}

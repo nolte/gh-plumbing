@@ -5,6 +5,11 @@ on:
     secrets:
       galaxy_api_key:
         required: true
+# Explicit permissions per spec/project/github-actions-best-practices §B:
+# workflow level is the minimum, write scopes are granted per job.
+permissions:
+  contents: read # checkout only; the Galaxy push authenticates with its own API key
+
 
 jobs:
   molecule:

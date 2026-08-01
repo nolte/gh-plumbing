@@ -13,6 +13,11 @@ on:
           §Known platform constraints.
         required: true
         type: string
+# Explicit permissions per spec/project/github-actions-best-practices §B:
+# workflow level is the minimum, write scopes are granted per job.
+permissions:
+  contents: read
+
 
 # This wrapper pushes a fast-forward merge to master through
 # `devmasx/merge-branch`. After Phase 2 of issue #330 lands its
@@ -30,6 +35,8 @@ on:
 
 jobs:
   refresh_presentation_branch:
+    permissions:
+      contents: write # the called workflow pushes to the presentation branch
     uses: nolte/gh-plumbing/.github/workflows/reusable-release-cd-refresh-master.yml@develop
     with:
       from_branch: ${{ inputs.tag || github.event.ref }}

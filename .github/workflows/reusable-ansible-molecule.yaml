@@ -9,6 +9,11 @@ on:
       molecule_args:
         description: 'Molecule Extra Arguments'
         type: string
+# Explicit permissions per spec/project/github-actions-best-practices §B:
+# workflow level is the minimum, write scopes are granted per job.
+permissions:
+  contents: read # checkout + molecule; nothing writes back to the repository
+
 
 jobs:
   molecule:

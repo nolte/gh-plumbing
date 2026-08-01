@@ -2,6 +2,12 @@ name: Spelling Check
 
 on:
   workflow_call:
+# Explicit permissions per spec/project/github-actions-best-practices §B:
+# workflow level is the minimum, write scopes are granted per job.
+permissions:
+  contents: read # reviewdog's default github-pr-annotations reporter emits workflow
+                  # commands rather than calling the API, so no write scope is needed
+
 
 jobs:
   vale:

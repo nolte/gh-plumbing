@@ -5,9 +5,17 @@ on:
     secrets:
       token:
         required: true
+# Explicit permissions per spec/project/github-actions-best-practices §B:
+# workflow level is the minimum, write scopes are granted per job.
+permissions:
+  contents: read
+
 
 jobs:
   stale:
+    permissions:
+      issues: write # label and close stale issues
+      pull-requests: write # label and close stale PRs, and delete their branches
     runs-on: ubuntu-latest
     steps:
     - uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10.4.0

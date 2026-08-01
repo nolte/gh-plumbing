@@ -11,6 +11,11 @@ on:
         required: false
         default: "${{ github.server_url }}/${{ github.repository }}"
         type: string
+# Explicit permissions per spec/project/github-actions-best-practices §B:
+# workflow level is the minimum, write scopes are granted per job.
+permissions:
+  contents: read # chain-bench reads repository metadata through the passed token
+
 jobs:
   static:
     name: "Chain Bench"

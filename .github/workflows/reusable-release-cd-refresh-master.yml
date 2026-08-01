@@ -33,6 +33,11 @@ on:
           PEM-encoded private key for the App identified by `inputs.app-id`.
           Required when `app-id` is set; ignored otherwise.
         required: false
+# Explicit permissions per spec/project/github-actions-best-practices §B:
+# workflow level is the minimum, write scopes are granted per job.
+permissions:
+  contents: read
+
 
 # Every run of this workflow updates the same presentation branch, so two
 # releases published close together race on one target. The group is static
@@ -50,6 +55,8 @@ concurrency:
 
 jobs:
   refresh_presentation_branch:
+    permissions:
+      contents: write # fast-forwards the presentation branch
     name: "Publish the the Release to Master"
     runs-on: ubuntu-latest
     steps:

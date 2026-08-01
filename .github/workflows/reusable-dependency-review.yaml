@@ -2,6 +2,11 @@ name: Dependency Review
 
 on:
   workflow_call:
+# Explicit permissions per spec/project/github-actions-best-practices §B:
+# workflow level is the minimum, write scopes are granted per job.
+permissions:
+  contents: read # the action reads the PR's dependency diff; no PR comment is configured
+
 
 
 jobs:
