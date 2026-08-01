@@ -1,0 +1,49 @@
+name: Portfolio — Branch Protection Audit
+
+# Runs the declared-versus-enforced comparison across the portfolio on a
+# schedule. Scheduled rather than pull-request-triggered because the failure it
+# detects is drift over time: protection that was applied once can stop being
+# applied, and no commit marks the moment it does.
+#
+# A red run here means some repository declares protection GitHub is not
+# enforcing. Treat it as a real finding, not as flakiness -- see issue #387,
+# where the same condition went unnoticed long enough that a merge which should
+# have been blocked went through.
+
+on:
+  schedule:
+    # Mondays, early. Weekly is enough for configuration drift, and a daily
+    # run would train the reader to ignore it.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      repos:
+        description: Space-separated owner/name list. Empty surveys the whole portfolio.
+        required: false
+        type: string
+        default: ""
+      branch:
+        description: Branch whose protection is compared.
+        required: false
+        type: string
+        default: develop
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-branch-protection-audit.yaml
+    with:
+      repos: ${{ inputs.repos || '' }}
+      branch: ${{ inputs.branch || 'develop' }}
+      # Reading protection across the portfolio needs more reach than this
+      # workflow's own GITHUB_TOKEN has. Without the App the audit reports
+      # every other repository as unreadable, which it flags rather than
+      # mistaking for "unprotected".
+      app-id: ${{ vars.PORTFOLIO_APP_ID }}
+    secrets:
+      token: ${{ secrets.GITHUB_TOKEN }}
+      app-private-key: ${{ secrets.PORTFOLIO_APP_PRIVATE_KEY }}
