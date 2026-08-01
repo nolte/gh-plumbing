@@ -37,6 +37,8 @@ concurrency:
 # Consumers cannot copy this form -- the file lives in another repository. The
 # consumer pattern is `@<tag>` and is documented under docs/*/workflows/.
 jobs:
+  actionlint:
+    uses: ./.github/workflows/reusable-actionlint.yaml
   static:
     uses: ./.github/workflows/reusable-pre-commit.yaml
   docs:
