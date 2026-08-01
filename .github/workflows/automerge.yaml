@@ -49,7 +49,7 @@ jobs:
     permissions:
       contents: write # squash-merges the PR
       pull-requests: write # reads and updates PR state
-    uses: nolte/gh-plumbing/.github/workflows/reusable-automerge.yaml@develop
+    uses: nolte/gh-plumbing/.github/workflows/reusable-automerge.yaml@fix/390-explicit-permissions
     with:
       app-id: ${{ vars.PORTFOLIO_APP_ID }}
     secrets:
