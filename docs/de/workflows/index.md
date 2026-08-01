@@ -3,8 +3,24 @@
 Wiederverwendbare GitHub-Actions-Workflows liegen unter `.github/workflows/reusable-*.y{a}ml`. Konsumenten referenzieren sie über:
 
 ```yaml
-uses: nolte/gh-plumbing/.github/workflows/reusable-<name>.yaml@develop
+uses: nolte/gh-plumbing/.github/workflows/reusable-<name>.yaml@<tag>
 ```
+
+!!! warning "`<tag>` durch einen Release-Tag ersetzen, niemals `@develop`"
+
+    `<tag>` ist bewusst ein Platzhalter. Wähle eine Version auf der
+    [Releases-Seite](https://github.com/nolte/gh-plumbing/releases), zum
+    Beispiel `@v1.1.26`, und lass Renovate die Bumps vorschlagen.
+
+    Diese Seiten zeigten früher `@develop`. Konsumenten, die der Dokumentation
+    folgten, waren also *deshalb* ungepinnt. Eine Branch-Referenz löst auf das
+    auf, worauf der Branch zur Laufzeit zeigt — eine Änderung hier erreicht
+    deine CI sofort und ungeprüft.
+
+    Die Wrapper-Workflows dieses Repositories nutzen weiterhin `@develop`. Das
+    ist bewusstes Dogfooding des unveröffentlichten Stands, wird
+    [separat verfolgt](https://github.com/nolte/gh-plumbing/issues/392) und ist
+    kein Muster zum Nachbauen.
 
 ---
 
