@@ -14,6 +14,6 @@ jobs:
     permissions:
       issues: write # the called workflow labels and closes stale issues
       pull-requests: write # ... and stale PRs
-    uses: nolte/gh-plumbing/.github/workflows/reusable-stale.yaml@fix/390-explicit-permissions
+    uses: nolte/gh-plumbing/.github/workflows/reusable-stale.yaml@develop
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}

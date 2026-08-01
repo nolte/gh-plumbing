@@ -37,7 +37,7 @@ jobs:
   refresh_presentation_branch:
     permissions:
       contents: write # the called workflow pushes to the presentation branch
-    uses: nolte/gh-plumbing/.github/workflows/reusable-release-cd-refresh-master.yml@fix/390-explicit-permissions
+    uses: nolte/gh-plumbing/.github/workflows/reusable-release-cd-refresh-master.yml@develop
     with:
       from_branch: ${{ inputs.tag || github.event.ref }}
       app-id: ${{ vars.PORTFOLIO_APP_ID }}

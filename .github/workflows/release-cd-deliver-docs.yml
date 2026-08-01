@@ -27,7 +27,7 @@ jobs:
   publish_docs:
     permissions:
       contents: write # the called workflow pushes to gh-pages
-    uses: nolte/gh-plumbing/.github/workflows/reusable-mkdocs.yaml@fix/390-explicit-permissions
+    uses: nolte/gh-plumbing/.github/workflows/reusable-mkdocs.yaml@develop
     with:
       app-id: ${{ vars.PORTFOLIO_APP_ID }}
     secrets:

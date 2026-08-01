@@ -36,7 +36,7 @@ jobs:
   publish:
     permissions:
       contents: write # the called workflow flips the draft to published
-    uses: nolte/gh-plumbing/.github/workflows/reusable-release-publish.yml@fix/390-explicit-permissions
+    uses: nolte/gh-plumbing/.github/workflows/reusable-release-publish.yml@develop
     with:
       tag: ${{ inputs.tag }}
       dry_run: ${{ inputs.dry_run }}

@@ -29,7 +29,7 @@ jobs:
     permissions:
       contents: write # the called workflow edits the release draft
       pull-requests: read # release-drafter categorises merged PRs
-    uses: nolte/gh-plumbing/.github/workflows/reusable-release-drafter.yml@fix/390-explicit-permissions
+    uses: nolte/gh-plumbing/.github/workflows/reusable-release-drafter.yml@develop
     with:
       app-id: ${{ vars.PORTFOLIO_APP_ID }}
     secrets:

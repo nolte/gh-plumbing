@@ -24,16 +24,16 @@ concurrency:
 
 jobs:
   static:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-pre-commit.yaml@fix/390-explicit-permissions
+    uses: nolte/gh-plumbing/.github/workflows/reusable-pre-commit.yaml@develop
   docs:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-mkdocs-build.yaml@fix/390-explicit-permissions
+    uses: nolte/gh-plumbing/.github/workflows/reusable-mkdocs-build.yaml@develop
   security:
     permissions:
       contents: read
       security-events: write # reusable-trivy uploads SARIF to the Security tab
       actions: read # required by upload-sarif on private repositories
-    uses: nolte/gh-plumbing/.github/workflows/reusable-trivy.yaml@fix/390-explicit-permissions
+    uses: nolte/gh-plumbing/.github/workflows/reusable-trivy.yaml@develop
   chain-bench:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-chain-bench.yaml@fix/390-explicit-permissions
+    uses: nolte/gh-plumbing/.github/workflows/reusable-chain-bench.yaml@develop
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}
