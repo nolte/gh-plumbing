@@ -1,0 +1,100 @@
+name: Reusable — Branch Protection Audit
+
+# Compares branch protection declared in `.github/settings.yml` against what
+# GitHub actually enforces, and fails when they differ.
+#
+# This exists because that gap is invisible: no error, no log, no failed check.
+# The declaration looks correct, the Probot Settings App reports nothing, and
+# the protection is absent. Nobody notices until a merge that should have been
+# blocked goes through. See issue #387 and ADR-002.
+#
+# The audit is read-only. It never repairs protection -- deciding what the
+# commons should declare is a separate question that this data is meant to
+# inform, not pre-empt.
+
+on:
+  workflow_call:
+    inputs:
+      repos:
+        description: |
+          Space-separated `owner/name` list to survey. Empty (the default)
+          surveys every non-archived, non-fork repository of `owner`.
+        required: false
+        type: string
+        default: ""
+      owner:
+        description: Account whose repositories are surveyed when `repos` is empty.
+        required: false
+        type: string
+        default: nolte
+      branch:
+        description: Branch whose protection is compared.
+        required: false
+        type: string
+        default: develop
+      app-id:
+        description: |
+          Numeric GitHub App ID. When set, the audit runs under a short-lived
+          installation token, which is the only way to read protection across
+          repositories the workflow's own `GITHUB_TOKEN` cannot reach. When
+          empty, it falls through to `secrets.token` -- fine for a single-repo
+          audit, insufficient for a portfolio-wide one.
+        required: false
+        type: string
+        default: ""
+    secrets:
+      token:
+        required: true
+      app-private-key:
+        description: PEM key for `inputs.app-id`. Required when it is set.
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: branch-protection-audit-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: Branch Protection Audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Mint App installation token
+        id: app-token
+        if: ${{ inputs.app-id != '' }}
+        # Not continue-on-error, unlike the release workflows: there the
+        # fallback still does useful work, whereas here a degraded token makes
+        # every repository look unreadable or unprotected. A wrong answer is
+        # worse than no answer for an audit.
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ inputs.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+          owner: ${{ inputs.owner }}
+
+      - name: Checkout sources
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14"
+
+      - name: Install PyYAML
+        run: pip install --require-hashes --no-deps -r scripts/requirements-audit.txt
+
+      - name: Compare declared against enforced
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
+          REPOS: ${{ inputs.repos }}
+          OWNER: ${{ inputs.owner }}
+          BRANCH: ${{ inputs.branch }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086  # REPOS is a deliberate word-split list
+          python3 scripts/branch_protection_audit.py \
+            --owner "${OWNER}" --branch "${BRANCH}" ${REPOS}

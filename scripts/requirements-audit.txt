@@ -1,0 +1,10 @@
+# Dependencies for scripts/branch_protection_audit.py.
+#
+# Kept separate from requirements-dev.txt: that file installs the MkDocs
+# toolchain, and the audit workflow has no reason to pull it in.
+#
+# Version-pinned rather than hash-pinned, matching requirements-dev.txt.
+# A hash pin would name one platform-specific wheel and break whenever the
+# runner's Python minor version changes; Renovate bumps the version here as a
+# reviewable pull request either way.
+PyYAML==6.0.3
