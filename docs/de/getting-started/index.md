@@ -44,7 +44,7 @@ on:
 
 jobs:
   static:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-pre-commit.yaml@develop
+    uses: nolte/gh-plumbing/.github/workflows/reusable-pre-commit.yaml@<tag>
 ```
 
 !!! note "Referenz-Auswahl"

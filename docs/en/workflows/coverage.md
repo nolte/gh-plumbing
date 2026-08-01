@@ -14,7 +14,7 @@ Both render a Markdown table into `$GITHUB_STEP_SUMMARY` (even when the tests fa
 ```yaml title=".github/workflows/coverage.yaml"
 jobs:
   coverage:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-python-coverage.yaml@develop
+    uses: nolte/gh-plumbing/.github/workflows/reusable-python-coverage.yaml@<tag>
     with:
       coverage-source: my_package
       fail-under: 80
@@ -30,7 +30,7 @@ jobs:
 ```yaml title=".github/workflows/coverage.yaml"
 jobs:
   coverage:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-nodejs-coverage.yaml@develop
+    uses: nolte/gh-plumbing/.github/workflows/reusable-nodejs-coverage.yaml@<tag>
     with:
       fail-under: 80
 ```

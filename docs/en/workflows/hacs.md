@@ -16,7 +16,7 @@ on:
 
 jobs:
   hacs-validate:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-hacs-validate.yaml@develop
+    uses: nolte/gh-plumbing/.github/workflows/reusable-hacs-validate.yaml@<tag>
 ```
 
 !!! tip "Custom repository vs. default store"

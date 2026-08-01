@@ -3,8 +3,24 @@
 Reusable GitHub Actions workflows live under `.github/workflows/reusable-*.y{a}ml`. Consumers reference them via:
 
 ```yaml
-uses: nolte/gh-plumbing/.github/workflows/reusable-<name>.yaml@develop
+uses: nolte/gh-plumbing/.github/workflows/reusable-<name>.yaml@<tag>
 ```
+
+!!! warning "Replace `<tag>` with a release tag, never `@develop`"
+
+    `<tag>` is a placeholder on purpose. Pick a version from the
+    [releases page](https://github.com/nolte/gh-plumbing/releases), for example
+    `@v1.1.26`, and let Renovate propose the bumps.
+
+    These pages previously showed `@develop`, so consumers that followed them
+    ended up unpinned *because* they followed the documentation. A branch
+    reference resolves to whatever that branch points at when your workflow
+    runs, so a change here reaches your CI immediately and without review.
+
+    This repository's own wrapper workflows still use `@develop`. That is
+    deliberate dog-fooding of the unreleased state, is
+    [tracked separately](https://github.com/nolte/gh-plumbing/issues/392), and
+    is not a pattern to copy.
 
 ---
 
