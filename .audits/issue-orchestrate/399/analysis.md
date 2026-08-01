@@ -140,4 +140,11 @@ P1 → P2 → P3
 
 ## Dispatch log
 
-<!-- Appended during operation 5; one line per package once its specialist reports. -->
+- **2026-08-01 P0 (coordination, cross-repo)** — `nolte/reachy-mini-mcp#8` opened, granting `id-token: write` and `attestations: write` at the calling job. Lands before the reusable requires them, so the transition is a non-event. Not part of this repository's PR strand.
+- **2026-08-01 P1** dispatched to `nolte-shared:cicd-pipeline-design` — done. Brief confirmed, not refuted. All five acceptance criteria verified by parsing the workflow rather than reading it: attestation step present and pinned (`0f67c3f4…` / v4.1.1, non-fork), `id-token`/`attestations` at job level with **no** workflow-level block, BuildKit `provenance`/`sbom` removed, step skipped when `inputs.push` is false, `actionlint` clean.
+  - **One defect caught during implementation.** The first draft derived `subject-name` from `env.REGISTRY`, which this workflow does not define — the metadata step uses `inputs.registry`. A mismatched subject-name produces an attestation that exists and does not verify against the pushed image: precisely the "looks present, is not trustworthy" failure this issue warns about. Now derived identically to the metadata step's `images:` value, asserted equal by parsing both.
+- **2026-08-01 P2** handled by the generalist — done. No matching specialist. Found that the two Docker reusables had **no consumer documentation at all**, while every other workflow family has a page; that absence is part of why the permissions failure would surprise someone. Added `docs/{en,de}/workflows/container.md` with the required `permissions:` block, the `startup_failure` failure mode named explicitly, provenance verification via `gh attestation verify`, and the origin-not-safety caveat. Vale clean on the new pages.
+
+### Out-of-scope finding, filed separately
+
+While making the documentation Vale-clean: `.github/styles/*` is gitignored, so the repository cannot carry a local vocabulary. The `[Rr]uleset` entry #403 reports adding was never committed, and `docs/en/decisions/adr-001-presentation-branch-reset.md` produces three Vale errors on `develop` today. It goes unnoticed because `errata-ai/vale-action` runs with its `fail_on_error: false` default. Filed as **#409**; not fixed here, since it is neither caused by nor related to this change.

@@ -68,6 +68,15 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # Scoped to the job that produces the attestation, never widened to the
+      # workflow (§B/§H). `id-token` is the signing identity; `attestations`
+      # stores the record.
+      #
+      # CALLERS MUST GRANT BOTH. A caller that does not does NOT receive a
+      # reduced token -- GitHub refuses to start the workflow, with
+      # startup_failure and zero jobs.
+      id-token: write
+      attestations: write
     outputs:
       digest: ${{ steps.build.outputs.digest }}
       tags: ${{ steps.meta.outputs.tags }}
@@ -135,5 +144,28 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          provenance: mode=max
-          sbom: true
+
+      # Build provenance generated and signed by the platform, not by the build
+      # it attests. A build that attests to its own integrity cannot detect its
+      # own compromise (SLSA v1.0; continuous-delivery §C), and §H requires the
+      # platform's attestation mechanism.
+      #
+      # This REPLACES the previous `provenance: mode=max` / `sbom: true`
+      # BuildKit inputs rather than sitting beside them. Two provenance records
+      # with no stated relationship is worse than one with a clear issuer, and
+      # nolte/kamerplanter made the same call against the same spec.
+      #
+      # It records ORIGIN, not safety: an attested image is one whose build
+      # path is known, not one that has been judged secure. Security findings
+      # stay with the supply-chain stages.
+      - name: Attest build provenance
+        # Nothing was published on a dry build, so there is no digest to attest.
+        if: ${{ inputs.push }}
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          # Must match the pushed reference exactly, so it is derived the same
+          # way the metadata step derives `images:` -- from inputs.registry, not
+          # from an env var this workflow does not define.
+          subject-name: ${{ inputs.registry }}/${{ github.repository_owner }}/${{ inputs.image_name }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
