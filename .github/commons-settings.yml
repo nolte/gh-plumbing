@@ -150,6 +150,10 @@ labels:
     color: "#cccccc"
     description: Auto-applied by actions/stale to inactive issues and pull requests.
 
+  - name: experimental
+    color: "#d4c5f9"
+    description: Exploratory work from an `exp/` branch. Excluded from release notes.
+
 # <!--td-commons-settings-labels-end-->
 
 branches:
