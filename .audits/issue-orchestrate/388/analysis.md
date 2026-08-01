@@ -180,6 +180,34 @@ Operator granted a standing dispatch authorisation for P1–P5 on 2026-08-01, wi
 
 All **28 source repositories** independently re-resolved: every pinned digest is reachable inside the action's own repository, and every one of those repositories reports `fork: false`. No digest resolves to a fork. Verification command and full output are reproducible with `gh api repos/<owner>/<repo>/commits/<digest>` per reference.
 
+- **2026-08-01 P6** dispatched to `nolte-shared:cicd-pipeline-reviewer` (audit leg) and the built-in `security-review` skill (verify leg) — both complete, both clean on the change itself. **0 Critical, 0 HIGH, 0 MEDIUM.** The reviewer raised 12 Warnings and 7 Suggestions, but confirmed every one of them is a **pre-existing condition on `develop`** that this branch does not worsen. Details and the resulting follow-up work in the two subsections below.
+- **2026-08-01 P7 (unplanned, added mid-run)** handled by the generalist — done, commit `a733054`. The reviewer found that the P4 digest, held in a `workflow_call` input default, is invisible to Renovate's `github-actions` manager, which parses `uses:` lines only. The single pin P5 was meant to keep ageing was therefore the only one that would not. Fixed with a scoped regex `customManager`; both branch-head pin comments dropped their embedded date, which a Renovate bump would have left stale.
+
+### P6 findings on the change itself
+
+Three points the reviewer flagged as pre-merge verification items were checked against upstream and the live CI history rather than reasoned about:
+
+1. **`errata-ai/vale-action` — retired.** The `reviewdog` branch head is commit-identical to `v2.1.2`, and `reusable-spelling-vale.yaml` passes no `with:` block, so the pin is behaviour-neutral. P1 AC-4 cannot fail.
+2. **`aquasecurity/trivy-action` `@/contrib/sarif.tpl` — not a break, but a live deprecation.** `sarif.tpl` has indeed been removed from `aquasecurity/trivy/contrib`, but the last `develop` run (`29922804228`, security job green) shows Trivy resolving it through a compatibility shim and emitting `WARN Using --template sarif.tpl is deprecated. Please migrate to --format sarif.` The SARIF is produced and uploaded. **Pre-existing on `develop`; this change neither causes nor worsens it**, but it breaks when the shim is dropped. Follow-up issue.
+3. **`actions/checkout` v4 → v6.1.0 — the one real consumer-breaking risk.** Three references in the Docker reusables crossed two majors (Node 20 → Node 24 runtime). Harmless on `ubuntu-latest`; a consumer on a pinned or self-hosted runner image can break. Carried into the PR's Risk / rollout notes as a breaking risk rather than presented as "just pinning".
+
+Security verification (§Verification, `security-role` chain): all 28 source repositories re-resolved as non-fork with the digest reachable inside the action's own repository, and all 27 version comments verified to resolve to exactly the pinned digest — a digest can sit in the right repository and still carry a false version comment, and that gap is closed. No `permissions:` line was added, removed, or widened anywhere in the diff. Net effect: the branch removes a live supply-chain exposure (branch-head code executing in a job holding `security-events: write`, reached on every push in every consumer).
+
+### Refuted: the `@develop` self-references are not spec-covered
+
+The Scope section of this artifact excluded the nine non-reusable wrappers' `nolte/gh-plumbing/...@develop` references on the grounds that `CLAUDE.md` documents them as this repository's dog-fooding pattern. **The reviewer refuted that and is correct.** §A states **MUST** "pin every reusable-workflow reference to an immutable reference rather than to a moving branch"; its only exemption is a **MAY** for org-owned *actions* referenced by *tag* — not for reusable workflows, and not for branches. `spec/project/project-structure/` puts it absolutely: "Every `uses: nolte/gh-plumbing/.github/workflows/...` reference in `.github/workflows/` is pinned to a release tag, not a moving branch." `CLAUDE.md` is not a spec-exemption mechanism.
+
+There is a real engineering argument for the exception here (a tag pin would make gh-plumbing dogfood its last *released* workflows instead of the ones on `develop`, defeating the purpose), but the specs do not currently carry it. Worse, this repository's own consumer documentation instructs downstream repos to use `@develop` (`docs/en/getting-started/index.md:47`, `docs/en/index.md:66`, `docs/*/workflows/*.md`, plus the German mirrors), propagating the violation portfolio-wide. Both halves are recorded as follow-up work rather than fixed here: the documentation fix is a separate PR strand, and the self-reference carve-out is a spec change in `claude-shared`. Folding either into this PR would mix routes, which §Routing forbids.
+
+### Pre-existing findings carried to follow-up issues
+
+None of these is caused by this branch; all were confirmed present on `develop`. Recorded here so the PR's audit trail names them, with issues to be filed after the PR opens:
+
+- **W1 (dominant)** — 18 of 30 workflows declare no `permissions:` block, 12 of them in the shared `reusable-*` set, where the job inherits the caller's permissions unfiltered. A consumer with a permissive default effectively runs write-all inside a shared workflow.
+- **W3** — Only one workflow declares `concurrency:`. The sharpest gap is `release-drafter.yml`, whose reusable performs a read-modify-write on the release draft body; two quick merges to `develop` lose one update. Also the two delivery workflows racing on `master` and `gh-pages` pushes.
+- **W2(a)** — Consumer documentation instructing `@develop` (see above).
+- **W4/W5/W6/W11** — workflow-level write scopes that belong at job level (`reusable-tf-lint.yaml` holds two write scopes it never uses), a `tflint` cache key that collapses to a constant for consumers without `.tflint.hcl`, floating toolchain defaults (`python-version: "3.x"`, `node-version: "lts/*"`) against a `.tool-versions` pinning `python 3.14.0` exactly, and BuildKit self-attested provenance instead of the platform's attestation mechanism.
+
 ### Spec deviation recorded
 
 `spec/project/github-actions-best-practices/` §A requires a comment "naming the human-readable version" a digest corresponds to. Two pins carry no such version because none exists upstream: `home-assistant/actions/hassfest` and the `hacs/action` input default both pin a branch head whose commit has no tag. Their comments name the branch and the commit date (`# master @ 2026-07-30`, `# main @ 2026-06-08`) as the closest available human-readable identity. Consequence to watch: Renovate reads the version comment to drive a bump, so digest updates for these two are best-effort rather than guaranteed — an argument for revisiting them if either upstream resumes tagging.
