@@ -26,18 +26,28 @@ concurrency:
 # configuration only -- no application code and no build artifact -- so the
 # canonical test and package stages have nothing to run and are left out
 # deliberately. The four jobs below are the lint, docs, and securing stages.
+#
+# The jobs reference their reusables by LOCAL PATH, not by `nolte/gh-plumbing/
+# ...@<ref>`. A local path resolves against the current commit, so a pull
+# request that changes a reusable is verified by its own checks. With `@develop`
+# these checks ran develop's copy instead: a pull request could go green on all
+# contexts having executed none of its own changes, and nothing in the output
+# said so. See ADR-001's sibling decision on issue #392.
+#
+# Consumers cannot copy this form -- the file lives in another repository. The
+# consumer pattern is `@<tag>` and is documented under docs/*/workflows/.
 jobs:
   static:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-pre-commit.yaml@develop
+    uses: ./.github/workflows/reusable-pre-commit.yaml
   docs:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-mkdocs-build.yaml@develop
+    uses: ./.github/workflows/reusable-mkdocs-build.yaml
   security:
     permissions:
       contents: read
       security-events: write # reusable-trivy uploads SARIF to the Security tab
       actions: read # required by upload-sarif on private repositories
-    uses: nolte/gh-plumbing/.github/workflows/reusable-trivy.yaml@develop
+    uses: ./.github/workflows/reusable-trivy.yaml
   chain-bench:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-chain-bench.yaml@develop
+    uses: ./.github/workflows/reusable-chain-bench.yaml
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}

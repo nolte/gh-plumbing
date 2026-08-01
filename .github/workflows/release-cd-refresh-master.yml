@@ -37,7 +37,7 @@ jobs:
   refresh_presentation_branch:
     permissions:
       contents: write # the called workflow pushes to the presentation branch
-    uses: nolte/gh-plumbing/.github/workflows/reusable-release-cd-refresh-master.yml@develop
+    uses: ./.github/workflows/reusable-release-cd-refresh-master.yml
     with:
       # github.event.release.tag_name, not github.event.ref: the release
       # payload carries no top-level `ref`, so the old expression resolved
