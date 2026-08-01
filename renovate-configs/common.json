@@ -5,6 +5,13 @@
     ":enablePreCommit"
   ],
   "labels": ["chore","dependencies"],
+  "packageRules": [
+    {
+      "description": "Pin GitHub Actions to full-length commit digests. A tag is mutable even from a trusted publisher (CVE-2025-30066), so a digest is the only immutable action reference; pinDigests also makes each pin age as a reviewable pull request instead of silently.",
+      "matchManagers": ["github-actions"],
+      "pinDigests": true
+    }
+  ],
   "customManagers": [
     {
       "customType": "regex",
