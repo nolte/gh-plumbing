@@ -16,3 +16,19 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - uses: errata-ai/vale-action@85f9f7f2c5f449ac0ae5b66662961bae3f77ca6a # v2.1.2
+        with:
+          # The action defaults to `fail_on_error: false`, so this check was
+          # green by construction: #403 introduced three errors on added lines
+          # and it still passed. A signal that reads as a gate and is not one is
+          # worse than no signal, which is the same conclusion #398 reached for
+          # workflow validity.
+          fail_on_error: true
+          # `added` is the action's default and is kept deliberately, unlike the
+          # actionlint reusable where `nofilter` is right. Prose findings are
+          # noisier than syntax errors, and existing documentation debt should
+          # not block an unrelated pull request -- an author is answerable for
+          # the lines they wrote.
+          filter_mode: added
+          # Errors only. Warnings and suggestions stay visible as annotations
+          # without failing the run.
+          level: error
