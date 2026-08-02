@@ -78,6 +78,14 @@ uses: nolte/gh-plumbing/.github/workflows/reusable-<name>.yaml@<tag>
 
     [:octicons-arrow-right-24: HACS validation](hacs.md)
 
+-   :material-docker: **Container images**
+
+    ---
+
+    Lint and dry-build a `Dockerfile`, then publish an image with platform-signed build provenance.
+
+    [:octicons-arrow-right-24: Container images](container.md)
+
 </div>
 
 !!! info "Conventions"

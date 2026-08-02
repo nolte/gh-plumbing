@@ -68,6 +68,15 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # Scoped to the job that produces the attestation, never widened to the
+      # workflow (§B/§H). `id-token` is the signing identity; `attestations`
+      # stores the record.
+      #
+      # CALLERS MUST GRANT BOTH. A caller that does not does NOT receive a
+      # reduced token -- GitHub refuses to start the workflow, with
+      # startup_failure and zero jobs.
+      id-token: write
+      attestations: write
     outputs:
       digest: ${{ steps.build.outputs.digest }}
       tags: ${{ steps.meta.outputs.tags }}
@@ -90,11 +99,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.token }}
 
+      # docker/metadata-action lowercases image references; a raw expression
+      # does not. Deriving both the metadata input and the attestation subject
+      # from one lowercased value keeps the subject equal to what was actually
+      # pushed, for any owner or image name carrying an uppercase letter.
+      - name: Resolve the image reference
+        id: image
+        env:
+          RAW: ${{ inputs.registry }}/${{ github.repository_owner }}/${{ inputs.image_name }}
+        run: |
+          set -euo pipefail
+          printf 'name=%s\n' "${RAW,,}" >> "$GITHUB_OUTPUT"
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
-          images: ${{ inputs.registry }}/${{ github.repository_owner }}/${{ inputs.image_name }}
+          images: ${{ steps.image.outputs.name }}
           # Disable the action's default `latest=auto` so the `latest` tag is
           # set exclusively by the explicit `type=raw,value=latest,enable=...`
           # rule below. Without this, `latest=auto` adds a second, parallel
@@ -135,5 +156,35 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          provenance: mode=max
+          # Explicitly off, not merely unset. Buildx attaches inline provenance
+          # by default when pushing, so omitting this input would leave a second
+          # provenance record beside the platform-signed one below, with no
+          # stated relationship between them. `false` makes the outcome the same
+          # whatever the action's default turns out to be.
+          provenance: false
+          # Kept. An SBOM is not a provenance record: it lists contents rather
+          # than asserting who built the image, so the §C objection to
+          # self-attestation does not transfer to it. Removing it alongside the
+          # provenance input would have been an unasked-for scope change.
+          # Whether it should become a platform-issued attestation via
+          # actions/attest-sbom is a separate question, recorded not decided.
           sbom: true
+
+      # Build provenance generated and signed by the platform, not by the build
+      # it attests. A build that attests to its own integrity cannot detect its
+      # own compromise (SLSA v1.0; continuous-delivery §C), and §H requires the
+      # platform's attestation mechanism.
+      #
+      # It records ORIGIN, not safety: an attested image is one whose build
+      # path is known, not one that has been judged secure. Security findings
+      # stay with the supply-chain stages.
+      - name: Attest build provenance
+        # Nothing was published on a dry build, so there is no digest to attest.
+        if: ${{ inputs.push }}
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          # The same value the metadata step received, so the subject names
+          # exactly what was pushed.
+          subject-name: ${{ steps.image.outputs.name }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true

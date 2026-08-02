@@ -82,6 +82,7 @@ plugins:
             Documentation: Dokumentation
             Release: Release
             HACS validation: HACS-Validierung
+            Container images: Container-Images
             Probot: Probot
             Settings: Settings
             Labelling: Labelling
@@ -140,6 +141,7 @@ nav:
       - Documentation: workflows/documentation.md
       - Release: workflows/release.md
       - HACS validation: workflows/hacs.md
+      - Container images: workflows/container.md
   - Probot:
       - probot/index.md
       - Settings: probot/settings.md
