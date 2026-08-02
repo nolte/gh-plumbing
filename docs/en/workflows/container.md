@@ -117,6 +117,3 @@ reference. Deployments consume the index digest or a `type=semver` tag.
 digest and no attestation. The lint and the build run independently, so one
 run reports both a `Dockerfile` finding and a build failure rather than hiding
 the second behind the first.
-
-<!-- gate probe -->
-This sentance has a deliberate speling error to probe the gate.
