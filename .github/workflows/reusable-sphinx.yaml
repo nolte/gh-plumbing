@@ -43,8 +43,12 @@ jobs:
 
       - name: Install dependencies
         run: |
+          # Version-pinned rather than unbounded: continuous-integration §C
+          # forbids an unbounded range in a pipeline definition, and an
+          # unpinned tox is exactly how a green pipeline turns red without a
+          # commit. Renovate bumps these as reviewable pull requests.
           python -m pip install --upgrade pip
-          pip install tox tox-gh-actions
+          pip install 'tox==4.58.0' 'tox-gh-actions==3.5.0'
 
       - name: Test with tox
         run: tox -e ${{ inputs.scenario-name }}

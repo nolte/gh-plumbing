@@ -18,6 +18,12 @@ jobs:
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
-          python-version: '3.x'
+          # Concrete rather than '3.x', matching the other reusables and
+          # .tool-versions. This workflow sits behind `static / Static CI Tests`,
+          # which is the one required check most consumers enforce, so a
+          # floating interpreter here can turn a green pipeline red with no
+          # commit behind it. #400 pinned the input defaults elsewhere and
+          # missed this hardcoded one.
+          python-version: '3.14'
 
       - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
