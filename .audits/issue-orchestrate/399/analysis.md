@@ -145,6 +145,24 @@ P1 → P2 → P3
   - **One defect caught during implementation.** The first draft derived `subject-name` from `env.REGISTRY`, which this workflow does not define — the metadata step uses `inputs.registry`. A mismatched subject-name produces an attestation that exists and does not verify against the pushed image: precisely the "looks present, is not trustworthy" failure this issue warns about. Now derived identically to the metadata step's `images:` value, asserted equal by parsing both.
 - **2026-08-01 P2** handled by the generalist — done. No matching specialist. Found that the two Docker reusables had **no consumer documentation at all**, while every other workflow family has a page; that absence is part of why the permissions failure would surprise someone. Added `docs/{en,de}/workflows/container.md` with the required `permissions:` block, the `startup_failure` failure mode named explicitly, provenance verification via `gh attestation verify`, and the origin-not-safety caveat. Vale clean on the new pages.
 
+- **2026-08-01 P3** dispatched to `nolte-shared:cicd-pipeline-reviewer` (audit leg) and the built-in `security-review` skill (verify leg). **0 Critical, 0 HIGH, 0 MEDIUM.** The audit returned 5 Warnings and 5 Suggestions and **partially refuted the brief** — recorded below, because two of them contradicted statements the implementation itself made.
+
+### P3 refutations, and what changed because of them
+
+**`sbom: true` should not have been removed.** The brief and the first implementation treated it as part of the self-attestation problem. An SBOM is not a provenance record: it lists contents rather than asserting who built the image, so §C's objection does not transfer to it. Worse, the inline comment asserted a decision this very artifact had **deferred** under Open questions. Restored, and the comment now justifies only the `provenance` input.
+
+**Omitting `provenance` does not disable it.** Buildx attaches inline provenance by default when pushing, so the change would have left a second provenance record beside the platform-signed one — precisely what the comment claimed it avoided. The action's documentation for the pinned version is not published in its repository, so the default could not be confirmed; `provenance: false` is now explicit, which makes the outcome correct whatever the default is.
+
+**The multi-arch concern did not reproduce.** The brief asked whether attesting the build digest attests only part of a multi-platform manifest. It does not: buildx emits the **index** digest, every tag resolves to it, and `gh attestation verify` against a tag lands on the same digest. The only real path to a non-verifying attestation is a consumer pinning a per-architecture manifest digest — a documentation gap, now closed in both locales.
+
+**One genuine code defect.** `subject-name` did not lowercase while `docker/metadata-action` does, so any owner or image name with an uppercase letter would have produced an attestation naming a reference that was never pushed. Both now derive from one lowercased value; equality asserted by parsing the workflow.
+
+Four documentation findings were also fixed: the index-versus-per-architecture digest distinction, the second path on which `latest` moves (the one that already caused drift in `nolte/reachy-mini-mcp` v0.1.1), the fact that `type=ref` tags move too, and that multi-arch is opt-in rather than a property of the workflow.
+
+### Digest verification (§A, recorded in the change rather than only here)
+
+`actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373` — owner `actions`, `fork: false`, `archived: false`, and `v4.1.1` resolves to exactly that digest.
+
 ### Out-of-scope finding, filed separately
 
 While making the documentation Vale-clean: `.github/styles/*` is gitignored, so the repository cannot carry a local vocabulary. The `[Rr]uleset` entry #403 reports adding was never committed, and `docs/en/decisions/adr-001-presentation-branch-reset.md` produces three Vale errors on `develop` today. It goes unnoticed because `errata-ai/vale-action` runs with its `fail_on_error: false` default. Filed as **#409**; not fixed here, since it is neither caused by nor related to this change.
