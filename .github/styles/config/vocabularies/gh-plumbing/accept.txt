@@ -1,0 +1,10 @@
+# Repository-local Vale vocabulary. Tracked in git; `.gitignore` un-ignores this
+# one subtree of `.github/styles/`, which `vale sync` otherwise owns.
+#
+# Add a term here only when it is a real technical identifier the shipped
+# vocabularies miss. A term useful beyond this repository belongs upstream in
+# nolte/vale-style instead -- `vocab-drift-audit` checks for entries that have
+# since been accepted there and can be dropped.
+#
+# ruleset: GitHub's own product term for a branch or tag rule set.
+[Rr]uleset
