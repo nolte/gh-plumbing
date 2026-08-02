@@ -11,8 +11,19 @@ failed check. This script makes it visible, and fails when declared protection
 is missing so a scheduled run cannot pass silently.
 
 It reports *per declared context* rather than diffing sets, because the
-interesting case in practice is a partial application: `gh-plumbing` declares
-three required contexts and GitHub enforces one.
+interesting case in practice is partial application.
+
+Enforcement comes from TWO independent mechanisms and the union of both is what
+actually gates a merge:
+
+  * classic branch protection, which the Probot Settings App writes from
+    `.github/settings.yml`  -> /branches/{branch}/protection
+  * repository and organisation rulesets, which it does not touch
+    -> /rules/branches/{branch}
+
+Reading only the first is how the initial version of this script reported
+`docs / MkDocs Build` as unenforced on `gh-plumbing` when a ruleset had been
+enforcing it all along.
 
 Reads only. Requires a token with `repo` scope (administration read) for every
 repository surveyed; repositories it cannot read are reported as such rather
@@ -128,6 +139,29 @@ def audit_repo(repo: str, branch: str, commons, token: str) -> dict:
     declared = declared_contexts(settings, commons, branch)
     result["declared"] = declared
 
+    # Read rulesets FIRST. A repository with no classic branch protection can
+    # still be fully protected by one, so returning early on a 404 from the
+    # protection endpoint would report it as unprotected -- the most dangerous
+    # error an audit can make, because it sends someone to "fix" a repository
+    # that is correctly configured. nolte/claude-home-assistant is exactly that
+    # case, and the first version of this script got it wrong.
+    try:
+        rules = api(f"repos/{repo}/rules/branches/{branch}", token) or []
+    except Forbidden:
+        rules = []
+        result["notes"].append(
+            "the token may not read rulesets here; enforcement may be "
+            "under-reported"
+        )
+    ruleset_ctx = sorted({
+        c["context"]
+        for rule in rules
+        if rule.get("type") == "required_status_checks"
+        for c in (rule.get("parameters") or {}).get("required_status_checks") or []
+        if c.get("context")
+    })
+    result["ruleset"] = ruleset_ctx
+
     try:
         protection = api(f"repos/{repo}/branches/{branch}/protection", token)
     except Forbidden:
@@ -139,20 +173,42 @@ def audit_repo(repo: str, branch: str, commons, token: str) -> dict:
         )
         return result
     if protection is None:
-        result["status"] = "unprotected" if declared else "ok"
-        result["live"] = []
-        if declared:
+        result["classic"] = []
+        result["live"] = ruleset_ctx
+        missing = [c for c in declared if c not in ruleset_ctx]
+        if declared and not ruleset_ctx:
+            result["status"] = "unprotected"
             result["notes"].append(
-                f"{len(declared)} context(s) declared, branch has no protection at all"
+                f"{len(declared)} context(s) declared, and neither classic "
+                "protection nor a ruleset enforces anything"
             )
+        elif missing:
+            result["status"] = "drift"
+            result["notes"].append(
+                f"declared but not enforced: {', '.join(missing)}"
+            )
+            result["notes"].append(
+                "no classic branch protection; a ruleset enforces the rest"
+            )
+        else:
+            result["status"] = "ok"
+            if declared:
+                result["notes"].append(
+                    "no classic branch protection, but a ruleset enforces every "
+                    "declared context -- protected, just not by the Settings App"
+                )
         return result
 
     checks = protection.get("required_status_checks") or {}
-    live = list(checks.get("contexts") or [])
-    result["live"] = live
+    classic = list(checks.get("contexts") or [])
     result["strict"] = checks.get("strict")
     result["enforce_admins"] = (protection.get("enforce_admins") or {}).get("enabled")
     result["restrictions"] = "present" if protection.get("restrictions") else "null"
+
+    result["classic"] = classic
+    # The union gates the merge; either mechanism alone is an incomplete answer.
+    live = sorted(set(classic) | set(ruleset_ctx))
+    result["live"] = live
 
     # Distinguish "the commons were applied and something was dropped" from
     # "the commons were never applied". The commons declare enforce_admins and
@@ -178,16 +234,6 @@ def audit_repo(repo: str, branch: str, commons, token: str) -> dict:
     if missing:
         result["status"] = "drift"
         result["notes"].append(f"declared but not enforced: {', '.join(missing)}")
-        # The observation from #387: on gh-plumbing the only context that
-        # applied was the first declared one. Flag the pattern so a second
-        # sample either confirms it or kills it.
-        if declared and live and declared[0] in live and all(
-            c not in live for c in declared[1:]
-        ):
-            result["notes"].append(
-                "only the FIRST declared context is enforced -- matches the "
-                "gh-plumbing pattern"
-            )
     else:
         result["status"] = "ok"
     if extra:
@@ -226,6 +272,15 @@ def render(results: list[dict]) -> str:
                 lines.append(f"- declared: `{'`, `'.join(r['declared'])}`")
             if r.get("live"):
                 lines.append(f"- enforced: `{'`, `'.join(r['live'])}`")
+            if r.get("classic") is not None or r.get("ruleset"):
+                lines.append(
+                    f"  - via classic protection: "
+                    f"{'`' + '`, `'.join(r['classic']) + '`' if r.get('classic') else '(none)'}"
+                )
+                lines.append(
+                    f"  - via ruleset: "
+                    f"{'`' + '`, `'.join(r['ruleset']) + '`' if r.get('ruleset') else '(none)'}"
+                )
             if r.get("restrictions"):
                 lines.append(
                     f"- `restrictions`: {r['restrictions']}, "
