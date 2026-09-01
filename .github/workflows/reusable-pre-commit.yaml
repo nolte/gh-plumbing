@@ -1,7 +1,79 @@
 name: Reusable — Pre-Commit
 
+# Runs the consumer's `.pre-commit-config.yaml`. Most consumers put this job
+# behind the `static / Static CI Tests` required check, so anything that can
+# redden it for a reason unrelated to the diff is a defect in this file, not in
+# the pull request that happens to be unlucky.
+#
+# One such reason is Docker Hub rate limiting. A hook declared with
+# `language: docker_image` pulls its image on every run, and pre-commit cannot
+# cache it -- `pre_commit/languages/docker_image.py` sets `ENVIRONMENT_DIR = None`
+# with `install_environment = no_install`, so the image lives only in the Docker
+# daemon's store and never lands under `~/.cache/pre-commit`, which is the only
+# path `pre-commit/action` hands to `actions/cache`. There is nothing for that
+# cache to hold. Measured on nolte/kamerplanter#1321, whose two hooks
+# (`rhysd/actionlint`, `koalaman/shellcheck-precommit`) return
+# `ratelimit-limit: 100;w=3600` with no publisher exemption.
+#
+# The decisive property of an anonymous pull is not the number but the bucket:
+# it is counted per source IP, and GitHub-hosted runners share egress addresses
+# across the whole platform. So the budget this lane spends is shared with every
+# other repository that happens to land on the same runner network, and no
+# amount of restraint here protects it. Authenticating moves the count to a
+# per-account bucket that only this organization draws on.
+#
+# `docker/login-action` writes `~/.docker/config.json` on the runner, and
+# pre-commit's docker_image language shells out to `docker run` against the same
+# host daemon (`pre_commit/languages/docker.py:docker_cmd`), so the credentials
+# apply to the hook pulls without either side knowing about the other.
+#
+# Deliberately NOT done: mirroring the images to GHCR and pointing the hooks at
+# the mirror through an `entry:` override. That decouples the image tag from the
+# hook's `rev:`, which is the pin Renovate actually watches; the mirror would
+# then age unwatched. See nolte/kamerplanter#1321.
+#
+# Deliberately NOT done: pre-pulling the images and shuttling them through
+# `actions/cache` with `docker save`/`docker load`. It needs no credentials,
+# which is genuinely attractive for a shared reusable, but a consumer's
+# `.pre-commit-config.yaml` names only `repo:`/`rev:`/`id:` -- the image
+# reference lives in the *hook* repository's `.pre-commit-hooks.yaml`, so this
+# workflow would have to clone every hook repo at its `rev` to learn what to
+# pull, duplicating what `pre-commit install-hooks` already does. And on a cache
+# miss (a `rev` bump, a 7-day eviction, a feature branch that cannot read
+# another branch's cache) the pull is anonymous again, so it lowers the
+# frequency of the failure without removing it. Authentication removes it.
+
 on:
   workflow_call:
+    inputs:
+      dockerhub-username:
+        description: |
+          Docker Hub account name used to authenticate the image pulls made by
+          `language: docker_image` pre-commit hooks. A username is not secret --
+          it appears in every image reference -- so it travels as an input, and
+          only its token half travels as a secret. This mirrors the
+          `app-id` input / `app-private-key` secret split in
+          `reusable-branch-protection-audit.yaml`, and it is also what makes the
+          gate expressible: the `secrets` context is not available in a step's
+          `if:`, so a secret alone cannot decide whether a step runs.
+
+          OPTIONAL. Empty -- the default, and what every consumer that has not
+          changed its call gets -- skips the login step and pulls anonymously,
+          which is exactly the behaviour this workflow had before the input
+          existed. Consumers whose `.pre-commit-config.yaml` declares no
+          `language: docker_image` hook have nothing to gain by setting it.
+        required: false
+        type: string
+        default: ""
+    secrets:
+      dockerhub-token:
+        description: |
+          Docker Hub personal access token matching `inputs.dockerhub-username`.
+          A public-repo-read token is sufficient; nothing in this workflow
+          pushes. Required in practice whenever `dockerhub-username` is set, but
+          declared optional so that a caller which sets neither still resolves.
+        required: false
+
 # Explicit permissions per spec/project/github-actions-best-practices §B:
 # workflow level is the minimum, write scopes are granted per job.
 permissions:
@@ -25,5 +97,50 @@ jobs:
           # commit behind it. #400 pinned the input defaults elsewhere and
           # missed this hardcoded one.
           python-version: '3.14'
+
+      - name: Log in to Docker Hub
+        id: dockerhub-login
+        # Skipped, not failed, when the caller supplies nothing. An anonymous
+        # pull is the status quo, and a reusable workflow that started demanding
+        # a new secret would break every consumer on its next call.
+        if: ${{ inputs.dockerhub-username != '' }}
+        # continue-on-error, unlike the App-token step in
+        # `reusable-branch-protection-audit.yaml`, where a degraded token makes
+        # every repository look unprotected and a wrong answer beats no answer.
+        # Here the fallback is not degraded, it is the previous behaviour: an
+        # expired token, a token withheld from a fork's pull request, or a
+        # username set without one all land back on anonymous pulls. Hard-failing
+        # instead would redden the required lane on every pull request in the
+        # consuming repository -- strictly worse than the rate limit this step
+        # exists to avoid. The next step says out loud which mode was used.
+        continue-on-error: true
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          username: ${{ inputs.dockerhub-username }}
+          password: ${{ secrets.dockerhub-token }}
+
+      - name: Report the registry mode this run will use
+        # Always runs, including after a failed login, so the log states the
+        # mode rather than leaving it to be inferred from a step's colour.
+        env:
+          LOGIN_OUTCOME: ${{ steps.dockerhub-login.outcome }}
+        run: |
+          set -euo pipefail
+          case "${LOGIN_OUTCOME}" in
+            success)
+              echo "Docker Hub: authenticated pulls (per-account rate limit)."
+              ;;
+            skipped)
+              echo "Docker Hub: anonymous pulls (per-IP rate limit shared with" \
+                   "other runners). Set the 'dockerhub-username' input and the" \
+                   "'dockerhub-token' secret to authenticate."
+              ;;
+            *)
+              echo "::warning title=Docker Hub login failed::Continuing with" \
+                   "anonymous pulls, which are rate limited per source IP." \
+                   "Check the 'dockerhub-username' input and the" \
+                   "'dockerhub-token' secret of the calling workflow."
+              ;;
+          esac
 
       - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
