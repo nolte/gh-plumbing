@@ -79,6 +79,7 @@ plugins:
             Getting started: Erste Schritte
             Workflows: Workflows
             Static tests: Statische Tests
+            Pull-request lint: Pull-Request-Lint
             Documentation: Dokumentation
             Release: Release
             HACS validation: HACS-Validierung

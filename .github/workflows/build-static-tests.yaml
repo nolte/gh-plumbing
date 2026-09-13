@@ -53,8 +53,11 @@ jobs:
       # properties GitHub documents for a reusable workflow checking out its own
       # source (docs: Contexts reference, `job` context). reusable-pr-lint.yaml
       # needs exactly those. The pattern stays space-free because the action
-      # word-splits this input unquoted; drop it once actionlint knows them.
-      actionlint_flags: -ignore=workflow_(repository|sha)
+      # word-splits this input unquoted, so `\s` stands for each space. It matches
+      # only the `job` object type's message for those two names; a misspelled
+      # `github.job_workflow_sha` elsewhere is still reported. Drop it once
+      # actionlint knows them.
+      actionlint_flags: -ignore="workflow_(repository|sha)"\sis\snot\sdefined\sin\sobject\stype\s\{check_run_id
   static:
     uses: ./.github/workflows/reusable-pre-commit.yaml
   docs:
