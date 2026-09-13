@@ -137,6 +137,7 @@ nav:
   - Workflows:
       - workflows/index.md
       - Static tests: workflows/static-tests.md
+      - Pull-request lint: workflows/pr-lint.md
       - Coverage: workflows/coverage.md
       - Documentation: workflows/documentation.md
       - Release: workflows/release.md

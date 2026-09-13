@@ -46,6 +46,14 @@ uses: nolte/gh-plumbing/.github/workflows/reusable-<name>.yaml@<tag>
 
     [:octicons-arrow-right-24: reusable-pre-commit](static-tests.md)
 
+-   :material-source-pull: **Pull-request lint**
+
+    ---
+
+    Conventional-Commits title, required body sections, class sweep, and audit traceability.
+
+    [:octicons-arrow-right-24: reusable-pr-lint](pr-lint.md)
+
 -   :material-chart-box-outline: **Coverage**
 
     ---

@@ -1,0 +1,138 @@
+name: Reusable — PR Lint
+
+# Lints a pull request's title and body against the portfolio's
+# spec/project/pull-request-workflow/ in nolte/claude-shared, which SHOULDs this
+# linter as a reusable workflow here so every repository inherits one
+# implementation (claude-shared#577):
+#
+# - the Conventional-Commits title with a type in {feat, fix, chore, docs, exp}
+# - the five required body sections, in order, and the non-empty rule for
+#   Summary, Changes and Testing
+# - the `## Class sweep` section on a `fix` pull request
+# - the remediation traceability fields when `## Linked issues` references an
+#   issue carrying `audit-label` (claude-shared#616)
+# - optionally, a `Refs spec/<topic>/<slug>/` anchor when implementation paths
+#   change (`spec-anchor`)
+#
+# The checker comes from this repository at the exact commit the caller pinned
+# (`job.workflow_repository` / `job.workflow_sha`), never from the caller, so a
+# pull request can't change the rules it is judged by. The caller's repository
+# isn't checked out at all. Title, body, author and every input reach the
+# checker through the environment, never through `${{ }}` in a shell command.
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: Python version for the checker.
+        required: false
+        type: string
+        default: "3.14"
+      audit-label:
+        description: |
+          Label that marks an audit tracking issue. A pull request whose
+          `## Linked issues` references such an issue must carry
+          `Originating source:` and `Dispatched specialist:` in its Risk /
+          rollout notes. Empty disables the rule.
+        required: false
+        type: string
+        default: audit
+      spec-anchor:
+        description: |
+          Require a `Refs spec/<topic>/<slug>/` line in `## Linked issues` when
+          the pull request changes paths outside `spec/`. For repositories that
+          keep a spec corpus.
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  pr-lint:
+    name: PR Lint
+    runs-on: ubuntu-latest
+    # pull-requests: read lists the changed files for the spec-anchor rule;
+    # issues: read reads the labels of linked issues for the traceability rule.
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    steps:
+      - name: Check out the checker at the pinned commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .pr-lint
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: List the pull request's changed files
+        if: ${{ inputs.spec-anchor }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '.[].filename' > "${RUNNER_TEMP}/changed-files.txt"
+
+      # The checker parses `## Linked issues` itself and writes issue numbers of
+      # at most nine digits; the next step re-validates every line before it
+      # reaches the API.
+      - name: List the linked issue numbers
+        if: ${{ inputs.audit-label != '' }}
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: python3 .pr-lint/scripts/pr-lint/check_pr_body.py --print-linked-issues > "${RUNNER_TEMP}/linked-issues.txt"
+
+      # A reference GitHub answers with 404 or 410 (a discussion, a deleted
+      # issue) carries no labels and is skipped; any other failure fails the
+      # check, since the traceability rule can't be judged without the labels.
+      - name: Read the labels of the linked issues
+        if: ${{ inputs.audit-label != '' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          count=$(wc -l < "${RUNNER_TEMP}/linked-issues.txt")
+          if [ "${count}" -gt 50 ]; then
+            echo "::error::## Linked issues references ${count} issues; the check reads at most 50"
+            exit 1
+          fi
+          : > "${RUNNER_TEMP}/linked-issue-labels.txt"
+          unreadable=""
+          while read -r n; do
+            if ! [[ "${n}" =~ ^[0-9]{1,9}$ ]]; then
+              echo "::error::unexpected linked-issue line from the checker"
+              exit 1
+            fi
+            if ! labels=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${n}" --jq '.labels[].name' 2> "${RUNNER_TEMP}/gh-error.txt"); then
+              if grep -Eq 'HTTP (404|410)' "${RUNNER_TEMP}/gh-error.txt"; then
+                echo "::notice::linked reference #${n} isn't a readable issue (404/410); skipped"
+                continue
+              fi
+              unreadable="${unreadable} #${n}"
+              continue
+            fi
+            printf '%s\n' "${labels}" | sed '/^$/d' | sed "s/^/${n} /" >> "${RUNNER_TEMP}/linked-issue-labels.txt"
+          done < "${RUNNER_TEMP}/linked-issues.txt"
+          if [ -n "${unreadable}" ]; then
+            echo "::error::could not read the labels of linked issue(s)${unreadable}"
+            exit 1
+          fi
+
+      - name: Lint the pull-request title and body
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_HEAD_REF: ${{ github.head_ref }}
+          SPEC_ANCHOR: ${{ inputs.spec-anchor }}
+          AUDIT_LABEL: ${{ inputs.audit-label }}
+          CHANGED_FILES_FILE: ${{ inputs.spec-anchor && format('{0}/changed-files.txt', runner.temp) || '' }}
+          LINKED_ISSUE_LABELS_FILE: ${{ inputs.audit-label != '' && format('{0}/linked-issue-labels.txt', runner.temp) || '' }}
+        run: python3 .pr-lint/scripts/pr-lint/check_pr_body.py
