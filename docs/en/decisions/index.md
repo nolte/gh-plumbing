@@ -12,7 +12,7 @@ here when it changes what consumers inherit.
 
 | Record | Subject | Status |
 |---|---|---|
-| [ADR-001](adr-001-presentation-branch-reset.md) | Reset the presentation branch to the release tag | Accepted |
+| [ADR-001](adr-001-presentation-branch-reset.md) | Choose the presentation-branch write strategy from the target | Revised |
 | [ADR-002](adr-002-branch-protection-verification.md) | Verify branch protection before changing its defaults | Accepted |
 | [ADR-003](adr-003-workflow-validation-gate.md) | Gate workflow validity on a required check | Accepted |
 | [ADR-004](adr-004-spec-drift-routing.md) | Route the Q2 spec-drift cluster through the roadmap | Accepted |

@@ -14,7 +14,7 @@ landet, was verändert, was Consumer erben.
 
 | Record | Thema | Status |
 |---|---|---|
-| [ADR-001](adr-001-presentation-branch-reset.md) | Präsentationsbranch auf den Release-Tag zurücksetzen | Angenommen |
+| [ADR-001](adr-001-presentation-branch-reset.md) | Die Schreibstrategie für den Präsentationsbranch aus dem Ziel ableiten | Überarbeitet |
 | [ADR-002](adr-002-branch-protection-verification.md) | Branch Protection prüfen, bevor die Defaults geändert werden | Angenommen |
 | [ADR-003](adr-003-workflow-validation-gate.md) | Workflow-Gültigkeit über einen Required Check absichern | Angenommen |
 | [ADR-004](adr-004-spec-drift-routing.md) | Den Q2-Spec-Drift-Cluster über die Roadmap führen | Angenommen |

@@ -1,6 +1,16 @@
-# ADR-001: Reset the presentation branch to the release tag
+# ADR-001: Choose the presentation-branch write strategy from the target
 
-**Status:** Accepted (2026-08-01) · **Issue:** [#384](https://github.com/nolte/gh-plumbing/issues/384)
+**Status:** Revised (2026-09-14) · **Issues:** [#384](https://github.com/nolte/gh-plumbing/issues/384), [#414](https://github.com/nolte/gh-plumbing/issues/414)
+
+!!! warning "What this revision changes"
+    The original decision—always reset with a force-with-lease push—held
+    that one strategy could serve every presentation branch. It can't. The
+    reset solves a linear-history ruleset and is itself rejected by a branch
+    that forbids force pushes, which is the configuration this repository's own
+    `master` carries. Two releases published green while `master` stayed on
+    `v1.1.26`. The decision below now selects per target. A quoted section at
+    the end preserves the original text, because its reasoning still explains
+    why the merge alone isn't enough either.
 
 ## Context
 
@@ -24,31 +34,85 @@ The branch also drifts. In this repository `master` carries synthetic merge
 commits that never existed on `develop`, and `master` isn't an ancestor of
 `develop`. A plain fast-forward push is therefore rejected as well.
 
+Two real consumer configurations forbid opposite things:
+
+| Target rule | Forbids | Breaks |
+|---|---|---|
+| linear history | merge commits | the `/merges` API call |
+| no force pushes | history rewrites | the force-with-lease push |
+| `pull_request` ruleset rule | every direct write | both |
+
+A survey of the four presentation branches in the portfolio found three
+carrying a `pull_request` rule. Two of those have **no bypass actor at all**.
+No credential this workflow can hold will write to them.
+
 ## Decision
 
-Replace the merge with a force-with-lease push of the release tag onto the
-target branch. The lease value comes from reading the target ref immediately
-before the push, so a concurrent update aborts instead of losing data.
+Read the target's protection and pick the strategy from it:
+
+- **merge commits permitted** → the `/merges` API. Preferred when both work,
+  because it adds to the branch instead of rewriting it.
+- **merge forbidden, force push permitted** → force-with-lease push of the
+  release tag, the strategy this record originally chose.
+- **neither** → refuse, with a diagnosis naming the rule that blocked it, and
+  fail the run.
+
+The step consults both mechanisms. Classic branch protection and rulesets work
+independently, and either can forbid either operation. An unreadable endpoint
+counts as restrictive rather than permissive: assuming "unprotected" from a
+failed read is the mistake [#421](https://github.com/nolte/gh-plumbing/issues/421)
+found in the branch-protection audit.
 
 ## Alternatives considered
 
-**Exempt the release App from the ruleset.** Rejected. It hollows out a rule the
-consumer set deliberately, and it has to be repeated in every repository.
+**Exempt the release App from the ruleset.** Rejected in the original decision,
+and still rejected as the *only* answer—it hollows out a rule the consumer
+chose, and every repository needs the same exemption. It remains the right
+operator action for a specific target, and the refusal message says so.
 
 **Document that consumers must not apply a linear-history ruleset.** Rejected.
 It moves a constraint onto the consumer instead of repairing the shared tool.
 
+**Retire the cascade and point consumers at the release tag.** Considered in
+[#414](https://github.com/nolte/gh-plumbing/issues/414) and not chosen here. It
+removes the whole class of failure rather than routing around it, but it changes
+what `master` means portfolio-wide, which is a larger decision than the one this
+record governs.
+
+**Fast-forward only.** Rejected. It works only if the presentation branch never
+diverges, and this repository's `master` already carries synthetic merge commits
+that `develop` never had.
+
 ## Consequences
 
-The presentation branch becomes an exact mirror of the release tag, which is
-what it always claimed to be. The reset discards the synthetic merge commits the
-old mechanism produced. Nothing references them.
+The failure is now loud. A target the workflow can't write to fails the run and
+names the blocking rule. Before, it left a stale presentation branch behind a
+green release—the state `v2.0.0` and `v2.0.1` both reached, unnoticed for six
+weeks.
 
-The workflow no longer depends on `devmasx/merge-branch`, which removes one
-third-party action from a step holding `contents: write` against a protected
-branch.
+Consumers whose presentation branch permits merge commits stop seeing a history
+rewrite at each release. They get a merge commit again, as before #404. Only the
+branches that forbid merges keep the rewrite.
 
-Consumers see a history rewrite on the presentation branch at the next release.
-That branch is documented as automatically refreshed and not a place to commit
-to, so no work should be lost. Anyone holding local commits there needs to move
-them first.
+Dropping `devmasx/merge-branch` survives the revision: the merge path calls the
+`/merges` API directly, so the third-party action stays out of a step that holds
+`contents: write` on a protected branch.
+
+Anyone holding local commits on a presentation branch still needs to move them
+before a release. The docs describe that branch as automatically refreshed and
+not a place to commit to, and the reset path still rewrites it.
+
+## Superseded decision (2026-08-01)
+
+Kept because its reasoning still explains why a merge alone isn't enough
+either—a linear-history ruleset rejects the `/merges` call outright:
+
+> Replace the merge with a force-with-lease push of the release tag onto the
+> target branch. The lease value comes from reading the target ref immediately
+> before the push, so a concurrent update aborts instead of losing data.
+
+Its stated consequences held only for a target that permits force pushes. There,
+the presentation branch becomes an exact mirror of the release tag, and the
+reset discards the synthetic merge commits of the old mechanism. On a target
+that forbids force pushes, none of it happened. GitHub refused the push and the
+branch stayed where it was.
