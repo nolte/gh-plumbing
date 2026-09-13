@@ -154,6 +154,16 @@ labels:
     color: "#d4c5f9"
     description: Exploratory work from an `exp/` branch. Excluded from release notes.
 
+  # Named by `exempt-issue-labels` / `exempt-pr-labels` in
+  # reusable-stale.yaml, which lists `bug,wip,on-hold`. Neither `wip` nor
+  # `on-hold` was ever declared here, so two thirds of that exemption did
+  # nothing: an issue parked on purpose was staled anyway unless it happened
+  # to be a `bug`. `wip` stays undeclared -- a draft pull request already
+  # says the same thing, and stale exempts nothing by draft state.
+  - name: on-hold
+    color: "#fbca04"
+    description: Parked on purpose; excluded from stale automation.
+
 # <!--td-commons-settings-labels-end-->
 
 branches:
