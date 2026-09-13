@@ -4,9 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to publish (must match an open release-drafter draft)."
-        required: true
+        description: "Tag to publish. Leave empty to use the single open draft; with several open, the run fails and lists them."
+        required: false
         type: string
+        default: ""
       dry_run:
         description: "Validate without flipping draft=false."
         required: false
