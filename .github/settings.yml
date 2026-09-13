@@ -57,3 +57,8 @@ branches:
           - static / Static CI Tests
           - docs / MkDocs Build
           - actionlint / Workflow Lint
+      # Push restrictions are only available for organization-owned repositories
+      # (GitHub REST, Update branch protection); the commons' apps restriction
+      # makes the whole develop update fail with 422 on this user-owned repository,
+      # so contexts declared after it never applied (nolte/gh-plumbing#416).
+      restrictions: null
