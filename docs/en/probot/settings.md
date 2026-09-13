@@ -28,6 +28,28 @@ repository:
 !!! tip "Overrides"
     Keys in your local `.github/settings.yml` override the inherited values. Only specify what differs from the shared defaults.
 
+!!! danger "`topics` takes a comma-separated string, never a YAML list"
+    Use the comma-separated form shown in the example. A list costs you the
+    entire `branches:` block, and nothing reports it.
+
+    `probot/settings` calls `.split()` on the value in
+    `lib/plugins/repository.js`, so a list raises `TypeError` — and it does so
+    *after* the repository `PATCH` has already landed. That rejects the
+    `Promise.all` the App defers the `branches` section behind, so the branch
+    protection never applies.
+
+    Description, homepage, merge buttons and labels still arrive, because they
+    ride the earlier `PATCH` or run as sibling promises. The repository
+    therefore looks configured while every required status check is in fact
+    advisory.
+
+    ```yaml
+    topics: templating, cookiecutter, github   # string, not a list
+    ```
+
+    [Issue #416](https://github.com/nolte/gh-plumbing/issues/416) carries the
+    full mechanism and the four repositories this hit.
+
 ---
 
 ## Central configuration
