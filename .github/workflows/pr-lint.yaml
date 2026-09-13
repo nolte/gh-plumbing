@@ -1,0 +1,50 @@
+name: PR Lint
+
+# The repository that ships reusable-pr-lint.yaml did not run it. Two consumers
+# already require `pr-body / PR Lint` on their own default branch while the
+# origin judged its own pull requests by nothing -- and #413 found the result:
+# a `feat(...)` merged carrying only `chore`, and titles using types the
+# checker does not accept (`ci(...)`) landing without objection.
+#
+# Separate from build-static-tests.yaml on purpose. That workflow triggers on
+# `push:`, which carries no `github.event.pull_request` -- the checker reads the
+# title, body and number from exactly that context, so it cannot live there.
+# `synchronize` and `ready_for_review` are included because a body edited after
+# opening, or a draft promoted to ready, both change what is being judged.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, ready_for_review]
+
+# Explicit permissions per spec/project/github-actions-best-practices §B:
+# workflow level is the minimum, write scopes are granted per job.
+permissions:
+  contents: read
+
+# A body edited twice in quick succession has nothing to say in the earlier
+# run. Read-only, so a superseded run only wastes a runner.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pr-lint:
+    # Required, not optional: the called workflow's job asks for
+    # `pull-requests: read` and `issues: read`, and a caller that does not grant
+    # what the called workflow declares is not handed a downgraded token --
+    # GitHub refuses to start the workflow at all, with `startup_failure` and no
+    # jobs, no logs and no annotation. That failure mode disabled the stale
+    # workflow here for six weeks (#422). Consumers must grant these too.
+    permissions:
+      contents: read
+      pull-requests: read # lists the changed files for the spec-anchor rule
+      issues: read # reads the labels of linked issues for the traceability rule
+    # Local path, not `nolte/gh-plumbing/...@<ref>`: a local path resolves
+    # against the current commit, so a pull request changing the checker is
+    # judged by its own version. Consumers cannot copy this form -- the
+    # documented consumer pattern is `@<tag>`, see docs/*/workflows/pr-lint.md.
+    uses: ./.github/workflows/reusable-pr-lint.yaml
+    with:
+      # This repository keeps no spec corpus -- the specs it implements live in
+      # nolte/claude-shared -- so there is no `spec/<topic>/<slug>/` path for a
+      # `Refs` line to anchor to. Consumers that do keep one set this true.
+      spec-anchor: false
