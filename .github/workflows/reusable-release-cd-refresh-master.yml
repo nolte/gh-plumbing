@@ -96,15 +96,84 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token || secrets.token }}
 
-      # Reset rather than merge. The presentation branch is a throwaway mirror
-      # of the release tag, so pointing it at the tag says what the branch is
-      # for. The previous `devmasx/merge-branch` step called the `merges` API,
-      # which creates a merge commit and is rejected outright by a
-      # linear-history ruleset on the target (see issue #384).
-      - name: Reset the presentation branch to the release ref
+      # A single write strategy cannot serve every presentation branch, because
+      # real consumer configurations forbid opposite things (issue #414):
+      #
+      #   linear history  -> no merge commits  -> the merge is rejected
+      #   no force pushes -> no rewrite        -> the reset is rejected
+      #
+      # ADR-001 chose the reset to solve the first and did not consider the
+      # second. `gh-plumbing`'s own master is the second case, which is why
+      # v2.0.0 and v2.0.1 both published green while master stayed on v1.1.26.
+      #
+      # So the strategy is read from the target rather than assumed. Both
+      # mechanisms have to be consulted -- classic protection and rulesets are
+      # independent, and either can forbid either operation.
+      - name: Determine the write strategy from the target's protection
+        id: strategy
         env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
+          TARGET: ${{ inputs.target_branch }}
+        run: |
+          set -euo pipefail
+
+          # An unreadable endpoint must not read as "unrestricted": that is the
+          # mistake the branch-protection audit made (#421). Unknown means the
+          # restriction is assumed to be present, so the run degrades to a
+          # refusal with a diagnosis rather than a rejected push.
+          classic=$(gh api "repos/${GITHUB_REPOSITORY}/branches/${TARGET}/protection" 2>/dev/null || echo '')
+          rules=$(gh api "repos/${GITHUB_REPOSITORY}/rules/branches/${TARGET}" 2>/dev/null || echo '[]')
+
+          rule_types=$(echo "$rules" | jq -r '[.[]?.type] | unique | join(",")')
+
+          # `pull_request` blocks every direct write, merge and reset alike.
+          blocks_direct=$(echo "$rules" | jq -r 'any(.[]?; .type == "pull_request")')
+          # Force push: classic `allow_force_pushes`, and the `non_fast_forward`
+          # rule which forbids any history rewrite.
+          rule_no_force=$(echo "$rules" | jq -r 'any(.[]?; .type == "non_fast_forward")')
+          classic_force=$(echo "${classic:-{\}}" | jq -r '.allow_force_pushes.enabled // false')
+          # Merge commits: classic and ruleset linear-history both forbid them.
+          rule_linear=$(echo "$rules" | jq -r 'any(.[]?; .type == "required_linear_history")')
+          classic_linear=$(echo "${classic:-{\}}" | jq -r '.required_linear_history.enabled // false')
+
+          force_ok=false
+          [ "$classic_force" = "true" ] && [ "$rule_no_force" != "true" ] && force_ok=true
+          merge_ok=false
+          [ "$classic_linear" != "true" ] && [ "$rule_linear" != "true" ] && merge_ok=true
+
+          if [ "$blocks_direct" = "true" ]; then
+            mode=blocked
+            reason="a \`pull_request\` ruleset rule requires every change to arrive through a pull request, so neither a merge nor a reset may be pushed directly"
+          elif [ "$merge_ok" = "true" ]; then
+            # Preferred over the reset when both are available: it adds to the
+            # branch instead of rewriting it, so a consumer holding anything on
+            # the presentation branch does not lose it.
+            mode=merge
+            reason="merge commits are permitted"
+          elif [ "$force_ok" = "true" ]; then
+            mode=reset
+            reason="merge commits are forbidden, force pushes are permitted"
+          else
+            mode=blocked
+            reason="the target forbids merge commits and force pushes alike"
+          fi
+
+          {
+            echo "mode=$mode"
+            echo "reason=$reason"
+          } >> "$GITHUB_OUTPUT"
+          echo "Strategy for '${TARGET}': ${mode} -- ${reason}"
+          echo "  classic protection readable: $([ -n "$classic" ] && echo yes || echo 'no (absent or unreadable)')"
+          echo "  ruleset rules: ${rule_types:-(none)}"
+
+      - name: Refresh the presentation branch
+        id: refresh
+        if: steps.strategy.outputs.mode != 'blocked'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
           FROM_REF: ${{ inputs.from_branch }}
           TARGET: ${{ inputs.target_branch }}
+          MODE: ${{ steps.strategy.outputs.mode }}
         run: |
           set -euo pipefail
 
@@ -134,8 +203,21 @@ jobs:
           if [ -z "${EXPECTED}" ]; then
             echo "Target branch '${TARGET}' does not exist yet; creating it."
             git push origin "${SOURCE_SHA}:refs/heads/${TARGET}"
+            action="created"
           elif [ "${EXPECTED}" = "${SOURCE_SHA}" ]; then
             echo "Target branch '${TARGET}' already points at ${SOURCE_SHA}; nothing to do."
+            action="already current"
+          elif [ "${MODE}" = "merge" ]; then
+            # The /merges API, the mechanism that worked before #404 and still
+            # works wherever merge commits are allowed. It is additive, so the
+            # target keeps whatever it already carries.
+            if ! out=$(gh api "repos/${GITHUB_REPOSITORY}/merges" \
+                         -f base="${TARGET}" -f head="${SOURCE_SHA}" \
+                         -f commit_message="chore(release): refresh ${TARGET} to ${FROM_REF}" 2>&1); then
+              echo "::error::Merging ${FROM_REF} into '${TARGET}' failed even though the target reports that merge commits are permitted. The protection may have changed since the check, or the token may lack write access. Response: ${out}" >&2
+              exit 1
+            fi
+            action="merged"
           else
             # --force-with-lease, not --force: if another run advanced the
             # target between the read above and this push, the push aborts
@@ -143,6 +225,7 @@ jobs:
             # this workflow makes that unlikely; the lease makes it safe.
             git push --force-with-lease="${TARGET}:${EXPECTED}" \
               origin "${SOURCE_SHA}:refs/heads/${TARGET}"
+            action="reset"
           fi
 
           {
@@ -150,8 +233,37 @@ jobs:
             echo
             echo "| Field | Value |"
             echo "|---|---|"
+            echo "| Strategy | \`${MODE}\` (${action}) |"
             echo "| Source ref | \`${FROM_REF}\` |"
             echo "| Source commit | \`${SOURCE_SHA}\` |"
             echo "| Target branch | \`${TARGET}\` |"
             echo "| Previous target commit | \`${EXPECTED:-<branch did not exist>}\` |"
           } >> "${GITHUB_STEP_SUMMARY}"
+
+      # Failing loudly is the point. The cascade previously left a stale
+      # presentation branch behind a green release, which is how v2.0.0 went
+      # unnoticed for six weeks. A target this workflow cannot write to is a
+      # configuration decision the operator has to make, not something to
+      # paper over.
+      - name: "Refuse: no permitted write path"
+        if: steps.strategy.outputs.mode == 'blocked'
+        env:
+          TARGET: ${{ inputs.target_branch }}
+          FROM_REF: ${{ inputs.from_branch }}
+          REASON: ${{ steps.strategy.outputs.reason }}
+        run: |
+          set -euo pipefail
+          msg="Cannot refresh '${TARGET}' to ${FROM_REF}: ${REASON}. Grant the release App a bypass actor on the target's ruleset, relax the rule, or stop refreshing this branch and point consumers at the release tag instead (issue #414, ADR-001)."
+          echo "::error::${msg}" >&2
+          {
+            echo "### Presentation branch NOT refreshed"
+            echo
+            echo "${msg}"
+            echo
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Target branch | \`${TARGET}\` |"
+            echo "| Source ref | \`${FROM_REF}\` |"
+            echo "| Reason | ${REASON} |"
+          } >> "${GITHUB_STEP_SUMMARY}"
+          exit 1
