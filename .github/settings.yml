@@ -7,7 +7,14 @@
 # file as well (a comment touch is enough) so the App re-runs the merge.
 # Tracked by https://github.com/nolte/gh-plumbing/issues/331.
 #
-# Last propagation: 2026-09-13 — propagate the new `on-hold` label from
+# Last propagation: 2026-09-13 (second) — require the `pr-lint / PR Lint`
+# context on develop. This repository ships reusable-pr-lint.yaml and did not
+# run it: two consumers already require the check while the origin judged its
+# own pull requests by nothing (#386). Verify through the API afterwards, not
+# the settings page — #387 is exactly the case where a declaration lands here
+# and does not apply.
+#
+# Previous propagation: 2026-09-13 — propagate the new `on-hold` label from
 # commons-settings.yml. reusable-stale.yaml exempts `bug,wip,on-hold`, but
 # neither `wip` nor `on-hold` had ever been declared, so that exemption only
 # ever worked for `bug`. The label was also created directly through the API
@@ -56,7 +63,8 @@ branches:
   # contexts are "<caller-job-id> / <reusable-job-display-name>":
   # `static` job → reusable-pre-commit's "Static CI Tests";
   # `docs` job → reusable-mkdocs-build's "MkDocs Build";
-  # `actionlint` job → reusable-actionlint's "Workflow Lint".
+  # `actionlint` job → reusable-actionlint's "Workflow Lint";
+  # `pr-lint` job → reusable-pr-lint's "PR Lint".
   - name: develop
     protection:
       required_status_checks:
@@ -65,6 +73,7 @@ branches:
           - static / Static CI Tests
           - docs / MkDocs Build
           - actionlint / Workflow Lint
+          - pr-lint / PR Lint
       # Push restrictions are only available for organization-owned repositories
       # (GitHub REST, Update branch protection); the commons' apps restriction
       # makes the whole develop update fail with 422 on this user-owned repository,
