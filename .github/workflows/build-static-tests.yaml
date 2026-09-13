@@ -77,6 +77,17 @@ jobs:
       install-command: pip install pytest==9.1.1 pytest-cov==7.1.0
       coverage-source: check_pr_body
       pytest-args: tests
+  # The branch-protection audit is Python too, and its verdicts are the kind
+  # nobody re-derives by hand -- #421 was the audit contradicting its own detail
+  # lines for six weeks' worth of runs. Tested here for the same reason as the
+  # pr-lint checker above.
+  audit-tests:
+    uses: ./.github/workflows/reusable-python-coverage.yaml
+    with:
+      working-directory: scripts
+      install-command: pip install pytest==9.1.1 pytest-cov==7.1.0
+      coverage-source: branch_protection_audit
+      pytest-args: tests
   chain-bench:
     uses: ./.github/workflows/reusable-chain-bench.yaml
     secrets:
