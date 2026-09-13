@@ -4,12 +4,22 @@ on:
   workflow_call:
     inputs:
       tag:
-        required: true
+        required: false
         type: string
+        default: ""
         description: |
           Tag to publish. MUST match an existing release-drafter draft on the
-          repository's default branch. No "newest wins" heuristic per
-          spec/project/release-automation/ §Operational contract.
+          repository's default branch.
+
+          Optional per spec/project/release-automation/ §Operational contract:
+          left empty, a single open draft resolves to itself, and several open
+          drafts produce an actionable error listing them. Declaring it
+          required made both paths unreachable -- the caller had to name a tag
+          it could only learn by looking, and the multi-draft case could never
+          be reported because the tag had already selected one.
+
+          This is not a "newest wins" heuristic: exactly one candidate, or an
+          error naming every candidate.
       dry_run:
         required: false
         type: boolean
@@ -119,7 +129,7 @@ jobs:
         id: draft
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
-          TAG: ${{ inputs.tag }}
+          REQUESTED_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           # gh release list on the runner CLI does not expose targetCommitish;
@@ -132,19 +142,36 @@ jobs:
             exit 1
           fi
 
-          match=$(echo "$drafts" | jq --arg t "$TAG" '[.[] | select(.tagName == $t)]')
-          match_count=$(echo "$match" | jq 'length')
+          if [[ -z "$REQUESTED_TAG" ]]; then
+            # Omitted tag: exactly one candidate, or an error naming every one
+            # of them. Never "newest wins" -- picking silently is how a release
+            # gets published from a draft nobody was looking at.
+            if [[ "$total" != "1" ]]; then
+              echo "::error::No tag given and $total drafts are open. Pass 'tag' explicitly. Open drafts:"
+              echo "$drafts" | jq -r '.[] | "  - \(.tagName)"' >&2
+              exit 1
+            fi
+            TAG=$(echo "$drafts" | jq -r '.[0].tagName')
+            echo "::notice::No tag given; resolved the single open draft '$TAG'."
+          else
+            TAG="$REQUESTED_TAG"
+            match_count=$(echo "$drafts" | jq --arg t "$TAG" '[.[] | select(.tagName == $t)] | length')
 
-          if [[ "$match_count" == "0" ]]; then
-            echo "::error::No draft release with tag '$TAG'. Open drafts:"
-            echo "$drafts" | jq -r '.[] | "  - \(.tagName)"' >&2
-            exit 1
+            if [[ "$match_count" == "0" ]]; then
+              echo "::error::No draft release with tag '$TAG'. Open drafts:"
+              echo "$drafts" | jq -r '.[] | "  - \(.tagName)"' >&2
+              exit 1
+            fi
+
+            if [[ "$match_count" != "1" ]]; then
+              echo "::error::Multiple drafts match tag '$TAG' — release state is corrupt; resolve manually."
+              exit 1
+            fi
           fi
 
-          if [[ "$match_count" != "1" ]]; then
-            echo "::error::Multiple drafts match tag '$TAG' — release state is corrupt; resolve manually."
-            exit 1
-          fi
+          # Every later step reads this rather than inputs.tag, which is empty
+          # on the resolved path.
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
           target=$(gh release view "$TAG" --json targetCommitish --jq .targetCommitish)
           if [[ "$target" == refs/heads/* ]]; then
@@ -164,7 +191,7 @@ jobs:
       - name: Detect project type and load version-bearing files
         id: vbf
         env:
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ steps.draft.outputs.tag }}
         run: |
           set -euo pipefail
           python3 -c "import yaml" 2>/dev/null || pip install --quiet pyyaml
@@ -303,7 +330,7 @@ jobs:
         if: ${{ inputs.auto-align && steps.app-token.outputs.token != '' && steps.vbf.outputs.count != '0' }}
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ steps.draft.outputs.tag }}
           DRY_RUN: ${{ inputs.dry_run }}
           APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: |
@@ -432,7 +459,7 @@ jobs:
       - name: Verify version-bearing-file alignment
         if: steps.vbf.outputs.count != '0'
         env:
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ steps.draft.outputs.tag }}
           TARGET_SHA: ${{ steps.align.outputs.target_sha || steps.draft.outputs.target_sha }}
         run: |
           set -euo pipefail
@@ -504,7 +531,7 @@ jobs:
       - name: Disclose target state in job summary
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ steps.draft.outputs.tag }}
           TARGET_SHA: ${{ steps.align.outputs.target_sha || steps.draft.outputs.target_sha }}
           DRY_RUN: ${{ inputs.dry_run }}
           VBF_SOURCE: ${{ steps.vbf.outputs.source }}
@@ -512,6 +539,11 @@ jobs:
         run: |
           set -euo pipefail
           created_at=$(gh release view "$TAG" --json createdAt --jq .createdAt)
+          # The release title, which the operational contract requires the
+          # summary to disclose. A draft's title and its tag are set
+          # independently, so a wrong title is invisible when only the tag is
+          # shown -- and the title is what readers of the release see first.
+          title=$(gh release view "$TAG" --json name --jq .name)
           body_head=$(gh release view "$TAG" --json body --jq .body | head -c 800)
 
           {
@@ -520,6 +552,7 @@ jobs:
             echo "| Field | Value |"
             echo "|---|---|"
             echo "| Tag | \`$TAG\` |"
+            echo "| Title | ${title:-_(empty)_} |"
             echo "| Target SHA | \`$TARGET_SHA\` |"
             echo "| Draft created | $created_at |"
             echo "| Triggerer | @${GITHUB_TRIGGERING_ACTOR:-$GITHUB_ACTOR} |"
@@ -550,7 +583,7 @@ jobs:
         if: steps.vbf.outputs.source == 'hacs'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ steps.draft.outputs.tag }}
           TARGET_SHA: ${{ steps.align.outputs.target_sha || steps.draft.outputs.target_sha }}
           DRY_RUN: ${{ inputs.dry_run }}
           ASSET_FILENAME: ${{ inputs.asset-filename }}
@@ -618,11 +651,40 @@ jobs:
           echo "::notice::Attached '$filename' to draft '$TAG'."
           { echo; echo "### HACS asset"; echo; echo "- Attached \`$filename\` to the release before publish."; } >> "$GITHUB_STEP_SUMMARY"
 
+      # Pre-publish, deliberately. The cascade check below this runs *after* the
+      # flip, so it can only report a gap that already happened -- and a release
+      # is not revocable. A presentation branch left stale behind a green
+      # release is exactly the state #414 describes, and v2.0.0 and v2.0.1 both
+      # reached it. Checking first turns "discovered afterwards" into "refused
+      # beforehand".
+      #
+      # `state` distinguishes the two failure modes the spec names: 404 means
+      # the workflow is absent, `disabled_inactivity` means GitHub suspended it
+      # after 60 days without a scheduled run, and `disabled_manually` means
+      # somebody turned it off. All three leave the cascade dead while the
+      # release looks healthy.
+      - name: Verify the cascade workflow exists and is active
+        if: ${{ inputs.dry_run != true }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
+          CASCADE: release-cd-refresh-master.yml
+        run: |
+          set -euo pipefail
+          if ! state=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${CASCADE}" --jq .state 2>/dev/null); then
+            echo "::error::${CASCADE} does not exist in this repository. Publishing would leave the presentation branch stale behind a green release (see #414). Add the workflow, or remove this gate deliberately if the repository has no presentation branch."
+            exit 1
+          fi
+          if [[ "$state" != "active" ]]; then
+            echo "::error::${CASCADE} exists but reports state '$state'. GitHub disables a scheduled workflow after 60 days of repository inactivity ('disabled_inactivity'), and it can be switched off by hand ('disabled_manually'). Re-enable it before publishing: gh workflow enable ${CASCADE}"
+            exit 1
+          fi
+          echo "Cascade workflow ${CASCADE} is active."
+
       - name: Publish (flip draft=false)
         if: ${{ inputs.dry_run != true }}
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ steps.draft.outputs.tag }}
         run: |
           set -euo pipefail
           gh release edit "$TAG" --draft=false
@@ -639,7 +701,7 @@ jobs:
       - name: Dry-run summary
         if: ${{ inputs.dry_run == true }}
         env:
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ steps.draft.outputs.tag }}
         run: |
           {
             echo
@@ -658,7 +720,7 @@ jobs:
         if: ${{ inputs.dry_run != true }}
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ steps.draft.outputs.tag }}
         run: |
           set -euo pipefail
           is_draft=$(gh release view "$TAG" --json isDraft --jq .isDraft)
