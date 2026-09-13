@@ -12,6 +12,16 @@ permissions:
 jobs:
   stale:
     permissions:
+      # Required, not optional. A job-level block replaces the file's
+      # top-level one instead of adding to it, so naming the two write scopes
+      # here dropped the `contents: read` declared above -- and the called
+      # workflow declares `contents: read` at its own workflow level. A caller
+      # that does not grant what the called workflow asks for does not get a
+      # downgraded token: GitHub refuses to start the workflow at all, with
+      # `startup_failure` and no jobs, no logs and no annotation. That is the
+      # same failure mode the `actionlint` caller in build-static-tests.yaml
+      # documents, and it silently disabled this workflow for six weeks.
+      contents: read
       issues: write # the called workflow labels and closes stale issues
       pull-requests: write # ... and stale PRs
     uses: ./.github/workflows/reusable-stale.yaml
