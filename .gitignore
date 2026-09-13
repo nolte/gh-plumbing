@@ -15,6 +15,16 @@ site
 .task
 .claude/
 
+# Python build and test artefacts. Two test trees live under scripts/ -- the
+# pr-lint checker's and the branch-protection audit's -- and pytest writes
+# these beside them. Neither was covered, so running the tests locally left
+# untracked files in `git status`, one `git add .` away from being committed.
+__pycache__/
+*.py[cod]
+.coverage
+.coverage.*
+.pytest_cache/
+
 # Terraform: ignore the local plugin cache and per-run plan files;
 # .terraform.lock.hcl is kept under version control on purpose.
 **/.terraform/
