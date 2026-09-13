@@ -79,6 +79,7 @@ plugins:
             Getting started: Erste Schritte
             Workflows: Workflows
             Static tests: Statische Tests
+            Pull-request lint: Pull-Request-Lint
             Documentation: Dokumentation
             Release: Release
             HACS validation: HACS-Validierung
@@ -137,6 +138,7 @@ nav:
   - Workflows:
       - workflows/index.md
       - Static tests: workflows/static-tests.md
+      - Pull-request lint: workflows/pr-lint.md
       - Coverage: workflows/coverage.md
       - Documentation: workflows/documentation.md
       - Release: workflows/release.md

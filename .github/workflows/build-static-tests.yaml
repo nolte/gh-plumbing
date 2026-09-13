@@ -47,6 +47,17 @@ jobs:
       # calling reusable-actionlint must grant this too.
       checks: write
     uses: ./.github/workflows/reusable-actionlint.yaml
+    with:
+      # actionlint 1.7.12, the latest release and the one reviewdog bundles,
+      # doesn't know the `job.workflow_repository` / `job.workflow_sha` context
+      # properties GitHub documents for a reusable workflow checking out its own
+      # source (docs: Contexts reference, `job` context). reusable-pr-lint.yaml
+      # needs exactly those. The pattern stays space-free because the action
+      # word-splits this input unquoted, so `\s` stands for each space. It matches
+      # only the `job` object type's message for those two names; a misspelled
+      # `github.job_workflow_sha` elsewhere is still reported. Drop it once
+      # actionlint knows them.
+      actionlint_flags: -ignore="workflow_(repository|sha)"\sis\snot\sdefined\sin\sobject\stype\s\{check_run_id
   static:
     uses: ./.github/workflows/reusable-pre-commit.yaml
   docs:
@@ -57,6 +68,15 @@ jobs:
       security-events: write # reusable-trivy uploads SARIF to the Security tab
       actions: read # required by upload-sarif on private repositories
     uses: ./.github/workflows/reusable-trivy.yaml
+  # The checker behind reusable-pr-lint.yaml is Python with its own tests; they
+  # run here so a pull request that changes the rules is judged by them.
+  pr-lint-tests:
+    uses: ./.github/workflows/reusable-python-coverage.yaml
+    with:
+      working-directory: scripts/pr-lint
+      install-command: pip install pytest==9.1.1 pytest-cov==7.1.0
+      coverage-source: check_pr_body
+      pytest-args: tests
   chain-bench:
     uses: ./.github/workflows/reusable-chain-bench.yaml
     secrets:
