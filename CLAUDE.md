@@ -20,7 +20,7 @@ Changes here propagate automatically to every repo that references them. Treat e
 
 ## Common commands
 
-The repo uses **asdf** for tool pinning (`.tool-versions`: act, python, task).
+The repo uses **asdf** for tool pinning (`.tool-versions`: act, python, task, vale).
 
 ```sh
 asdf install                                   # install pinned tool versions
