@@ -7,7 +7,15 @@
 # file as well (a comment touch is enough) so the App re-runs the merge.
 # Tracked by https://github.com/nolte/gh-plumbing/issues/331.
 #
-# Last propagation: 2026-08-01 (second) — propagate the new `experimental`
+# Last propagation: 2026-09-13 — propagate the new `on-hold` label from
+# commons-settings.yml. reusable-stale.yaml exempts `bug,wip,on-hold`, but
+# neither `wip` nor `on-hold` had ever been declared, so that exemption only
+# ever worked for `bug`. The label was also created directly through the API
+# here rather than waiting for this sync: the stale caller was repaired the
+# same day (#422) after 43 straight `startup_failure` runs, and its next
+# scheduled run would have staled three live issues (#394, #387, #386).
+#
+# Previous propagation: 2026-08-01 (second) — propagate the new `experimental`
 # label from commons-settings.yml so the Settings App creates it portfolio-wide.
 # The `exp/` autolabeler in commons-release-drafter.yml is inert until the label
 # exists in the repository it fires in.
