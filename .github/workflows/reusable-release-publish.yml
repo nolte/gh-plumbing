@@ -680,6 +680,65 @@ jobs:
           fi
           echo "Cascade workflow ${CASCADE} is active."
 
+      # The release notes are the one artefact of a release that nobody reviews
+      # again. release-drafter assembles them from pull-request titles and stops
+      # touching the release the moment it is published, so the flip freezes the
+      # text. This is the last point at which it can still change.
+      #
+      # Runs on the dry run too, unlike the cascade gate below: checking the
+      # prose is exactly the kind of thing an operator wants to try before
+      # committing to a publish.
+      #
+      # Errors block, nothing softer does. `.vale.ini` sets
+      # `MinAlertLevel = suggestion` for authoring; `--minAlertLevel=error`
+      # overrides it here so passive voice and long sentences stay out of a
+      # release gate. Prose debt must not hold up a fix.
+      #
+      # Vale is pinned to the version nolte/claude-shared's CI installs and the
+      # asdf-managed local one, so the same text yields the same alerts in all
+      # three places. Acquired the same way claude-shared does it -- this
+      # repository has no other binary download, and inventing a second
+      # mechanism for one step is worse than following the portfolio's.
+      - name: Check the release notes with Vale
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
+          TAG: ${{ steps.draft.outputs.tag }}
+          VALE_VERSION: "3.15.2"
+        run: |
+          set -euo pipefail
+          body=$(gh release view "$TAG" --json body --jq .body)
+          if [[ -z "${body//[[:space:]]/}" ]]; then
+            echo "::warning::Release notes for '$TAG' are empty; nothing to check."
+            exit 0
+          fi
+
+          # Acquisition failures warn, they do not block. An unreachable release
+          # asset or style server says nothing about the notes, and a release
+          # refused for that reason is a worse outcome than one published
+          # without a prose check. A Vale *finding* is a different matter and
+          # does block, below.
+          if ! curl -fsSL "https://github.com/errata-ai/vale/releases/download/v${VALE_VERSION}/vale_${VALE_VERSION}_Linux_64-bit.tar.gz" \
+               | sudo tar -xz -C /usr/local/bin vale; then
+            echo "::warning::Could not install Vale ${VALE_VERSION}. Skipping the release-notes check; the notes were NOT verified."
+            exit 0
+          fi
+          if ! vale sync; then
+            echo "::warning::'vale sync' could not fetch the style packages. Skipping the release-notes check; the notes were NOT verified."
+            exit 0
+          fi
+
+          # Written into the repository root so Vale resolves .vale.ini and its
+          # `[*.md]` section the same way it does for any documentation page.
+          notes=release-notes.vale.md
+          trap 'rm -f "$notes"' EXIT
+          printf '%s\n' "$body" > "$notes"
+
+          if ! vale --minAlertLevel=error "$notes"; then
+            echo "::error::The release notes for '$TAG' carry Vale errors. Edit the draft body (gh release edit '$TAG' --notes-file ...) and re-run -- publishing freezes this text."
+            exit 1
+          fi
+          echo "Release notes pass Vale at error level."
+
       - name: Publish (flip draft=false)
         if: ${{ inputs.dry_run != true }}
         env:
