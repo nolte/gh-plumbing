@@ -51,6 +51,12 @@ categories:
     labels:
       - "fix"
       - "bug"
+  # Only labels that are a category in their own right. `project-config`,
+  # `cicd` and `dependencies` used to sit here too, and they are *area* labels
+  # -- boring-cyborg derives them from the touched paths, so they co-occur with
+  # a type label rather than replacing it. release-drafter lists a pull request
+  # under every matching category, so `fix(workflows):` appeared under both Bug
+  # Fixes and Maintenance, and `fix(vale):` under three headings at once (#413).
   - title: 🧰 Maintenance
     labels:
       - "chore"
@@ -58,11 +64,32 @@ categories:
       # `documentations` entry matched nothing in any portfolio repository.
       - "docs"
       - "documentation"
-      - "project-config"
-      - "cicd"
-      - "dependencies"
 
 autolabeler:
+  # Derive the type label from the title, so every pull request carries exactly
+  # one and the categories above always find it. Without this the type label was
+  # applied by hand and the result was arbitrary: of twelve consecutive merges,
+  # #415 carried `fix` *and* `chore` (two categories), #418 was a `feat(...)`
+  # carrying only `chore` (filed under Maintenance), and #420 carried no type
+  # label at all (the uncategorised remainder). Deriving it removes all three
+  # shapes at once, and is what makes reducing Maintenance above safe: a pull
+  # request touching only `.github/workflows/**` still lands under its type.
+  #
+  # `chore(release):` matches both this and the `release` rule below; that is
+  # intended, since `release` is an exclude-label and wins by removing the entry
+  # from the notes entirely.
+  - label: "feat"
+    title:
+      - '/^feat(\(.+\))?!?:/'
+  - label: "fix"
+    title:
+      - '/^fix(\(.+\))?!?:/'
+  - label: "chore"
+    title:
+      - '/^chore(\(.+\))?!?:/'
+  - label: "docs"
+    title:
+      - '/^docs(\(.+\))?!?:/'
   - label: "release"
     title:
       - '/^chore\(release\):/'
