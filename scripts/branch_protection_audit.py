@@ -165,12 +165,41 @@ def audit_repo(repo: str, branch: str, commons, token: str) -> dict:
     try:
         protection = api(f"repos/{repo}/branches/{branch}/protection", token)
     except Forbidden:
-        result["status"] = "unreadable"
-        result["live"] = []
+        # The ruleset read above already succeeded, and a ruleset context gates
+        # a merge whether or not classic protection can be read. Discarding it
+        # here reported `Enforced 0` and `unreadable` for branches a ruleset was
+        # actively protecting -- the audit contradicting its own detail lines
+        # (#421). Keep what was read; report only what genuinely is unknown.
+        #
+        # None, not []: "could not be read" is a different fact from "read and
+        # empty", and render() prints them differently.
+        result["classic"] = None
+        result["live"] = ruleset_ctx
+        missing = [c for c in declared if c not in ruleset_ctx]
+        result["missing"] = missing
         result["notes"].append(
-            "the token may not read branch protection here; this is NOT evidence "
-            "that the branch is unprotected"
+            "the token may not read classic branch protection here; the ruleset "
+            "read succeeded and its contexts are counted as enforced"
         )
+        if not missing:
+            # Every declared context is already enforced by a ruleset. Classic
+            # protection can only add to that, so the answer is complete even
+            # though half of it is unreadable, and the audit must not fail.
+            result["status"] = "ok"
+            if declared:
+                result["notes"].append(
+                    "every declared context is enforced by a ruleset -- protected, "
+                    "just not by the Settings App"
+                )
+        else:
+            # The gap may or may not be covered by the classic protection that
+            # could not be read. That is unknown, and `drift` would assert
+            # something stronger than the evidence supports.
+            result["status"] = "unreadable"
+            result["notes"].append(
+                f"no ruleset enforces: {', '.join(missing)} -- classic protection "
+                "could not be read, so this is unknown rather than proven drift"
+            )
         return result
     if protection is None:
         result["classic"] = []
@@ -272,11 +301,17 @@ def render(results: list[dict]) -> str:
                 lines.append(f"- declared: `{'`, `'.join(r['declared'])}`")
             if r.get("live"):
                 lines.append(f"- enforced: `{'`, `'.join(r['live'])}`")
-            if r.get("classic") is not None or r.get("ruleset"):
-                lines.append(
-                    f"  - via classic protection: "
-                    f"{'`' + '`, `'.join(r['classic']) + '`' if r.get('classic') else '(none)'}"
-                )
+            if "classic" in r or r.get("ruleset"):
+                if r.get("classic") is None and "classic" in r:
+                    # Distinct from `(none)`: the endpoint refused the read, so
+                    # nothing is known about classic protection here. Reporting
+                    # that as "none" is what made the audit look self-contradictory.
+                    classic_repr = "(not readable with this token)"
+                elif r.get("classic"):
+                    classic_repr = "`" + "`, `".join(r["classic"]) + "`"
+                else:
+                    classic_repr = "(none)"
+                lines.append(f"  - via classic protection: {classic_repr}")
                 lines.append(
                     f"  - via ruleset: "
                     f"{'`' + '`, `'.join(r['ruleset']) + '`' if r.get('ruleset') else '(none)'}"
