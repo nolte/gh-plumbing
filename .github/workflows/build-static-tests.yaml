@@ -87,7 +87,25 @@ jobs:
       working-directory: scripts
       install-command: pip install pytest==9.1.1 pytest-cov==7.1.0
       coverage-source: branch_protection_audit
-      pytest-args: tests
+      # Named explicitly rather than `tests`, which would run every suite in
+      # the directory and report their lines against this job's coverage
+      # source. One job per script keeps each percentage meaningful.
+      pytest-args: tests/test_branch_protection_audit.py
+  # Same reasoning as the two jobs above: the freshness check reports on
+  # documentation nobody re-reads, so a silent regression in it would go
+  # unnoticed exactly as long as #421 did.
+  docs-freshness-tests:
+    uses: ./.github/workflows/reusable-python-coverage.yaml
+    with:
+      working-directory: scripts
+      install-command: pip install pytest==9.1.1 pytest-cov==7.1.0
+      coverage-source: docs_freshness
+      pytest-args: tests/test_docs_freshness.py
+  # The check itself, not its tests. It runs on the pull request so a page
+  # added in one language only, or a reference to a workflow that no longer
+  # exists, fails here rather than reaching a release.
+  docs-freshness:
+    uses: ./.github/workflows/reusable-docs-freshness.yaml
   chain-bench:
     uses: ./.github/workflows/reusable-chain-bench.yaml
     secrets:

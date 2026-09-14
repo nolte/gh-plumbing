@@ -63,6 +63,14 @@ uses: nolte/gh-plumbing/.github/workflows/reusable-<name>.yaml@<tag>
 
     [:octicons-arrow-right-24: Coverage-Workflows](coverage.md)
 
+-   :material-shield-check: **Branch-Protection-Audit**
+
+    ---
+
+    Deklarierte Branch-Protection mit dem vergleichen, was GitHub durchsetzt — klassische Protection und Rulesets.
+
+    [:octicons-arrow-right-24: Branch-Protection-Audit](branch-protection-audit.md)
+
 -   :material-book-open-variant: **Dokumentation**
 
     ---

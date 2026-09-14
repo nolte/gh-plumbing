@@ -94,6 +94,14 @@ uses: nolte/gh-plumbing/.github/workflows/reusable-<name>.yaml@<tag>
 
     [:octicons-arrow-right-24: Container images](container.md)
 
+-   :material-shield-check: **Branch-protection audit**
+
+    ---
+
+    Compare declared branch protection against what GitHub enforces, across classic protection and rulesets.
+
+    [:octicons-arrow-right-24: Branch-protection audit](branch-protection-audit.md)
+
 </div>
 
 !!! info "Conventions"
