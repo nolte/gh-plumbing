@@ -79,6 +79,25 @@ on:
         required: false
         type: boolean
         default: false
+      require-cascade:
+        description: |
+          Require `release-cd-refresh-master.yml` to exist and be active before
+          publishing. On by default, because the failure it prevents is the one
+          #414 describes: a green release leaving the presentation branch
+          stale, unnoticed for weeks.
+
+          Set false only for a repository that deliberately has no presentation
+          branch to refresh. The gate's own error message told the reader to
+          "remove this gate deliberately" and gave them no way to do it -- this
+          input is that way. Without it, a repository that retires its cascade
+          can never publish again (issue #437).
+
+          The gate still refuses when the workflow exists but is disabled, and
+          that is not affected by this input: a cascade that is present and
+          switched off is a different fact from one that was never wanted.
+        required: false
+        type: boolean
+        default: true
     secrets:
       token:
         required: true
@@ -664,14 +683,14 @@ jobs:
       # somebody turned it off. All three leave the cascade dead while the
       # release looks healthy.
       - name: Verify the cascade workflow exists and is active
-        if: ${{ inputs.dry_run != true }}
+        if: ${{ inputs.dry_run != true && inputs.require-cascade }}
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
           CASCADE: release-cd-refresh-master.yml
         run: |
           set -euo pipefail
           if ! state=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${CASCADE}" --jq .state 2>/dev/null); then
-            echo "::error::${CASCADE} does not exist in this repository. Publishing would leave the presentation branch stale behind a green release (see #414). Add the workflow, or remove this gate deliberately if the repository has no presentation branch."
+            echo "::error::${CASCADE} does not exist in this repository. Publishing would leave the presentation branch stale behind a green release (see #414). Add the workflow, or set 'require-cascade: false' if this repository deliberately has no presentation branch."
             exit 1
           fi
           if [[ "$state" != "active" ]]; then
