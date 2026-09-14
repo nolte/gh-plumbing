@@ -79,15 +79,18 @@ plugins:
             Getting started: Erste Schritte
             Workflows: Workflows
             Static tests: Statische Tests
+            Pull-request lint: Pull-Request-Lint
             Documentation: Dokumentation
             Release: Release
             HACS validation: HACS-Validierung
+            Container images: Container-Images
             Probot: Probot
             Settings: Settings
             Labelling: Labelling
             Portfolio App: Portfolio-App
             Setup: Setup
             Development: Entwicklung
+            Decisions: Entscheidungen
 
 markdown_extensions:
   - abbr
@@ -135,15 +138,24 @@ nav:
   - Workflows:
       - workflows/index.md
       - Static tests: workflows/static-tests.md
+      - Pull-request lint: workflows/pr-lint.md
       - Coverage: workflows/coverage.md
       - Documentation: workflows/documentation.md
       - Release: workflows/release.md
       - HACS validation: workflows/hacs.md
+      - Container images: workflows/container.md
+      - Branch-protection audit: workflows/branch-protection-audit.md
   - Probot:
       - probot/index.md
       - Settings: probot/settings.md
       - Labelling: probot/labelling.md
   - Portfolio App:
       - Setup: portfolio-app/setup.md
+  - Decisions:
+      - decisions/index.md
+      - ADR-001 Presentation branch: decisions/adr-001-presentation-branch-reset.md
+      - ADR-002 Branch protection: decisions/adr-002-branch-protection-verification.md
+      - ADR-003 Workflow validation: decisions/adr-003-workflow-validation-gate.md
+      - ADR-004 Spec-drift routing: decisions/adr-004-spec-drift-routing.md
   - Development:
       - development/index.md

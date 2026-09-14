@@ -7,7 +7,33 @@
 # file as well (a comment touch is enough) so the App re-runs the merge.
 # Tracked by https://github.com/nolte/gh-plumbing/issues/331.
 #
-# Last propagation: 2026-07-22 — propagate new commons labels (frontend,
+# Last propagation: 2026-09-13 (second) — require the `pr-lint / PR Lint`
+# context on develop. This repository ships reusable-pr-lint.yaml and did not
+# run it: two consumers already require the check while the origin judged its
+# own pull requests by nothing (#386). Verify through the API afterwards, not
+# the settings page — #387 is exactly the case where a declaration lands here
+# and does not apply.
+#
+# Previous propagation: 2026-09-13 — propagate the new `on-hold` label from
+# commons-settings.yml. reusable-stale.yaml exempts `bug,wip,on-hold`, but
+# neither `wip` nor `on-hold` had ever been declared, so that exemption only
+# ever worked for `bug`. The label was also created directly through the API
+# here rather than waiting for this sync: the stale caller was repaired the
+# same day (#422) after 43 straight `startup_failure` runs, and its next
+# scheduled run would have staled three live issues (#394, #387, #386).
+#
+# Previous propagation: 2026-08-01 (second) — propagate the new `experimental`
+# label from commons-settings.yml so the Settings App creates it portfolio-wide.
+# The `exp/` autolabeler in commons-release-drafter.yml is inert until the label
+# exists in the repository it fires in.
+#
+# Previous propagation: 2026-08-01 — add the `actionlint / Workflow Lint` required
+# context (issue #398). Verify the result through the API rather than the
+# settings page: issue #387 found that five of nine consumers silently drift
+# between declared and live protection, so a declaration landing here is not
+# evidence that it applied.
+#
+# Previous propagation: 2026-07-22 — propagate new commons labels (frontend,
 # backend, test, security) added to commons-settings.yml so the Settings
 # App re-runs the `_extends` merge and creates them portfolio-wide.
 #
@@ -36,7 +62,9 @@ branches:
   # required_status_checks.contexts is overridden here. The check
   # contexts are "<caller-job-id> / <reusable-job-display-name>":
   # `static` job → reusable-pre-commit's "Static CI Tests";
-  # `docs` job → reusable-mkdocs-build's "MkDocs Build".
+  # `docs` job → reusable-mkdocs-build's "MkDocs Build";
+  # `actionlint` job → reusable-actionlint's "Workflow Lint";
+  # `pr-lint` job → reusable-pr-lint's "PR Lint".
   - name: develop
     protection:
       required_status_checks:
@@ -44,3 +72,10 @@ branches:
         contexts:
           - static / Static CI Tests
           - docs / MkDocs Build
+          - actionlint / Workflow Lint
+          - pr-lint / PR Lint
+      # Push restrictions are only available for organization-owned repositories
+      # (GitHub REST, Update branch protection); the commons' apps restriction
+      # makes the whole develop update fail with 422 on this user-owned repository,
+      # so contexts declared after it never applied (nolte/gh-plumbing#416).
+      restrictions: null

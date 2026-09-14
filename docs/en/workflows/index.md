@@ -3,8 +3,24 @@
 Reusable GitHub Actions workflows live under `.github/workflows/reusable-*.y{a}ml`. Consumers reference them via:
 
 ```yaml
-uses: nolte/gh-plumbing/.github/workflows/reusable-<name>.yaml@develop
+uses: nolte/gh-plumbing/.github/workflows/reusable-<name>.yaml@<tag>
 ```
+
+!!! warning "Replace `<tag>` with a release tag, never `@develop`"
+
+    `<tag>` is a placeholder on purpose. Pick a version from the
+    [releases page](https://github.com/nolte/gh-plumbing/releases), for example
+    `@v1.1.26`, and let Renovate propose the bumps.
+
+    These pages previously showed `@develop`, so consumers that followed them
+    ended up unpinned *because* they followed the documentation. A branch
+    reference resolves to whatever that branch points at when your workflow
+    runs, so a change here reaches your CI immediately and without review.
+
+    This repository's own wrapper workflows use a local path, such as
+    `uses: ./.github/workflows/reusable-trivy.yaml`. That form resolves against
+    the current commit, so a pull request here tests the workflows it changes.
+    A consumer can't use it, because the file lives in another repository.
 
 ---
 
@@ -29,6 +45,14 @@ uses: nolte/gh-plumbing/.github/workflows/reusable-<name>.yaml@develop
     Pre-commit + EditorConfig linting for any repository.
 
     [:octicons-arrow-right-24: reusable-pre-commit](static-tests.md)
+
+-   :material-source-pull: **Pull-request lint**
+
+    ---
+
+    Conventional-Commits title, required body sections, class sweep, and audit traceability.
+
+    [:octicons-arrow-right-24: reusable-pr-lint](pr-lint.md)
 
 -   :material-chart-box-outline: **Coverage**
 
@@ -61,6 +85,22 @@ uses: nolte/gh-plumbing/.github/workflows/reusable-<name>.yaml@develop
     Validate a HACS custom integration with `hacs/action` and `hassfest`, and ship the release ZIP asset.
 
     [:octicons-arrow-right-24: HACS validation](hacs.md)
+
+-   :material-docker: **Container images**
+
+    ---
+
+    Lint and dry-build a `Dockerfile`, then publish an image with platform-signed build provenance.
+
+    [:octicons-arrow-right-24: Container images](container.md)
+
+-   :material-shield-check: **Branch-protection audit**
+
+    ---
+
+    Compare declared branch protection against what GitHub enforces, across classic protection and rulesets.
+
+    [:octicons-arrow-right-24: Branch-protection audit](branch-protection-audit.md)
 
 </div>
 

@@ -28,6 +28,28 @@ repository:
 !!! tip "Overrides"
     Schlüssel in der lokalen `.github/settings.yml` überschreiben die geerbten Werte. Dort nur angeben, was vom geteilten Default abweicht.
 
+!!! danger "`topics` erwartet einen kommagetrennten String, niemals eine YAML-Liste"
+    `topics: a, b, c` schreiben, wie oben. Eine Liste kostet den kompletten
+    `branches:`-Block, und nichts meldet das.
+
+    `probot/settings` ruft `.split()` auf dem Wert auf
+    (`lib/plugins/repository.js`), eine Liste löst also `TypeError` aus — und
+    zwar *nachdem* der `PATCH` auf das Repository bereits durchgelaufen ist.
+    Das lehnt das `Promise.all` ab, hinter dem die App den `branches`-Abschnitt
+    zurückstellt. Die Branch-Protection greift damit nie.
+
+    Beschreibung, Homepage, Merge-Buttons und Labels kommen trotzdem an, denn
+    sie hängen am früheren `PATCH` oder laufen als Geschwister-Promises. Das
+    Repository sieht deshalb konfiguriert aus, während jeder erforderliche
+    Status-Check tatsächlich nur beratend ist.
+
+    ```yaml
+    topics: templating, cookiecutter, github   # String, keine Liste
+    ```
+
+    [Issue #416](https://github.com/nolte/gh-plumbing/issues/416) hält den
+    vollständigen Mechanismus und die vier betroffenen Repositories fest.
+
 ---
 
 ## Zentrale Konfiguration

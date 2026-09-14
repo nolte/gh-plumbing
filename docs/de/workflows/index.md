@@ -3,8 +3,25 @@
 Wiederverwendbare GitHub-Actions-Workflows liegen unter `.github/workflows/reusable-*.y{a}ml`. Konsumenten referenzieren sie über:
 
 ```yaml
-uses: nolte/gh-plumbing/.github/workflows/reusable-<name>.yaml@develop
+uses: nolte/gh-plumbing/.github/workflows/reusable-<name>.yaml@<tag>
 ```
+
+!!! warning "`<tag>` durch einen Release-Tag ersetzen, niemals `@develop`"
+
+    `<tag>` ist bewusst ein Platzhalter. Wähle eine Version auf der
+    [Releases-Seite](https://github.com/nolte/gh-plumbing/releases), zum
+    Beispiel `@v1.1.26`, und lass Renovate die Bumps vorschlagen.
+
+    Diese Seiten zeigten früher `@develop`. Konsumenten, die der Dokumentation
+    folgten, waren also *deshalb* ungepinnt. Eine Branch-Referenz löst auf das
+    auf, worauf der Branch zur Laufzeit zeigt — eine Änderung hier erreicht
+    deine CI sofort und ungeprüft.
+
+    Die Wrapper-Workflows dieses Repositories nutzen eine lokale Pfadangabe,
+    etwa `uses: ./.github/workflows/reusable-trivy.yaml`. Diese Form löst gegen
+    den aktuellen Commit auf, ein Pull Request hier testet also die Workflows,
+    die er ändert. Für Consumer ist sie nicht nutzbar, weil die Datei in einem
+    anderen Repository liegt.
 
 ---
 
@@ -30,6 +47,14 @@ uses: nolte/gh-plumbing/.github/workflows/reusable-<name>.yaml@develop
 
     [:octicons-arrow-right-24: reusable-pre-commit](static-tests.md)
 
+-   :material-source-pull: **Pull-Request-Lint**
+
+    ---
+
+    Conventional-Commits-Titel, Pflichtabschnitte im Body, Class Sweep und Audit-Traceability.
+
+    [:octicons-arrow-right-24: reusable-pr-lint](pr-lint.md)
+
 -   :material-chart-box-outline: **Coverage**
 
     ---
@@ -37,6 +62,14 @@ uses: nolte/gh-plumbing/.github/workflows/reusable-<name>.yaml@develop
     Python- oder Node.js-Testabdeckung in die Job-Zusammenfassung rendern, mit optionalem `fail-under`-Gate.
 
     [:octicons-arrow-right-24: Coverage-Workflows](coverage.md)
+
+-   :material-shield-check: **Branch-Protection-Audit**
+
+    ---
+
+    Deklarierte Branch-Protection mit dem vergleichen, was GitHub durchsetzt — klassische Protection und Rulesets.
+
+    [:octicons-arrow-right-24: Branch-Protection-Audit](branch-protection-audit.md)
 
 -   :material-book-open-variant: **Dokumentation**
 
@@ -61,6 +94,14 @@ uses: nolte/gh-plumbing/.github/workflows/reusable-<name>.yaml@develop
     Eine HACS-Custom-Integration mit `hacs/action` und `hassfest` validieren und das Release-ZIP-Asset ausliefern.
 
     [:octicons-arrow-right-24: HACS-Validierung](hacs.md)
+
+-   :material-docker: **Container-Images**
+
+    ---
+
+    Ein `Dockerfile` linten und trocken bauen, dann ein Image mit plattformsignierter Build-Provenance veröffentlichen.
+
+    [:octicons-arrow-right-24: Container-Images](container.md)
 
 </div>
 

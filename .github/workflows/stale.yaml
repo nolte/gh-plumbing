@@ -3,9 +3,27 @@ name: Stale
 on:
   schedule:
   - cron: "0 0 * * *"
+# Explicit permissions per spec/project/github-actions-best-practices §B:
+# workflow level is the minimum, write scopes are granted per job.
+permissions:
+  contents: read
+
 
 jobs:
   stale:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-stale.yaml@develop
+    permissions:
+      # Required, not optional. A job-level block replaces the file's
+      # top-level one instead of adding to it, so naming the two write scopes
+      # here dropped the `contents: read` declared above -- and the called
+      # workflow declares `contents: read` at its own workflow level. A caller
+      # that does not grant what the called workflow asks for does not get a
+      # downgraded token: GitHub refuses to start the workflow at all, with
+      # `startup_failure` and no jobs, no logs and no annotation. That is the
+      # same failure mode the `actionlint` caller in build-static-tests.yaml
+      # documents, and it silently disabled this workflow for six weeks.
+      contents: read
+      issues: write # the called workflow labels and closes stale issues
+      pull-requests: write # ... and stale PRs
+    uses: ./.github/workflows/reusable-stale.yaml
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}

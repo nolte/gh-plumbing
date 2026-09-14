@@ -5,8 +5,13 @@ labelPRBasedOnFilePath:
     - .github/workflows/**
   project-config:
     - .github/settings.yml
-  chore:
-    - .github/**
+  # No `chore: .github/**` rule. `chore` is a Conventional-Commits *type*, and
+  # release-drafter files it under Maintenance; deriving it from a path gave
+  # every pull request touching `.github/` a second type label on top of the one
+  # its title implies, which is how `fix(workflows):` ended up in two changelog
+  # categories (#413). The type label now comes from the title, via the
+  # autolabeler in commons-release-drafter.yml. The specific area labels below
+  # still apply and are what a path can honestly say.
   documentation:
     - docs/**
     - mkdocs.yml

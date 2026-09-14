@@ -21,7 +21,7 @@ on:
 
 jobs:
   update_release_draft:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-release-drafter.yml@develop
+    uses: nolte/gh-plumbing/.github/workflows/reusable-release-drafter.yml@<tag>
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}
 ```
@@ -55,7 +55,7 @@ on:
 
 jobs:
   publish:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-release-publish.yml@develop
+    uses: nolte/gh-plumbing/.github/workflows/reusable-release-publish.yml@<tag>
     with:
       tag: ${{ inputs.tag }}
       dry_run: ${{ inputs.dry_run }}
@@ -85,7 +85,7 @@ on:
 
 jobs:
   refresh_presentation_branch:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-release-cd-refresh-master.yml@develop
+    uses: nolte/gh-plumbing/.github/workflows/reusable-release-cd-refresh-master.yml@<tag>
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}
 ```

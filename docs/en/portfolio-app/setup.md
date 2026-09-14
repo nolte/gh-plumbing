@@ -162,7 +162,7 @@ on:
 
 jobs:
   automerge:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-automerge.yaml@develop
+    uses: nolte/gh-plumbing/.github/workflows/reusable-automerge.yaml@<tag>
     with:
       app-id: ${{ vars.PORTFOLIO_APP_ID }}
     secrets:

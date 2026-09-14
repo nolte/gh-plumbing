@@ -1,0 +1,24 @@
+# Dependencies for scripts/branch_protection_audit.py.
+#
+# Kept separate from requirements-dev.txt: that file installs the MkDocs
+# toolchain, and the audit workflow has no reason to pull it in.
+#
+# Hash-pinned, because the workflow installs this file with
+# `pip install --require-hashes` and that flag fails outright on a plain
+# version pin -- which it did on all six scheduled runs since #407.
+#
+# Two hashes, not one: --require-hashes takes a set and accepts whichever
+# artefact pip actually resolves.
+#
+#   - the cp314 manylinux x86_64 wheel, the artefact the runner resolves today
+#     (ubuntu-latest, `python-version: "3.14"` in the calling workflow)
+#   - the sdist, which is what pip falls back to when no wheel matches
+#
+# The sdist entry is what keeps a Python minor bump from breaking this: on a
+# runner without a matching wheel pip builds from source and checks against
+# that hash instead. Renovate bumps the version here as a reviewable pull
+# request; the hashes have to move with it, and `pip hash <artefact>` or the
+# PyPI JSON API prints the replacements.
+PyYAML==6.0.3 \
+    --hash=sha256:c458b6d084f9b935061bc36216e8a69a7e293a2f1e68bf956dcd9e6cbcd143f5 \
+    --hash=sha256:d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f

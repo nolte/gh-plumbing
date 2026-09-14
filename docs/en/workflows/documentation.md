@@ -16,7 +16,7 @@ on:
 
 jobs:
   deliver_docs:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-mkdocs.yaml@develop
+    uses: nolte/gh-plumbing/.github/workflows/reusable-mkdocs.yaml@<tag>
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}
 ```

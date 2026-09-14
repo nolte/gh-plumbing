@@ -11,6 +11,11 @@ on:
         required: false
         default: "${{ github.server_url }}/${{ github.repository }}"
         type: string
+# Explicit permissions per spec/project/github-actions-best-practices §B:
+# workflow level is the minimum, write scopes are granted per job.
+permissions:
+  contents: read # chain-bench reads repository metadata through the passed token
+
 jobs:
   static:
     name: "Chain Bench"
@@ -18,7 +23,7 @@ jobs:
     steps:
       - name: Chain Bench
         id: chain-bench
-        uses: aquasecurity/chain-bench-action@v1.1.1
+        uses: aquasecurity/chain-bench-action@cd35ac2e4470006fc9bbbbcd6c328edb61b72332 # v1.1.1
         with:
           repository-url: ${{ inputs.repository-url }}
           github-token: ${{ secrets.token }}

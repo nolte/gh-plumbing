@@ -25,12 +25,14 @@ on:
         required: false
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   automerge:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # squash-merges the pull request
+      pull-requests: write # reads and updates pull-request state
     steps:
       # Mint an App installation token only when the caller has set
       # inputs.app-id. The output token is consumed by the next step
@@ -47,13 +49,13 @@ jobs:
         # mint failure shows up as a yellow warning in the run log but
         # does not break automerge outright.
         continue-on-error: true
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
         with:
           app-id: ${{ inputs.app-id }}
           private-key: ${{ secrets.app-private-key }}
 
       - name: automerge
-        uses: pascalgn/automerge-action@v0.16.4
+        uses: pascalgn/automerge-action@7961b8b5eec56cc088c140b56d864285eabd3f67 # v0.16.4
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
           # Match the repo-level `allow_squash_merge: true` +

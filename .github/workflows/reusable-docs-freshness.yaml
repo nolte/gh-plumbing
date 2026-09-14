@@ -1,0 +1,87 @@
+name: Reusable — Docs Freshness
+
+# Audits a documentation tree for the drift `mkdocs build --strict` cannot see.
+# That build fails on broken links and missing nav entries, which is real but
+# narrow: a page added in one language only builds fine, a mention of a deleted
+# workflow resolves fine, and an ADR whose index row contradicts its own prose
+# renders fine. All three state something false to a reader (issue #429).
+#
+# The checker comes from THIS repository at the exact commit the caller pinned
+# (`job.workflow_repository` / `job.workflow_sha`), never from the caller. Same
+# reasoning as reusable-pr-lint.yaml: a pull request must not be able to edit
+# the rules it is judged by. The caller's checkout supplies the documentation,
+# the pinned checkout supplies the check.
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: Python version for the checker.
+        required: false
+        type: string
+        default: "3.14"
+      root:
+        description: |
+          Directory to audit, relative to the caller's checkout. It must contain
+          `docs/`; `.github/workflows/` and `README.md` are read when present.
+        required: false
+        type: string
+        default: "."
+      strict:
+        description: |
+          Treat warnings as blocking too. Off by default: a parity gap or a dead
+          reference is a falsehood and always blocks, while an undocumented
+          workflow or a leftover marker is a gap. A gate that holds a release
+          for the second kind becomes something to route around.
+        required: false
+        type: boolean
+        default: false
+      exit-zero:
+        description: Report without failing. For an initial survey, not for a gate.
+        required: false
+        type: boolean
+        default: false
+
+# Explicit permissions per spec/project/github-actions-best-practices §B:
+# workflow level is the minimum, write scopes are granted per job.
+permissions:
+  contents: read
+
+jobs:
+  docs-freshness:
+    name: Docs Freshness
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout the caller's documentation
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Check out the checker at the pinned commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .docs-freshness
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      # No dependencies: the checker is standard library only, so there is
+      # nothing to install and nothing to pin beyond the interpreter.
+      - name: Audit the documentation
+        env:
+          ROOT: ${{ inputs.root }}
+          STRICT: ${{ inputs.strict }}
+          EXIT_ZERO: ${{ inputs.exit-zero }}
+        run: |
+          set -euo pipefail
+          args=(--root "${ROOT}")
+          [[ "${STRICT}" == "true" ]] && args+=(--strict)
+          [[ "${EXIT_ZERO}" == "true" ]] && args+=(--exit-zero)
+          python3 .docs-freshness/scripts/docs_freshness.py "${args[@]}"

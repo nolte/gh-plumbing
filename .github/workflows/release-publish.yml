@@ -4,14 +4,20 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to publish (must match an open release-drafter draft)."
-        required: true
+        description: "Tag to publish. Leave empty to use the single open draft; with several open, the run fails and lists them."
+        required: false
         type: string
+        default: ""
       dry_run:
         description: "Validate without flipping draft=false."
         required: false
         type: boolean
         default: false
+# Explicit permissions per spec/project/github-actions-best-practices §B:
+# workflow level is the minimum, write scopes are granted per job.
+permissions:
+  contents: read
+
 
 # When `vars.PORTFOLIO_APP_ID` is set, the reusable mints a short-lived
 # GitHub-App installation token from `secrets.PORTFOLIO_APP_PRIVATE_KEY`
@@ -29,7 +35,9 @@ on:
 
 jobs:
   publish:
-    uses: nolte/gh-plumbing/.github/workflows/reusable-release-publish.yml@develop
+    permissions:
+      contents: write # the called workflow flips the draft to published
+    uses: ./.github/workflows/reusable-release-publish.yml
     with:
       tag: ${{ inputs.tag }}
       dry_run: ${{ inputs.dry_run }}
