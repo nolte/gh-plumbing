@@ -739,6 +739,44 @@ jobs:
           fi
           echo "Release notes pass Vale at error level."
 
+      # The pre-release freshness gate the spec asks for (#386 item 3, built in
+      # #429). Publishing freezes the documentation alongside the tag: the site
+      # deploys from the release, and a page that exists in one language only,
+      # or a reference to a workflow that no longer exists, ships with it.
+      #
+      # Critical findings block, warnings do not -- the same split the checker
+      # applies. A parity gap or a dead reference states something false to a
+      # reader; an undocumented workflow or a leftover marker is a gap. Holding
+      # a release for the second kind would make the gate something to route
+      # around. `--strict` at this call site would flip that, deliberately.
+      - name: Check out the freshness checker at the pinned commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .docs-freshness
+          persist-credentials: false
+
+      - name: Check documentation freshness
+        env:
+          TAG: ${{ steps.draft.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # A consumer's checkout never carries this script -- it lives in the
+          # repository that ships this workflow, and arrives through the pinned
+          # checkout above. Reading it from the caller would make the gate warn
+          # instead of gate for every consumer, which is worse than not having
+          # it: a gate that opens when its checker is missing verifies nothing
+          # while looking like it does.
+          if [[ ! -d docs ]]; then
+            echo "::notice::No 'docs/' directory; nothing to audit for freshness."
+            exit 0
+          fi
+          if ! python3 .docs-freshness/scripts/docs_freshness.py --root .; then
+            echo "::error::The documentation carries critical freshness findings. Publishing '$TAG' would ship them, because the site and the notes freeze with the tag. Fix them on develop and re-run."
+            exit 1
+          fi
+
       - name: Publish (flip draft=false)
         if: ${{ inputs.dry_run != true }}
         env:
