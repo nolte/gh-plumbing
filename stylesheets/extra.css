@@ -1,0 +1,12 @@
+/* Widen the content area—reusable-workflow YAML snippets benefit from space. */
+.md-grid {
+    max-width: 1440px;
+}
+
+/* Grid cards: subtle hover affordance. */
+.md-typeset .grid.cards > ul > li {
+    transition: border-color 0.2s ease, transform 0.2s ease;
+}
+.md-typeset .grid.cards > ul > li:hover {
+    border-color: var(--md-accent-fg-color);
+}
