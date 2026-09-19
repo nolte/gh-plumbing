@@ -5,11 +5,25 @@
     ":enablePreCommit"
   ],
   "labels": ["chore","dependencies"],
+  "description": [
+    "Portfolio defaults for pull request volume. A consumer overrides any of these by setting the same key in its own renovate.json.",
+    "prConcurrentLimit caps the open Renovate pull requests at 5. Where branch protection runs with strict: true, every merge re-queues the full workflow fan-out of every open branch -- fewer open branches is the lever (nolte/gh-plumbing#439, measurement in nolte/claude-shared#644).",
+    "Lowering prConcurrentLimit never closes an already-open pull request. The new cap takes effect as the open ones merge or close.",
+    "prHourlyLimit: 2 restates Renovate's own default and is set explicitly to document the intent.",
+    "Vulnerability alerts skip the line: their pull requests ignore these limits and are never grouped, so a security fix is never held back."
+  ],
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
   "packageRules": [
     {
       "description": "Pin GitHub Actions to full-length commit digests. A tag is mutable even from a trusted publisher (CVE-2025-30066), so a digest is the only immutable action reference; pinDigests also makes each pin age as a reviewable pull request instead of silently.",
       "matchManagers": ["github-actions"],
       "pinDigests": true
+    },
+    {
+      "description": "Group every digest bump into one pull request. A digest bump carries no individual changelog, so a single grouped pull request loses no review signal and keeps the open pull request budget free for updates that do carry one. Portfolio default -- a consumer overrides it by setting groupName for the same matchUpdateTypes in its own renovate.json. Vulnerability alerts are exempt from grouping, so a security fix still arrives as its own pull request.",
+      "matchUpdateTypes": ["digest", "pinDigest"],
+      "groupName": "digests"
     }
   ],
   "customManagers": [
