@@ -21,9 +21,11 @@
       "pinDigests": true
     },
     {
-      "description": "Group every digest bump into one pull request. A digest bump carries no individual changelog, so a single grouped pull request loses no review signal and keeps the open pull request budget free for updates that do carry one. Portfolio default -- a consumer overrides it by setting groupName for the same matchUpdateTypes in its own renovate.json. Vulnerability alerts are exempt from grouping, so a security fix still arrives as its own pull request.",
+      "description": "Group the GitHub Actions digest bumps into one pull request. An action digest bump carries no individual changelog, so a single grouped pull request loses no review signal and keeps the open pull request budget free for updates that do carry one. The group stays limited to the github-actions manager, the one this preset pins itself: a container image digest rebuild can carry a security fix without a vulnerability alert, so it stays its own pull request. groupSlug is set explicitly because Renovate's own pinDigest default carries the slug pin-dependencies, which would otherwise split the group across the branches renovate/pin-dependencies and renovate/digests. Portfolio default -- a consumer opts out by setting groupName: null and groupSlug: null for the same match in its own renovate.json. Vulnerability alerts are exempt from grouping, so a security fix still arrives as its own pull request.",
+      "matchManagers": ["github-actions"],
       "matchUpdateTypes": ["digest", "pinDigest"],
-      "groupName": "digests"
+      "groupName": "digests",
+      "groupSlug": "digests"
     }
   ],
   "customManagers": [

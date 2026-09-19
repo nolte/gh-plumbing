@@ -85,20 +85,28 @@ The preset enables pre-commit updates, the dependency dashboard, and applies the
 
 The preset also bounds how many Renovate pull requests a consumer carries:
 
-- `prConcurrentLimit: 5`: at most five Renovate pull requests open at the same time.
+- `prConcurrentLimit: 5`: at most five Renovate pull requests open at the same time. The cap also counts Renovate branches that have no pull request yet, because the branch limit inherits the same value.
 - `prHourlyLimit: 2`: at most two new pull requests per hour. This restates the default that Renovate ships.
-- `groupName: "digests"` for the `digest` and `pinDigest` update types: every digest bump lands in one grouped pull request.
+- `groupName: "digests"` for the `digest` and `pinDigest` update types of the `github-actions` manager: every GitHub Actions digest bump lands in one grouped pull request. Container-image digest bumps stay individual pull requests, because an image rebuild can carry a security fix without a vulnerability alert.
 
 The reason: under branch protection with `strict: true`, every merge re-queues the full workflow fan-out of every open Renovate branch, so fewer open branches is the lever ([#439](https://github.com/nolte/gh-plumbing/issues/439)).
 
-To pick another value, add the same key to your own `renovate.json`. The same works for the grouping rule: a `packageRules` entry with the same `matchUpdateTypes` and another `groupName` wins, because Renovate appends consumer rules after the preset rules.
+To pick another value, add the same key to your own `renovate.json`. The same works for the grouping rule, because Renovate appends consumer rules after the preset rules: to opt out, add a `packageRules` entry with the same `matchManagers` and `matchUpdateTypes` that sets `groupName` and `groupSlug` to `null`. Renovate merges a grouped pull request automatically only when every update in it carries `automerge: true`.
 
 ```json title="renovate.json"
 {
   "extends": [
     "github>nolte/gh-plumbing//renovate-configs/common"
   ],
-  "prConcurrentLimit": 10
+  "prConcurrentLimit": 10,
+  "packageRules": [
+    {
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["digest", "pinDigest"],
+      "groupName": null,
+      "groupSlug": null
+    }
+  ]
 }
 ```
 
