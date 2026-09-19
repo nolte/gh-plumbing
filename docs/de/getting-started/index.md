@@ -80,3 +80,37 @@ Die [Probot Settings App](https://probot.github.io/apps/settings/) löst den `_e
 ```
 
 Das Preset aktiviert Pre-Commit-Updates, das Dependency-Dashboard und vergibt die Labels `chore` und `dependencies`.
+
+### Pull-Request-Volumen
+
+Das Preset begrenzt außerdem, wie viele Renovate-Pull-Requests ein Consumer gleichzeitig offen hält:
+
+- `prConcurrentLimit: 5`: höchstens fünf offene Renovate-Pull-Requests gleichzeitig. Das Limit zählt auch Renovate-Branches ohne Pull-Request mit, weil das Branch-Limit denselben Wert erbt.
+- `prHourlyLimit: 2`: höchstens zwei neue Pull-Requests pro Stunde. Das entspricht Renovates eigenem Standardwert.
+- `groupName: "digests"` für die Update-Typen `digest` und `pinDigest` des Managers `github-actions`: alle GitHub-Actions-Digest-Bumps landen in einem gemeinsamen Pull-Request. Digest-Bumps von Container-Images bleiben eigene Pull-Requests, weil ein Image-Rebuild einen Security-Fix ohne Vulnerability-Alert enthalten kann.
+
+Der Grund: Unter Branch-Protection mit `strict: true` stellt jeder Merge den kompletten Workflow-Fan-out jedes offenen Renovate-Branches neu in die Warteschlange. Weniger offene Branches sind daher der Hebel ([#439](https://github.com/nolte/gh-plumbing/issues/439)).
+
+Einen anderen Wert setzt du über denselben Schlüssel in deiner eigenen `renovate.json`. Für die Gruppierungsregel gilt dasselbe, weil Renovate Consumer-Regeln hinter die Regeln des Presets hängt: Zum Abschalten der Gruppierung setzt du in einem `packageRules`-Eintrag mit denselben `matchManagers` und `matchUpdateTypes` sowohl `groupName` als auch `groupSlug` auf `null`. Renovate merged einen gruppierten Pull-Request nur automatisch, wenn jedes Update darin `automerge: true` trägt.
+
+```json title="renovate.json"
+{
+  "extends": [
+    "github>nolte/gh-plumbing//renovate-configs/common"
+  ],
+  "prConcurrentLimit": 10,
+  "packageRules": [
+    {
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["digest", "pinDigest"],
+      "groupName": null,
+      "groupSlug": null
+    }
+  ]
+}
+```
+
+!!! note "Was die Limits nicht berühren"
+    - Pull-Requests aus Vulnerability-Alerts ignorieren beide Limits, und Renovate gruppiert sie nie. Ein Security-Fix wartet also nicht.
+    - Ein niedrigeres Limit schließt keine bereits offenen Pull-Requests. Es greift, sobald diese gemergt oder geschlossen werden.
+    - Ein Consumer, der das Preset auf `#vX.Y.Z` pinnt, erhält die neuen Standardwerte erst mit dem nächsten Pin-Bump.
