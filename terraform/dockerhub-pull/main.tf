@@ -55,12 +55,20 @@ resource "github_actions_organization_variable" "dockerhub_username" {
 }
 
 # Org-level Actions secret holding the Docker Hub personal access token.
+#
+# `value`, not `plaintext_value`. Measured against the provider schema rather
+# than copied from the sibling module: `value` first appears in
+# integrations/github 6.12.0, and the same release marks both
+# `plaintext_value` and `encrypted_value` deprecated. That is why this module
+# requires `~> 6.12` where portfolio-app still asks for `~> 6.6` — a new module
+# should not be born writing a deprecated argument, and supporting 6.6-6.11 would
+# force exactly that.
 resource "github_actions_organization_secret" "dockerhub_token" {
   count = local.is_org ? 1 : 0
 
-  secret_name     = "DOCKERHUB_TOKEN"
-  visibility      = "selected"
-  plaintext_value = var.dockerhub_token
+  secret_name = "DOCKERHUB_TOKEN"
+  visibility  = "selected"
+  value       = var.dockerhub_token
   selected_repository_ids = [
     for r in data.github_repository.consumers : r.repo_id
   ]
@@ -82,10 +90,11 @@ resource "github_actions_variable" "dockerhub_username" {
   value         = var.dockerhub_username
 }
 
+# `value` for the reason given on the organisation-mode secret above.
 resource "github_actions_secret" "dockerhub_token" {
   for_each = local.user_repo_set
 
-  repository      = each.value
-  secret_name     = "DOCKERHUB_TOKEN"
-  plaintext_value = var.dockerhub_token
+  repository  = each.value
+  secret_name = "DOCKERHUB_TOKEN"
+  value       = var.dockerhub_token
 }

@@ -77,6 +77,15 @@ versus `PORTFOLIO_APP_PRIVATE_KEY` in the `portfolio-app` module next door.
    personal account.
 3. Every repository in that list exists. The data lookup fails the plan
    otherwise, which is deliberate: a typo should not silently provision nothing.
+4. The `integrations/github` provider resolves to **6.12.0 or newer**. The
+   module writes the secret through `value`, which that release introduced
+   while deprecating `plaintext_value` and `encrypted_value` — measured
+   against the provider schema, not inferred. A root pinned below 6.12 fails
+   `terraform validate` with *"An argument named `value` is not expected
+   here"* rather than misbehaving quietly. The sibling `portfolio-app` module
+   still declares `~> 6.6` and still writes `plaintext_value`; it therefore
+   emits deprecation warnings under a current provider, which is a separate
+   fix.
 
 ## Inputs
 
