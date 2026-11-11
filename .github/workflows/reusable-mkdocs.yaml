@@ -23,8 +23,8 @@ on:
         default: ""
       python-version:
         description: |
-          Python version for the pre-build command step. Only used when
-          pre-build-command is set.
+          Python version the requirements are installed into and the site is
+          built and deployed with (and the pre-build command runs under).
         required: false
         type: string
         # Concrete rather than "3.x": a floating interpreter means the same
@@ -78,9 +78,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Mint an App installation token only when the caller has set
-      # inputs.app-id. The output token replaces secrets.token in the
-      # mhausenblas/mkdocs-deploy-gh-pages step via the
-      # steps.app-token.outputs.token || secrets.token fallback.
+      # inputs.app-id. The checkout below persists
+      # steps.app-token.outputs.token || secrets.token as the push credential
+      # that `mkdocs gh-deploy` uses for the gh-pages push.
       - name: Mint App installation token
         id: app-token
         if: ${{ inputs.app-id != '' }}
@@ -94,27 +94,44 @@ jobs:
           app-id: ${{ inputs.app-id }}
           private-key: ${{ secrets.app-private-key }}
 
-      - name: Checkout master
+      - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          # Persisted for the `git push` that `mkdocs gh-deploy` runs.
+          token: ${{ steps.app-token.outputs.token || secrets.token }}
 
-      # Optional pre-build hook. Runs on the runner host before the
-      # Dockerised deploy action; files it writes into the workspace
-      # (e.g. a generated catalog under docs/) are mounted into and
-      # picked up by mkdocs gh-deploy.
-      - name: Set up Python for pre-build
-        if: ${{ inputs.pre-build-command != '' }}
+      # The site is built and deployed on the runner, with the interpreter
+      # the caller chose. Until v2.2.0 the deploy ran inside
+      # mhausenblas/mkdocs-deploy-gh-pages 1.26, whose image is
+      # squidfunk/mkdocs-material:9.0.6 (Alpine, CPython 3.11.0); that
+      # action has had no release since 2023, and its frozen interpreter
+      # made every consumer hold back packages that need a newer Python
+      # (pymdown-extensions 13 requires >=3.11.5). The steps below are what
+      # its action.sh did: install the requirements, then
+      # `mkdocs gh-deploy --force`.
+      - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: ${{ inputs.python-version }}
 
+      - name: Install requirements
+        env:
+          REQUIREMENTS: ${{ inputs.requirements }}
+        run: |
+          if [ -f "$REQUIREMENTS" ]; then
+            pip install -r "$REQUIREMENTS"
+          elif [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+
+      # Optional pre-build hook. Files it writes into the workspace (e.g. a
+      # generated catalog under docs/) are picked up by the build below.
       - name: Pre-build command
         if: ${{ inputs.pre-build-command != '' }}
-        run: |
-          pip install -r ${{ inputs.requirements }}
-          ${{ inputs.pre-build-command }}
+        run: ${{ inputs.pre-build-command }}
 
       - name: Deploy docs
-        uses: mhausenblas/mkdocs-deploy-gh-pages@d77dd03172e96abbcdb081d8c948224762033653 # 1.26
-        env:
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
-          REQUIREMENTS: ${{ inputs.requirements }}
+        run: |
+          git config user.name "${GITHUB_ACTOR}"
+          git config user.email "${GITHUB_ACTOR}@users.noreply.github.com"
+          mkdocs gh-deploy --config-file mkdocs.yml --force
