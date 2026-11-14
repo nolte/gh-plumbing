@@ -55,6 +55,10 @@ Non-reusable workflows (`build-static-tests.yaml`, `release-cd-refresh-master.ym
 
 `mkdocs.yml` uses the `include-markdown` plugin. `docs/*.md` files pull snippets from `README.md` via delimiter comments (`<!--intro-start-->`, `<!--td-workflows-start-->`, `<!--development-intro-start-->`, `<!--probot-intro-start-->`, `<!--td-probot-apps-start-->`). **Keep those markers intact** when editing the README — removing or renaming them breaks the generated site.
 
+### Public keys (`keys/`)
+
+`keys/` holds canonical **public** keys only (currently `system-image.pub`, the Sigstore key bootc system images are verified against). Consumers fetch them from a pinned release tag via `raw.githubusercontent.com`; `docs/en/keys/` symlinks them so the docs site serves them too. Never put private material here. Changing a key is a rotation — follow `docs/en/signing/system-image-key.md`.
+
 ### Prose linting
 
 Vale is configured in `.vale.ini` with styles in `.github/styles/` (Microsoft, RedHat, nolte-styles). It runs through `reusable-spelling-vale.yaml`. Pre-commit only covers whitespace/YAML; prose rules apply only in CI.

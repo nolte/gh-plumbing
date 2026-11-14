@@ -10,3 +10,10 @@
 # covers the plural -- a Vale vocabulary entry is a whole-word pattern, so
 # `[Rr]uleset` alone leaves `rulesets` reported as a spelling error.
 [Rr]ulesets?
+#
+# Sigstore: the signing project whose key format `skopeo generate-sigstore-key`
+# produces and `containers-policy.json` `sigstoreSigned` verifies.
+# keyless: Sigstore's own term for signing with a short-lived workflow identity
+# instead of a long-lived key.
+Sigstore
+[Kk]eyless

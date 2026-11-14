@@ -90,6 +90,8 @@ plugins:
             Portfolio App: Portfolio-App
             Setup: Setup
             Development: Entwicklung
+            Signing: Signierung
+            System image key: System-Image-Schlüssel
             Decisions: Entscheidungen
 
 markdown_extensions:
@@ -151,6 +153,8 @@ nav:
       - Labelling: probot/labelling.md
   - Portfolio App:
       - Setup: portfolio-app/setup.md
+  - Signing:
+      - System image key: signing/system-image-key.md
   - Decisions:
       - decisions/index.md
       - ADR-001 Presentation branch: decisions/adr-001-presentation-branch-reset.md
