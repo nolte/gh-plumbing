@@ -1,9 +1,9 @@
 ---
 id: F-4
 title: Best-practices rule against post-publish release rewrites
-status: draft
+status: ready
 roadmap_item: R-4
-sprint: null
+sprint: 2
 created: 2026-11-15
 ended: null
 verifies_sprint_value: null

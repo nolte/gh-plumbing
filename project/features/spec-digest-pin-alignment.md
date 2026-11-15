@@ -1,9 +1,9 @@
 ---
 id: F-6
 title: Align the spec corpus on digest pins for portfolio workflow references
-status: draft
+status: ready
 roadmap_item: R-4
-sprint: null
+sprint: 2
 created: 2026-11-15
 ended: null
 verifies_sprint_value: null
