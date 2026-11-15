@@ -1,7 +1,7 @@
 ---
 id: F-2
 title: Reusable release archive with build provenance
-status: in_progress
+status: ready
 roadmap_item: R-4
 sprint: 2
 created: 2026-11-15

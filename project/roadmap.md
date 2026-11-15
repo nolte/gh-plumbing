@@ -81,9 +81,9 @@ id: R-4
 title: Release archives with build provenance and digest-pinned actions
 detail: fine
 outcomes: [O-1, O-4]
-target_sprint: 2
+target_sprint: null
 mvp: false
-status: active
+status: proposed
 ```
 
 A consumer repository builds an arbitrary Task-built release archive, attests its

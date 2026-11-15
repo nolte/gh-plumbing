@@ -1,7 +1,7 @@
 ---
 number: 2
-status: active
-started: 2026-11-15
+status: planned
+started: null
 ended: null
 value_statement: Consumers of a nolte release archive can verify where it was built, and it's attached before the release goes public.
 artifact_ref: null
@@ -39,7 +39,7 @@ for the `nolte-styles.zip` of the next vale-style release.
 
 ## Features
 
-- [F-2](../features/reusable-release-archive.md): Reusable release archive with build provenance, status: in_progress
+- [F-2](../features/reusable-release-archive.md): Reusable release archive with build provenance, status: ready
 - [F-3](../features/unpinned-action-check.md): Refuse non-digest-pinned actions in the shared `actionlint` check, status: ready
 - [F-4](../features/post-publish-metadata-rule.md): Best-practices rule against post-publish release rewrites, status: ready
 - [F-5](../features/vale-style-archive-migration.md): vale-style publishes its archive through the reusable step, status: ready
