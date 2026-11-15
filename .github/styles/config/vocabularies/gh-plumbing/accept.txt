@@ -17,3 +17,9 @@
 # instead of a long-lived key.
 Sigstore
 [Kk]eyless
+#
+# in_progress: the feature/sprint lifecycle status token from the nolte
+# planning specs (`spec/project/feature/`), mandated verbatim in
+# `project/features/*.md` frontmatter and sprint feature lists. Upstream
+# candidate for nolte/vale-style, since every planning-suite repo needs it.
+in_progress

@@ -78,7 +78,7 @@ mission therefore records the shipped minimum viable product as `achieved`.
   `status: active` when the repository adopted the planning suite, so the roadmap
   records R-1 through R-3 as `status: done` and opens `mvp_status` at `achieved`
   rather than `defining`.
-- **2026-11-15 — `mvp_status: achieved → stabilised`** via `mission-revise`
+- **2026-11-15: `mvp_status: achieved → stabilised`** via `mission-revise`
   operation 2, retroactive-MVP exemption (`spec/project/mission/` §Stabilisation
   gate). Evidence: R-1, R-2, R-3 `done`; MVP-closing sprint 0001 `closed`
   (`ended: 2026-07-02`); first-add commit `5ffdca5` at `achieved`; conditions
