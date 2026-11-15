@@ -1,12 +1,12 @@
 ---
 id: F-5
 title: vale-style publishes its archive through the reusable step
-status: draft
+status: ready
 roadmap_item: R-4
-sprint: null
+sprint: 2
 created: 2026-11-15
 ended: null
-verifies_sprint_value: null
+verifies_sprint_value: acceptance-2
 consistency_check:
   performed_at: 2026-11-15
   agent_version: feature-consistency-reviewer@3845114

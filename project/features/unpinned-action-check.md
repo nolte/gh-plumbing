@@ -1,9 +1,9 @@
 ---
 id: F-3
 title: Refuse non-digest-pinned actions in the shared `actionlint` check
-status: draft
+status: ready
 roadmap_item: R-4
-sprint: null
+sprint: 2
 created: 2026-11-15
 ended: null
 verifies_sprint_value: null
