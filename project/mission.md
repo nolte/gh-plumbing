@@ -82,7 +82,7 @@ mission therefore records the shipped minimum viable product as `achieved`.
   operation 2, retroactive-MVP exemption (`spec/project/mission/` §Stabilisation
   gate). Evidence: R-1, R-2, R-3 `done`; MVP-closing sprint 0001 `closed`
   (`ended: 2026-07-02`); first-add commit `5ffdca5` at `achieved`; conditions
-  exemption conditions C1–C5 per nolte/claude-shared@9f13f2f0
+  exemption conditions C1–C5 per `nolte/claude-shared@9f13f2f0`
   `mission-revise/references/retroactive-exemption.md` pass; no defect-fix
   work in progress.
 
