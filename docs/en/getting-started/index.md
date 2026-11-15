@@ -88,6 +88,7 @@ The preset also bounds how many Renovate pull requests a consumer carries:
 - `prConcurrentLimit: 5`: at most five Renovate pull requests open at the same time. The cap also counts Renovate branches that have no pull request yet, because the branch limit inherits the same value.
 - `prHourlyLimit: 2`: at most two new pull requests per hour. This restates the default that Renovate ships.
 - `groupName: "digests"` for the `digest` and `pinDigest` update types of the `github-actions` manager: every GitHub Actions digest bump lands in one grouped pull request. Container-image digest bumps stay individual pull requests, because an image rebuild can carry a security fix without a vulnerability alert.
+- `nolte/gh-plumbing` is the exception: its updates never join the `digests` group and carry `automerge: false`, so every pin, digest, or version bump of a gh-plumbing reference arrives as its own pull request for a human to acknowledge, as `spec/project/workflow-health/` requires. The rule sits after the group rule in the preset. Keep any consumer rule that groups or automerges GitHub Actions from matching `nolte/gh-plumbing`, because consumer rules win over the preset.
 
 The reason: under branch protection with `strict: true`, every merge re-queues the full workflow fan-out of every open Renovate branch, so fewer open branches is the lever ([#439](https://github.com/nolte/gh-plumbing/issues/439)).
 
