@@ -93,7 +93,7 @@ The shared `actionlint` reusable refuses every external `uses:` not pinned to a
 commit digest, with no exemption. The best-practices spec forbids post-publish
 steps from rewriting release metadata, and `nolte/vale-style` retires its local
 archive workflow onto the new reusable. Requirements:
-`project/requirements/release-archive-provenance.md` (R1–R8, AC1–AC4), from #446.
+`project/requirements/release-archive-provenance.md` (R1–R9, AC1–AC4), from #446.
 
 Features:
 
@@ -101,3 +101,4 @@ Features:
 - [ ] `zizmor` `unpinned-uses` step in `reusable-actionlint.yaml`, hash pin required for every external reference (gh-plumbing)
 - [ ] Post-publish metadata rule in `spec/project/github-actions-best-practices/` (`nolte/claude-shared`)
 - [ ] `nolte/vale-style` consumes `reusable-release-archive.yml` and deletes `release-cd-archive.yml` (after a gh-plumbing release ships the first feature)
+- [ ] Spec corpus requires digest pins with a tag comment for `nolte/gh-plumbing` and own-org references, no later than the release that ships the pinning check (`nolte/claude-shared`)

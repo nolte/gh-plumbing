@@ -20,11 +20,13 @@ Elicited 2026-11-15 with the repository owner as the upstream gate of `roadmap-p
   (nolte/vale-style) migrating onto the reusable step.
 - **For whom:** maintainers of gh-plumbing consumer repositories; nolte/vale-style
   is the first concrete consumer.
-- **Strands (all four in scope, one roadmap item):**
+- **Strands (all five in scope, one roadmap item):**
   A: `reusable-release-archive.yml` (gh-plumbing);
   B: pinning check (gh-plumbing);
   C: `spec/project/github-actions-best-practices/` note (`nolte/claude-shared`);
-  D: vale-style migration (nolte/vale-style).
+  D: vale-style migration (nolte/vale-style);
+  E: spec alignment on digest pins (`nolte/claude-shared`), added on
+  2026-11-15 after the feature consistency check (see Revisions).
 - **Out of scope:** repairing the empty release bodies of vale-style v0.1.14 to
   v0.1.17; reworking the HACS asset path in `reusable-release-publish.yml`;
   enabling GitHub immutable releases.
@@ -103,6 +105,15 @@ Elicited 2026-11-15 with the repository owner as the upstream gate of `roadmap-p
   `build/nolte-styles.zip`, and SHALL delete `release-cd-archive.yml`.
   - _dimension_: `functional` · _status_: `confirmed` · _source_: issue #446 proposed change 4; round 9 `passt`
 
+### Strand E: Spec alignment (`nolte/claude-shared`)
+
+- **R9**: The `nolte/claude-shared` spec corpus SHALL require a full-length
+  commit digest with a trailing comment naming the release tag for every
+  `nolte/gh-plumbing` and own-organization reference, SHALL drop the own-org
+  tag exemption, and SHALL ship no later than the gh-plumbing release that
+  ships R5.
+  - _dimension_: `constraints`, `scope_boundaries` · _status_: `confirmed` · _source_: revisit 2026-11-15, owner answer "1 F-6" after the consistency check found tag-pin MUSTs that contradict R5
+
 ### Acceptance criteria
 
 - **AC1**: A `dry-run` invocation of `reusable-release-archive.yml` in gh-plumbing is green.
@@ -128,3 +139,13 @@ Elicited 2026-11-15 with the repository owner as the upstream gate of `roadmap-p
   pinned.
 - **Ordering dependency.** R8 depends on a gh-plumbing release containing A; R7
   is independent of A and B.
+
+## Revisions
+
+- **2026-11-15, revisit.** The feature consistency check for R-4 found that
+  `release-automation/en.md:40`, `:149`, `project-structure/en.md:143`, and
+  `github-actions-best-practices/en.md:45`, `:48` require or allow tag pins for
+  `nolte/gh-plumbing` and own-org references, which R5 turns red. The owner
+  added strand E (R9, feature F-6). The Renovate `digests` group conflict found
+  in the same check stays out of scope and is tracked in #447. Requirements
+  R1–R8 are unchanged; no `c_d` was reset.
