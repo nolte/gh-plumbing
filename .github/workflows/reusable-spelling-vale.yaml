@@ -40,6 +40,13 @@ jobs:
           # not block an unrelated pull request -- an author is answerable for
           # the lines they wrote.
           filter_mode: added
-          # Errors only. Warnings and suggestions stay visible as annotations
-          # without failing the run.
-          level: error
+          # Errors only, filtered at the source. vale-action v2.1.2 never reads
+          # its `level` input: it pipes every Vale result to reviewdog and
+          # picks reviewdog's level from Vale's exit code alone. Warnings and
+          # suggestions on added lines therefore became annotations, and past
+          # GitHub's cap of 10 per step reviewdog fails with "Too many results
+          # (annotations) in diff" -- red with zero errors on added lines
+          # (#381, #448). `--minAlertLevel=error` stops Vale from emitting
+          # anything below error, so only real errors reach reviewdog. Run
+          # `vale` locally to see the warnings and suggestions.
+          vale_flags: "--minAlertLevel=error"
