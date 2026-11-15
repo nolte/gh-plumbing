@@ -28,8 +28,7 @@
       "groupSlug": "digests"
     },
     {
-      "description": "Keep every nolte/gh-plumbing update out of the digests group and off automerge. spec/project/workflow-health/ (nolte/claude-shared) treats each gh-plumbing bump as a candidate that needs its own human acknowledgement, the portfolio-wide rollback signal for a reusable-workflow change, so a pin or digest update must not hide among third-party action digests. This rule must stay after the digests group rule, because a later rule's null resets the group. automerge: false is the preset default only: a consumer's own packageRules are evaluated after this preset and can override it, which the workflow-health spec forbids for gh-plumbing.",
-      "matchManagers": ["github-actions"],
+      "description": "Keep every nolte/gh-plumbing update out of the digests group and off automerge, whichever manager proposes it: workflow uses: references and preset references alike, hence no matchManagers. spec/project/workflow-health/ (nolte/claude-shared) treats each gh-plumbing bump as a candidate that needs its own human acknowledgement, the portfolio-wide rollback signal for a reusable-workflow change, so a pin or digest update must not hide among third-party action digests. This rule must stay after the digests group rule, because a later rule's null resets the group. automerge: false is the preset default only: a consumer's own packageRules are evaluated after this preset and can override it, which the workflow-health spec forbids for gh-plumbing.",
       "matchPackageNames": ["nolte/gh-plumbing"],
       "groupName": null,
       "groupSlug": null,
