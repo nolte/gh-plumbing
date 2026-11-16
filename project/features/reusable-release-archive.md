@@ -55,13 +55,13 @@ HACS asset path in `reusable-release-publish.yml` stays as it is.
 
 ## Test hooks
 
-- **acceptance-1** — `test-release-archive.yml` positive scenario: `archive-first` attaches `fixture-a.zip` and `fixture-b.zip` to a throwaway draft, `verify` runs `gh attestation verify --signer-workflow … --source-digest` per asset (run 43956030663 and the run at `b65c3de` on #457) — passing
-- **acceptance-2** — `test-release-archive.yml` dispatch scenarios `negative-empty-glob` and `negative-published` (red run by design, `verify` job green), run on `develop` after #457 merges; the forced-attestation-failure part is review-only per operator decision 2026-11-16 (attest precedes upload in the same job, so a failed attestation stops the job before any upload) — pending
-- **acceptance-3** — `test-release-archive.yml` positive scenario: `archive-dry` green, `verify` asserts the dry-run draft carries no asset — passing
-- **acceptance-4** — `test-release-archive.yml` positive scenario: `archive-again` against the same draft, `verify` asserts unchanged asset names and changed content digests — passing
-- **acceptance-5** — review of `permissions:` in `reusable-release-archive.yml` (workflow level `contents: read`, write scopes on jobs only) and of existing callers, by `nolte-shared:cicd-pipeline-reviewer` on #457 — passing
-- **acceptance-6** — review of `docs/en/workflows/release-archive.md` and `docs/de/workflows/release-archive.md` (danger admonition on `contents`, `id-token`, `attestations` write and `startup_failure`) — passing
-- **acceptance-7** — `test-release-archive.yml` positive scenario: `verify` compares body, name, and draft/prerelease flags against the snapshot taken at draft creation — passing
+- **acceptance-1**: `test-release-archive.yml` positive scenario: `archive-first` attaches `fixture-a.zip` and `fixture-b.zip` to a throwaway draft, `verify` runs `gh attestation verify --signer-workflow … --source-digest` per asset (run 43956030663 and the run at `b65c3de` on #457); passing
+- **acceptance-2**: `test-release-archive.yml` dispatch scenarios `negative-empty-glob` and `negative-published` (red run by design, `verify` job green), run on `develop` after #457 merges; the forced-attestation-failure part is review-only per operator decision 2026-11-16 (attest precedes upload in the same job, so a failed attestation stops the job before any upload); pending
+- **acceptance-3**: `test-release-archive.yml` positive scenario: `archive-dry` green, `verify` asserts the dry-run draft carries no asset; passing
+- **acceptance-4**: `test-release-archive.yml` positive scenario: `archive-again` on the same draft, `verify` asserts unchanged asset names and changed content digests; passing
+- **acceptance-5**: review of `permissions:` in `reusable-release-archive.yml` (workflow level `contents: read`, write scopes on jobs only) and of existing callers, by `nolte-shared:cicd-pipeline-reviewer` on #457; passing
+- **acceptance-6**: review of `docs/en/workflows/release-archive.md` and `docs/de/workflows/release-archive.md` (danger admonition on `contents`, `id-token`, `attestations` write and `startup_failure`); passing
+- **acceptance-7**: `test-release-archive.yml` positive scenario: `verify` compares body, name, and draft/prerelease flags with the snapshot taken at draft creation; passing
 
 ## Consistency notes
 
