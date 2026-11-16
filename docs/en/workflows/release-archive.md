@@ -97,6 +97,12 @@ the attached file names as `assets`.
 - **Drafts only.** A `tag` that names a published release fails the run
   before the build starts. The workflow checks the draft state again right
   before the upload, in case someone published the release during the build.
+- **One upload per draft at a time.** Runs that attach to the same draft
+  queue up. GitHub keeps at most one waiting run per draft and cancels an
+  older waiting run when a newer one arrives.
+- **Asset names stay as built.** File names may use only letters, digits,
+  `.`, `_`, `+`, and `-`, and must not start with `.`. GitHub would rename
+  other names on upload, so the workflow refuses them.
 - **Release metadata stays as it is.** The workflow never edits the release
   body, name, or draft and prerelease flags. A re-run replaces same-named
   assets on the draft.
@@ -129,12 +135,16 @@ release build.
 
 ```sh
 gh attestation verify nolte-styles.zip --repo <owner>/<repo> \
-  --signer-workflow nolte/gh-plumbing/.github/workflows/reusable-release-archive.yml
+  --signer-workflow nolte/gh-plumbing/.github/workflows/reusable-release-archive.yml \
+  --source-ref refs/heads/develop
 ```
 
 The reusable workflow in `nolte/gh-plumbing` signs the record, not a workflow
 in your repository, so pass `--signer-workflow`: without it,
 `gh attestation verify` expects a signer in `<owner>/<repo>` and fails.
+`--source-ref` rejects archives built on any other branch. That matters,
+because a run on a feature branch also produces a valid attestation, and so
+does a dry run: it builds and attests and only skips the upload.
 
 !!! note "An attestation records origin, not safety"
 

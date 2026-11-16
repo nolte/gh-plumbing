@@ -48,6 +48,10 @@ concurrency:
 
 env:
   SCENARIO: ${{ inputs.scenario || 'positive' }}
+  # One projection for every snapshot and comparison: release metadata plus
+  # its asset list, and the metadata alone.
+  META_FILTER: '{body,name,isDraft,isPrerelease,assets:[.assets[]|{name,size,url}]|sort_by(.name)}'
+  FIELDS_FILTER: '{body,name,isDraft,isPrerelease}'
 
 jobs:
   setup:
@@ -87,10 +91,8 @@ jobs:
           DRY_TAG: ${{ steps.names.outputs.dry_tag }}
         run: |
           set -euo pipefail
-          meta() { gh release view "$1" --json body,name,isDraft,isPrerelease,assets \
-            --jq '{body,name,isDraft,isPrerelease,assets:[.assets[]|{name,size,url}]|sort_by(.name)}' | sha256sum | cut -d' ' -f1; }
-          fields() { gh release view "$1" --json body,name,isDraft,isPrerelease \
-            --jq '{body,name,isDraft,isPrerelease}' | sha256sum | cut -d' ' -f1; }
+          meta() { gh release view "$1" --json body,name,isDraft,isPrerelease,assets --jq "$META_FILTER" | sha256sum | cut -d' ' -f1; }
+          fields() { gh release view "$1" --json body,name,isDraft,isPrerelease --jq "$FIELDS_FILTER" | sha256sum | cut -d' ' -f1; }
 
           # The reusable builds only from the run's own commit (github.sha; on a
           # pull request, the merge commit), so the drafts target it.
@@ -237,10 +239,8 @@ jobs:
         run: |
           set -euo pipefail
           fail() { echo "::error::$*"; exit 1; }
-          meta() { gh release view "$1" --json body,name,isDraft,isPrerelease,assets \
-            --jq '{body,name,isDraft,isPrerelease,assets:[.assets[]|{name,size,url}]|sort_by(.name)}' | sha256sum | cut -d' ' -f1; }
-          fields() { gh release view "$1" --json body,name,isDraft,isPrerelease \
-            --jq '{body,name,isDraft,isPrerelease}' | sha256sum | cut -d' ' -f1; }
+          meta() { gh release view "$1" --json body,name,isDraft,isPrerelease,assets --jq "$META_FILTER" | sha256sum | cut -d' ' -f1; }
+          fields() { gh release view "$1" --json body,name,isDraft,isPrerelease --jq "$FIELDS_FILTER" | sha256sum | cut -d' ' -f1; }
           assets() { gh release view "$1" --json assets --jq '[.assets[].name] | sort | join(",")'; }
 
           case "$SCENARIO" in

@@ -100,6 +100,12 @@ und die angehängten Dateinamen als `assets` zurück.
   bricht den Lauf vor dem Build ab. Direkt vor dem Upload prüft der Workflow
   den Entwurfsstatus erneut, falls das Release während des Builds
   veröffentlicht wurde.
+- **Ein Upload pro Entwurf zur Zeit.** Läufe auf denselben Entwurf reihen
+  sich ein. GitHub hält höchstens einen wartenden Lauf pro Entwurf und bricht
+  einen älteren wartenden ab, sobald ein neuerer kommt.
+- **Asset-Namen bleiben wie gebaut.** Dateinamen dürfen nur Buchstaben,
+  Ziffern, `.`, `_`, `+` und `-` enthalten und nicht mit `.` beginnen. Andere
+  Namen würde GitHub beim Upload umbenennen, deshalb lehnt der Workflow sie ab.
 - **Release-Metadaten bleiben unverändert.** Der Workflow ändert nie Text,
   Namen oder die Draft- und Prerelease-Flags. Ein erneuter Lauf ersetzt
   gleichnamige Assets im Entwurf.
@@ -132,12 +138,16 @@ sonst zu einem ungepinnten Input des Release-Builds.
 
 ```sh
 gh attestation verify nolte-styles.zip --repo <owner>/<repo> \
-  --signer-workflow nolte/gh-plumbing/.github/workflows/reusable-release-archive.yml
+  --signer-workflow nolte/gh-plumbing/.github/workflows/reusable-release-archive.yml \
+  --source-ref refs/heads/develop
 ```
 
 Signiert wird vom Reusable in `nolte/gh-plumbing`, nicht von einem Workflow in
 deinem Repository. Ohne `--signer-workflow` erwartet `gh attestation verify`
-einen Signierer in `<owner>/<repo>` und schlägt fehl.
+einen Signierer in `<owner>/<repo>` und schlägt fehl. `--source-ref` lehnt
+Archive ab, die auf einem anderen Branch gebaut wurden: Auch ein Dry Run oder
+ein Lauf auf einem Feature-Branch erzeugt eine gültige Attestierung, denn ein
+Dry Run baut und attestiert und lässt nur den Upload aus.
 
 !!! note "Eine Attestierung belegt die Herkunft, nicht die Sicherheit"
 

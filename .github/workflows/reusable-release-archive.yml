@@ -211,6 +211,14 @@ jobs:
             exit 1
           fi
           mapfile -t files < <(printf '%s\n' "${files[@]}" | sort -u)
+          # GitHub renames assets with other characters on upload, and
+          # upload-artifact drops hidden files: refuse both instead of shipping
+          # a different name or nothing at all.
+          bad=$(printf '%s\n' "${files[@]##*/}" | grep -vE '^[A-Za-z0-9_+-][A-Za-z0-9._+-]*$' || true)
+          if [[ -n "$bad" ]]; then
+            echo "::error::Asset names may use only letters, digits, '.', '_', '+', and '-', and must not start with '.': $(tr '\n' ' ' <<<"$bad")"
+            exit 1
+          fi
           dupes=$(printf '%s\n' "${files[@]##*/}" | sort | uniq -d)
           if [[ -n "$dupes" ]]; then
             echo "::error::Several matched files share a name, but a release stores assets by name: $dupes"
@@ -269,6 +277,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.resolve.outputs.tag }}
+          BUILT_SHA: ${{ needs.resolve.outputs.target_sha }}
           DRY_RUN: ${{ inputs.dry-run }}
         run: |
           set -euo pipefail
@@ -282,9 +291,16 @@ jobs:
           fi
 
           # The release may have been published while the archive was built.
-          state=$(gh release view "$TAG" --json isDraft,assets)
+          state=$(gh release view "$TAG" --json isDraft,assets,targetCommitish)
           if [[ "$(jq -r .isDraft <<<"$state")" != "true" ]]; then
             echo "::error::Release '$TAG' was published during this run; nothing was uploaded."
+            exit 1
+          fi
+          # A branch target follows new commits; the archive must still match it.
+          target=$(jq -r .targetCommitish <<<"$state")
+          now=$(gh api "repos/$GH_REPO/commits/${target#refs/heads/}" --jq .sha)
+          if [[ "$now" != "$BUILT_SHA" ]]; then
+            echo "::error::Draft '$TAG' now targets $now, but the archive was built from $BUILT_SHA; nothing was uploaded. Start a new release run."
             exit 1
           fi
 
