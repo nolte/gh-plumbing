@@ -73,17 +73,22 @@ jobs:
 
 | Input | Default | Effect |
 | --- | --- | --- |
-| `task-target` | required | Task target that builds the archive, run at the draft's target commit |
+| `task-target` | required | Task target that builds the archive, run at the draft's target commit with `RELEASE_TAG` set to the draft tag |
 | `assets` | required | Newline-separated paths or globs of the files to attach; `**` matches across directories |
 | `tag` | empty | Draft to attach to; empty resolves the single open draft |
 | `task-version` | `3.52.0` | Exact Task release that runs the target |
 | `dry-run` | `false` | Build and attest, upload nothing |
 
-The workflow returns the resolved `tag` and the attached file names as
-`assets`.
+The workflow returns the resolved `tag`, the `target-sha` it built from, and
+the attached file names as `assets`.
 
 ## What the workflow guarantees
 
+- **Built from the run's commit.** The provenance record names the commit the
+  run is for (`github.sha`) as the source. The workflow therefore requires the
+  draft target to equal that commit and fails before the build otherwise.
+  Dispatch the release workflow on the branch the draft targets, usually
+  `develop`, and don't merge to it before the run ends.
 - **Every pattern matches.** A pattern that matches no file fails the run
   before the workflow uploads anything, so the publish job never starts.
   Matched file names must be unique, because a release stores assets by name.
@@ -105,16 +110,31 @@ The workflow returns the resolved `tag` and the attached file names as
     isn't reachable from `develop`. That gate runs in the publish job, after
     this one.
 
+!!! warning "Don't combine this workflow with `auto-align: true`"
+
+    With `auto-align: true`, the publish workflow commits the version bump on
+    `develop` and moves the draft target to that commit. The tag then points at
+    a commit the archive wasn't built from, and the archive misses the aligned
+    version files.
+
 ## Remote Taskfile includes
 
 The workflow sets `TASK_X_REMOTE_TASKFILES=1` and runs `task --yes`, so a
-Taskfile that includes remote Taskfiles works without a terminal.
+Taskfile that includes remote Taskfiles works without a terminal. `--yes`
+accepts every remote include unchecked, so pin each include to a commit or a
+`checksum:`: an include that follows a branch becomes an unpinned input of the
+release build.
 
 ## Verify an archive
 
 ```sh
-gh attestation verify nolte-styles.zip --repo <owner>/<repo>
+gh attestation verify nolte-styles.zip --repo <owner>/<repo> \
+  --signer-workflow nolte/gh-plumbing/.github/workflows/reusable-release-archive.yml
 ```
+
+The reusable workflow in `nolte/gh-plumbing` signs the record, not a workflow
+in your repository, so pass `--signer-workflow`: without it,
+`gh attestation verify` expects a signer in `<owner>/<repo>` and fails.
 
 !!! note "An attestation records origin, not safety"
 
@@ -127,4 +147,6 @@ gh attestation verify nolte-styles.zip --repo <owner>/<repo>
 that it creates and deletes, so the real release-drafter draft stays
 untouched. Pull requests that change the workflow run the positive scenario.
 The negative scenarios run through `workflow_dispatch` only, and their run
-shows red by design: the `verify` job carries the outcome.
+shows red by design: the `verify` job carries the outcome. Re-run a failed
+self-test through the "Re-run all jobs" action, because the first attempt's cleanup has
+already deleted its drafts.

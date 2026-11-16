@@ -8,6 +8,9 @@ name: Release Archive
 # are enabled (nolte/gh-plumbing#446, F-2).
 #
 # Guarantees:
+# - The archive is built from the commit the run itself is for: the draft's
+#   target must equal github.sha, because the provenance record names
+#   github.sha as the source commit. A mismatch fails the run before the build.
 # - Every asset pattern must match at least one file; nothing is uploaded
 #   otherwise.
 # - Every asset is attested before any upload; a failed attestation uploads
@@ -21,6 +24,9 @@ name: Release Archive
 #
 # Reachability of the draft target from the integration branch is NOT checked
 # here; reusable-release-publish.yml keeps that gate for the publish itself.
+# Its `auto-align: true` path commits on develop and moves the draft target
+# after this workflow ran, so the archive would no longer come from the tagged
+# commit: don't combine the two.
 
 on:
   workflow_call:
@@ -36,9 +42,9 @@ on:
         default: ""
       task-target:
         description: |
-          Task target that builds the archive, run at the draft's target
-          commit, for example `build`. It runs in a job with read-only
-          contents permission and no OIDC token.
+          Task target that builds the archive, for example `build`. It runs at
+          the draft's target commit with RELEASE_TAG set to the draft tag, in a
+          job with read-only contents permission and no OIDC token.
         required: true
         type: string
       assets:
@@ -64,6 +70,9 @@ on:
       tag:
         description: The draft tag the run resolved.
         value: ${{ jobs.resolve.outputs.tag }}
+      target-sha:
+        description: The commit the archive was built from (the draft target).
+        value: ${{ jobs.resolve.outputs.target_sha }}
       assets:
         description: Newline-separated file names attached to the draft (empty on a dry run).
         value: ${{ jobs.attest-attach.outputs.uploaded }}
@@ -77,11 +86,14 @@ jobs:
   resolve:
     name: Resolve draft
     runs-on: ubuntu-latest
+    # Draft releases are visible only to a token with push access. This job
+    # runs no consumer code.
     permissions:
-      contents: read
+      contents: write
     outputs:
       tag: ${{ steps.draft.outputs.tag }}
       target_sha: ${{ steps.draft.outputs.target_sha }}
+      artifact: ${{ steps.draft.outputs.artifact }}
     steps:
       - name: Resolve draft
         id: draft
@@ -91,18 +103,21 @@ jobs:
           REQUESTED_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
+          releases=$(gh release list --limit 100 --json isDraft,tagName)
           if [[ -n "$REQUESTED_TAG" ]]; then
-            if ! release=$(gh release view "$REQUESTED_TAG" --json tagName,isDraft 2>/dev/null); then
-              echo "::error::No release with tag '$REQUESTED_TAG'."
-              exit 1
-            fi
-            if [[ "$(jq -r .isDraft <<<"$release")" != "true" ]]; then
+            matches=$(jq --arg t "$REQUESTED_TAG" '[.[] | select(.tagName == $t)]' <<<"$releases")
+            case "$(jq 'length' <<<"$matches")" in
+              0) echo "::error::No release with tag '$REQUESTED_TAG' among the latest 100 releases."; exit 1 ;;
+              1) ;;
+              *) echo "::error::Several releases carry tag '$REQUESTED_TAG'; resolve them manually."; exit 1 ;;
+            esac
+            if [[ "$(jq -r '.[0].isDraft' <<<"$matches")" != "true" ]]; then
               echo "::error::Release '$REQUESTED_TAG' is already published. This workflow attaches assets to a draft only and leaves published releases untouched."
               exit 1
             fi
             TAG="$REQUESTED_TAG"
           else
-            drafts=$(gh release list --limit 100 --json isDraft,tagName --jq '[.[] | select(.isDraft)]')
+            drafts=$(jq '[.[] | select(.isDraft)]' <<<"$releases")
             total=$(jq 'length' <<<"$drafts")
             if [[ "$total" != "1" ]]; then
               echo "::error::No tag given and $total drafts are open. Pass 'tag' explicitly. Open drafts:"
@@ -116,8 +131,17 @@ jobs:
           target=$(gh release view "$TAG" --json targetCommitish --jq .targetCommitish)
           # A branch name resolves to its current head; a SHA stays as it is.
           sha=$(gh api "repos/$GH_REPO/commits/${target#refs/heads/}" --jq .sha)
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "target_sha=$sha" >> "$GITHUB_OUTPUT"
+          if [[ "$sha" != "$GITHUB_SHA" ]]; then
+            echo "::error::Draft '$TAG' targets $sha, but this run is for $GITHUB_SHA. The provenance record names the run's commit, so the archive must be built from it: dispatch the release workflow on the draft target, or let release-drafter refresh the draft."
+            exit 1
+          fi
+          {
+            echo "tag=$TAG"
+            echo "target_sha=$sha"
+            # Unique per call: a run that calls this workflow several times
+            # shares one artifact namespace.
+            echo "artifact=release-archive-$(uuidgen)"
+          } >> "$GITHUB_OUTPUT"
           echo "Draft '$TAG' targets $sha."
 
   build:
@@ -128,8 +152,6 @@ jobs:
     # and no OIDC token.
     permissions:
       contents: read
-    outputs:
-      files: ${{ steps.match.outputs.files }}
     steps:
       - name: Checkout draft target
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -149,10 +171,11 @@ jobs:
           # `--yes` accepts the remote-include prompt that has no terminal here.
           TASK_X_REMOTE_TASKFILES: "1"
           TASK_TARGET: ${{ inputs.task-target }}
+          # The release tag doesn't exist yet, so `git describe` can't see it.
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
         run: task --yes "$TASK_TARGET"
 
       - name: Match assets
-        id: match
         env:
           ASSETS: ${{ inputs.assets }}
           TASK_TARGET: ${{ inputs.task-target }}
@@ -164,9 +187,13 @@ jobs:
             pattern="${pattern#"${pattern%%[![:space:]]*}"}"
             pattern="${pattern%"${pattern##*[![:space:]]}"}"
             [[ -z "$pattern" ]] && continue
-            # Unquoted on purpose: the pattern is expanded as a glob.
+            # Unquoted on purpose so the pattern expands as a glob; an empty
+            # IFS keeps spaces inside the pattern from splitting it.
+            saved_ifs=$IFS
+            IFS=
             # shellcheck disable=SC2206
             matches=( $pattern )
+            IFS=$saved_ifs
             found=0
             for f in "${matches[@]}"; do
               if [[ -f "$f" ]]; then files+=("$f"); found=1; fi
@@ -190,17 +217,12 @@ jobs:
 
           mkdir -p "$RUNNER_TEMP/release-archive"
           cp -- "${files[@]}" "$RUNNER_TEMP/release-archive/"
-          {
-            echo "files<<EOF"
-            printf '%s\n' "${files[@]##*/}"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
           printf 'Matched: %s\n' "${files[@]}"
 
       - name: Hand the assets to the attesting job
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: release-archive
+          name: ${{ needs.resolve.outputs.artifact }}
           path: ${{ runner.temp }}/release-archive/
           if-no-files-found: error
           retention-days: 1
@@ -209,6 +231,10 @@ jobs:
     name: Attest and attach
     needs: [resolve, build]
     runs-on: ubuntu-latest
+    # Two runs attaching to the same draft would interleave their uploads.
+    concurrency:
+      group: release-archive-${{ github.repository }}-${{ needs.resolve.outputs.tag }}
+      cancel-in-progress: false
     # Scoped to the job that produces the attestation and writes the draft,
     # never widened to the workflow (§B/§H).
     #
@@ -225,7 +251,7 @@ jobs:
       - name: Fetch the built assets
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: release-archive
+          name: ${{ needs.resolve.outputs.artifact }}
           path: release-archive
 
       # Provenance records ORIGIN, not safety: an attested archive is one whose
@@ -245,6 +271,7 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t files < <(find release-archive -maxdepth 1 -type f | sort)
+          delimiter="EOF_$(uuidgen)"
           if [[ "$DRY_RUN" == "true" ]]; then
             echo "::notice::Dry run: built and attested ${#files[@]} asset(s), uploaded nothing to '$TAG'."
             { echo "### Release archive (dry run)"; printf -- "- \`%s\`\n" "${files[@]##*/}"; } >> "$GITHUB_STEP_SUMMARY"
@@ -253,7 +280,8 @@ jobs:
           fi
 
           # The release may have been published while the archive was built.
-          if [[ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" != "true" ]]; then
+          state=$(gh release view "$TAG" --json isDraft,assets)
+          if [[ "$(jq -r .isDraft <<<"$state")" != "true" ]]; then
             echo "::error::Release '$TAG' was published during this run; nothing was uploaded."
             exit 1
           fi
@@ -261,9 +289,16 @@ jobs:
           # --clobber replaces same-named assets on the draft so re-runs are
           # idempotent. It never touches the release body, name, or flags.
           gh release upload "$TAG" "${files[@]}" --clobber
+
+          # An asset from an earlier run under another name would ship too.
+          others=$(jq -r '.assets[].name' <<<"$state" | grep -vxF -f <(printf '%s\n' "${files[@]##*/}") || true)
+          if [[ -n "$others" ]]; then
+            echo "::warning::Draft '$TAG' also carries assets this run didn't build: $(tr '\n' ' ' <<<"$others")"
+          fi
+
           {
-            echo "uploaded<<EOF"
+            echo "uploaded<<$delimiter"
             printf '%s\n' "${files[@]##*/}"
-            echo "EOF"
+            echo "$delimiter"
           } >> "$GITHUB_OUTPUT"
           { echo "### Release archive"; echo; echo "Attached to draft \`$TAG\` before publish:"; printf -- "- \`%s\`\n" "${files[@]##*/}"; } >> "$GITHUB_STEP_SUMMARY"

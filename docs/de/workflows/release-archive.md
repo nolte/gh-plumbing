@@ -73,17 +73,22 @@ jobs:
 
 | Input | Standard | Wirkung |
 | --- | --- | --- |
-| `task-target` | Pflicht | Task-Target, das das Archiv baut; läuft am Ziel-Commit des Entwurfs |
+| `task-target` | Pflicht | Task-Target, das das Archiv baut; läuft am Ziel-Commit des Entwurfs, `RELEASE_TAG` enthält den Tag des Entwurfs |
 | `assets` | Pflicht | Pfade oder Globs der anzuhängenden Dateien, je Zeile einer; `**` passt über Verzeichnisse hinweg |
 | `tag` | leer | Entwurf, an den angehängt wird; leer wählt den einzigen offenen Entwurf |
 | `task-version` | `3.52.0` | Exaktes Task-Release, das das Target ausführt |
 | `dry-run` | `false` | Bauen und attestieren, nichts hochladen |
 
-Der Workflow gibt den aufgelösten `tag` und die angehängten Dateinamen als
-`assets` zurück.
+Der Workflow gibt den aufgelösten `tag`, den gebauten Commit als `target-sha`
+und die angehängten Dateinamen als `assets` zurück.
 
 ## Was der Workflow garantiert
 
+- **Gebaut aus dem Commit des Laufs.** Die Provenance nennt den Commit, für den
+  der Lauf läuft (`github.sha`), als Quelle. Der Workflow verlangt deshalb, dass
+  das Ziel des Entwurfs genau dieser Commit ist, und bricht sonst vor dem Build
+  ab. Starte den Release-Workflow auf dem Branch, auf den der Entwurf zeigt,
+  meist `develop`, ohne zwischendurch zu mergen.
 - **Jedes Muster trifft.** Ein Muster ohne Treffer bricht den Lauf ab, bevor
   etwas hochgeladen wird; der Publish-Job startet dann nicht. Die Dateinamen
   der Treffer müssen eindeutig sein, weil ein Release Assets nach Namen
@@ -108,16 +113,31 @@ Der Workflow gibt den aufgelösten `tag` und die angehängten Dateinamen als
     von `develop` aus nicht erreichbar ist. Diese Prüfung läuft im
     Publish-Job, nach diesem.
 
+!!! warning "Nicht mit `auto-align: true` kombinieren"
+
+    Mit `auto-align: true` committet der Publish-Workflow die Versionsanhebung
+    auf `develop` und setzt das Ziel des Entwurfs auf diesen Commit. Der Tag
+    zeigt dann auf einen Commit, aus dem das Archiv nicht gebaut wurde, und dem
+    Archiv fehlen die angeglichenen Versionsdateien.
+
 ## Entfernte Taskfile-Includes
 
 Der Workflow setzt `TASK_X_REMOTE_TASKFILES=1` und ruft `task --yes` auf. Ein
-Taskfile mit entfernten Includes funktioniert so ohne Terminal.
+Taskfile mit entfernten Includes funktioniert so ohne Terminal. `--yes`
+akzeptiert jeden entfernten Include ungeprüft. Pinne deshalb jeden Include auf
+einen Commit oder eine `checksum:`; ein Include, der einem Branch folgt, wird
+sonst zu einem ungepinnten Input des Release-Builds.
 
 ## Ein Archiv prüfen
 
 ```sh
-gh attestation verify nolte-styles.zip --repo <owner>/<repo>
+gh attestation verify nolte-styles.zip --repo <owner>/<repo> \
+  --signer-workflow nolte/gh-plumbing/.github/workflows/reusable-release-archive.yml
 ```
+
+Signiert wird vom Reusable in `nolte/gh-plumbing`, nicht von einem Workflow in
+deinem Repository. Ohne `--signer-workflow` erwartet `gh attestation verify`
+einen Signierer in `<owner>/<repo>` und schlägt fehl.
 
 !!! note "Eine Attestierung belegt die Herkunft, nicht die Sicherheit"
 
@@ -130,4 +150,6 @@ gh attestation verify nolte-styles.zip --repo <owner>/<repo>
 selbst anlegt und löscht; der echte Release-Drafter-Entwurf bleibt unberührt.
 Pull Requests, die den Workflow ändern, führen das Positiv-Szenario aus. Die
 Negativ-Szenarien laufen nur über `workflow_dispatch`, und ihr Lauf ist
-absichtlich rot: Das Ergebnis trägt der Job `verify`.
+absichtlich rot: Das Ergebnis trägt der Job `verify`. Einen fehlgeschlagenen
+Selbsttest startest du mit „Re-run all jobs“ neu, weil das Cleanup des ersten
+Versuchs dessen Entwürfe schon gelöscht hat.
