@@ -132,15 +132,17 @@ jobs:
           # A branch name resolves to its current head; a SHA stays as it is.
           sha=$(gh api "repos/$GH_REPO/commits/${target#refs/heads/}" --jq .sha)
           if [[ "$sha" != "$GITHUB_SHA" ]]; then
-            echo "::error::Draft '$TAG' targets $sha, but this run is for $GITHUB_SHA. The provenance record names the run's commit, so the archive must be built from it: dispatch the release workflow on the draft target, or let release-drafter refresh the draft."
+            echo "::error::Draft '$TAG' targets $sha, but this run is for $GITHUB_SHA. The provenance record names the run's commit, so the archive must be built from it. Start a new run (not a re-run) on the branch the draft targets, or re-run release-drafter so the draft follows the branch head."
             exit 1
           fi
+          # Unique per call: a run that calls this workflow several times
+          # shares one artifact namespace. Assigned first so a failure stops
+          # the step under set -e.
+          artifact="release-archive-$(cat /proc/sys/kernel/random/uuid)"
           {
             echo "tag=$TAG"
             echo "target_sha=$sha"
-            # Unique per call: a run that calls this workflow several times
-            # shares one artifact namespace.
-            echo "artifact=release-archive-$(uuidgen)"
+            echo "artifact=$artifact"
           } >> "$GITHUB_OUTPUT"
           echo "Draft '$TAG' targets $sha."
 
@@ -271,7 +273,7 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t files < <(find release-archive -maxdepth 1 -type f | sort)
-          delimiter="EOF_$(uuidgen)"
+          delimiter="EOF_$(cat /proc/sys/kernel/random/uuid)"
           if [[ "$DRY_RUN" == "true" ]]; then
             echo "::notice::Dry run: built and attested ${#files[@]} asset(s), uploaded nothing to '$TAG'."
             { echo "### Release archive (dry run)"; printf -- "- \`%s\`\n" "${files[@]##*/}"; } >> "$GITHUB_STEP_SUMMARY"
