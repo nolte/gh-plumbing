@@ -1,11 +1,11 @@
 ---
 id: F-2
 title: Reusable release archive with build provenance
-status: in_progress
+status: done
 roadmap_item: R-4
 sprint: 2
 created: 2026-11-15
-ended: null
+ended: 2026-11-16
 verifies_sprint_value: null
 consistency_check:
   performed_at: 2026-11-15
@@ -46,7 +46,7 @@ HACS asset path in `reusable-release-publish.yml` stays as it is.
 ## Acceptance criteria
 
 - [x] **acceptance-1** A call with a Task target and an asset glob attaches every matching file to the draft release, and `gh attestation verify` succeeds for each file.
-- [ ] **acceptance-2** An asset glob that matches no file, a failed attestation, or a target release that's already published each fail the run without modifying the release.
+- [x] **acceptance-2** An asset glob that matches no file, a failed attestation, or a target release that's already published each fail the run without modifying the release.
 - [x] **acceptance-3** A `dry-run` call builds and attests but uploads nothing.
 - [x] **acceptance-4** A re-run replaces same-named assets on the draft.
 - [x] **acceptance-5** A consumer that doesn't call the new workflow needs no new permission on any calling job.
@@ -56,7 +56,7 @@ HACS asset path in `reusable-release-publish.yml` stays as it is.
 ## Test hooks
 
 - **acceptance-1**: `test-release-archive.yml` positive scenario: `archive-first` attaches `fixture-a.zip` and `fixture-b.zip` to a throwaway draft, `verify` runs `gh attestation verify --signer-workflow … --source-digest` per asset (run 43956030663 and the run at `b65c3de` on #457); passing
-- **acceptance-2**: `test-release-archive.yml` dispatch scenarios `negative-empty-glob` and `negative-published` (red run by design, `verify` job green), run on `develop` after #457 merges; the forced-attestation-failure part is review-only per operator decision 2026-11-16 (attest precedes upload in the same job, so a failed attestation stops the job before any upload); pending
+- **acceptance-2**: `test-release-archive.yml` dispatch scenarios `negative-empty-glob` and `negative-published` (red run by design, `verify` job green), on `develop` after #457: run 43964089278 fails in `Build archive`, run 43964109508 fails in `Resolve draft` before the build, and `verify` confirms the draft and the published release `v2.2.1` unchanged in both; the forced-attestation-failure part is review-only per operator decision 2026-11-16 (attest precedes upload in the same job, so a failed attestation stops the job before any upload); passing
 - **acceptance-3**: `test-release-archive.yml` positive scenario: `archive-dry` green, `verify` asserts the dry-run draft carries no asset; passing
 - **acceptance-4**: `test-release-archive.yml` positive scenario: `archive-again` on the same draft, `verify` asserts unchanged asset names and changed content digests; passing
 - **acceptance-5**: review of `permissions:` in `reusable-release-archive.yml` (workflow level `contents: read`, write scopes on jobs only) and of existing callers, by `nolte-shared:cicd-pipeline-reviewer` on #457; passing
