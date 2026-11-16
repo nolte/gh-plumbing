@@ -10,3 +10,16 @@
 # covers the plural -- a Vale vocabulary entry is a whole-word pattern, so
 # `[Rr]uleset` alone leaves `rulesets` reported as a spelling error.
 [Rr]ulesets?
+#
+# Sigstore: the signing project whose key format `skopeo generate-sigstore-key`
+# produces and `containers-policy.json` `sigstoreSigned` verifies.
+# keyless: Sigstore's own term for signing with a short-lived workflow identity
+# instead of a long-lived key.
+Sigstore
+[Kk]eyless
+#
+# in_progress: the feature/sprint lifecycle status token from the nolte
+# planning specs (`spec/project/feature/`), mandated verbatim in
+# `project/features/*.md` frontmatter and sprint feature lists. Upstream
+# candidate for nolte/vale-style, since every planning-suite repo needs it.
+in_progress

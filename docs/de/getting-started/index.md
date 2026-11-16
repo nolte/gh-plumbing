@@ -88,6 +88,7 @@ Das Preset begrenzt außerdem, wie viele Renovate-Pull-Requests ein Consumer gle
 - `prConcurrentLimit: 5`: höchstens fünf offene Renovate-Pull-Requests gleichzeitig. Das Limit zählt auch Renovate-Branches ohne Pull-Request mit, weil das Branch-Limit denselben Wert erbt.
 - `prHourlyLimit: 2`: höchstens zwei neue Pull-Requests pro Stunde. Das entspricht Renovates eigenem Standardwert.
 - `groupName: "digests"` für die Update-Typen `digest` und `pinDigest` des Managers `github-actions`: alle GitHub-Actions-Digest-Bumps landen in einem gemeinsamen Pull-Request. Digest-Bumps von Container-Images bleiben eigene Pull-Requests, weil ein Image-Rebuild einen Security-Fix ohne Vulnerability-Alert enthalten kann.
+- Ausnahme ist `nolte/gh-plumbing`: Seine Updates landen nie in der `digests`-Gruppe und tragen `automerge: false`, sodass jeder Pin-, Digest- oder Versions-Bump einer gh-plumbing-Referenz als eigener Pull-Request zur menschlichen Bestätigung kommt, wie es `spec/project/workflow-health/` verlangt. Die Regel steht im Preset hinter der Gruppenregel. Halte jede Consumer-Regel, die GitHub Actions gruppiert oder automatisch merged, von `nolte/gh-plumbing` fern, weil Consumer-Regeln das Preset überstimmen.
 
 Der Grund: Unter Branch-Protection mit `strict: true` stellt jeder Merge den kompletten Workflow-Fan-out jedes offenen Renovate-Branches neu in die Warteschlange. Weniger offene Branches sind daher der Hebel ([#439](https://github.com/nolte/gh-plumbing/issues/439)).
 

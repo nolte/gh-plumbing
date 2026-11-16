@@ -87,6 +87,14 @@ uses: nolte/gh-plumbing/.github/workflows/reusable-<name>.yaml@<tag>
 
     [:octicons-arrow-right-24: Release-Workflows](release.md)
 
+-   :material-package-variant-closed: **Release-Archive**
+
+    ---
+
+    Ein Release-Archiv über ein Task-Target bauen, seine Provenance attestieren und es vor dem Veröffentlichen an den Entwurf hängen.
+
+    [:octicons-arrow-right-24: Release-Archive](release-archive.md)
+
 -   :material-home-assistant: **HACS-Validierung**
 
     ---

@@ -82,6 +82,7 @@ plugins:
             Pull-request lint: Pull-Request-Lint
             Documentation: Dokumentation
             Release: Release
+            Release archives: Release-Archive
             HACS validation: HACS-Validierung
             Container images: Container-Images
             Probot: Probot
@@ -90,6 +91,8 @@ plugins:
             Portfolio App: Portfolio-App
             Setup: Setup
             Development: Entwicklung
+            Signing: Signierung
+            System image key: System-Image-Schlüssel
             Decisions: Entscheidungen
 
 markdown_extensions:
@@ -142,6 +145,7 @@ nav:
       - Coverage: workflows/coverage.md
       - Documentation: workflows/documentation.md
       - Release: workflows/release.md
+      - Release archives: workflows/release-archive.md
       - HACS validation: workflows/hacs.md
       - Container images: workflows/container.md
       - Branch-protection audit: workflows/branch-protection-audit.md
@@ -151,6 +155,8 @@ nav:
       - Labelling: probot/labelling.md
   - Portfolio App:
       - Setup: portfolio-app/setup.md
+  - Signing:
+      - System image key: signing/system-image-key.md
   - Decisions:
       - decisions/index.md
       - ADR-001 Presentation branch: decisions/adr-001-presentation-branch-reset.md

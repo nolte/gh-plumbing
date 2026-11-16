@@ -9,7 +9,7 @@ audiences:
 verifies_via: F-1:acceptance-1
 time_bound:
   kind: mvp_completion
-mvp_status: achieved
+mvp_status: stabilised
 created: 2026-07-02
 revised_at: null
 ---
@@ -78,3 +78,24 @@ mission therefore records the shipped minimum viable product as `achieved`.
   `status: active` when the repository adopted the planning suite, so the roadmap
   records R-1 through R-3 as `status: done` and opens `mvp_status` at `achieved`
   rather than `defining`.
+- **2026-11-15: `mvp_status: achieved → stabilised`** via `mission-revise`
+  operation 2, retroactive-MVP exemption (`spec/project/mission/` §Stabilisation
+  gate). Evidence: R-1, R-2, R-3 `done`; MVP-closing sprint 0001 `closed`
+  (`ended: 2026-07-02`); first-add commit `5ffdca5` at `achieved`; the
+  exemption conditions C1–C5 per `nolte/claude-shared@9f13f2f0`
+  `mission-revise/references/retroactive-exemption.md` pass; no defect-fix
+  work in progress.
+
+### Stabilisation rationale (2026-11-15)
+
+Stabilised via the retroactive-MVP exemption of `spec/project/mission/`
+§Stabilisation gate: the MVP was recorded retroactively, so no legitimate
+subsequent sprint can be formed while every remaining roadmap item (R-4) is
+post-MVP. Sprint 0001 closed the MVP on 2026-07-02; the first commit of
+`project/mission.md`, `5ffdca5`, already carried `mvp_status: achieved` together
+with the retroactive-recording statement, and no committed version has carried
+`stabilised`. The `mvp: true` set {R-1, R-2, R-3} is unchanged since `5ffdca5`,
+no MVP item has been `active` since, and sprint 0002 is the only later sprint and
+still `planned`. The operator decided the flip on 2026-11-15 so that sprint 0002
+(#446) can start. (Drafted by Claude at the operator's request and adopted by the
+operator verbatim.)

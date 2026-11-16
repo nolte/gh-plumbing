@@ -68,6 +68,11 @@ jobs:
     "newest wins" heuristic—if no draft exists for the given tag the workflow
     fails fast. Run the draft workflow on `develop` first.
 
+!!! tip "Attach a built archive before publish"
+    To ship a Task-built archive with build provenance, run
+    [`reusable-release-archive.yml`](release-archive.md) ahead of this workflow
+    and order the publish job after it with `needs:`.
+
 !!! tip "Dry run"
     Set `dry_run: true` to run every validation gate without flipping the
     draft to a published release. Useful for verifying the publish path

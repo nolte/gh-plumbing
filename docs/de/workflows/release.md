@@ -69,6 +69,11 @@ jobs:
     angegebenen Tag, scheitert der Workflow sofort. Zuvor den
     Draft-Workflow auf `develop` laufen lassen.
 
+!!! tip "Ein gebautes Archiv vor dem Veröffentlichen anhängen"
+    Um ein mit Task gebautes Archiv mit Build-Provenance auszuliefern, rufe
+    [`reusable-release-archive.yml`](release-archive.md) vor diesem Workflow auf
+    und ordne den Publish-Job per `needs:` dahinter ein.
+
 !!! tip "Dry Run"
     `dry_run: true` setzen, um jeden Validierungs-Gate auszuführen, ohne den
     Entwurf zu einem veröffentlichten Release umzuschalten. Nützlich, um den
