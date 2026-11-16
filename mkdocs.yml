@@ -82,6 +82,7 @@ plugins:
             Pull-request lint: Pull-Request-Lint
             Documentation: Dokumentation
             Release: Release
+            Release archives: Release-Archive
             HACS validation: HACS-Validierung
             Container images: Container-Images
             Probot: Probot
@@ -144,6 +145,7 @@ nav:
       - Coverage: workflows/coverage.md
       - Documentation: workflows/documentation.md
       - Release: workflows/release.md
+      - Release archives: workflows/release-archive.md
       - HACS validation: workflows/hacs.md
       - Container images: workflows/container.md
       - Branch-protection audit: workflows/branch-protection-audit.md
