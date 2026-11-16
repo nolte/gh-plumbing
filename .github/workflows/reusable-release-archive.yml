@@ -1,0 +1,269 @@
+name: Release Archive
+
+# Builds a release archive through a consumer-owned Task target, attests its
+# build provenance, and attaches it to the release-drafter draft BEFORE the
+# release is published. Call it ahead of reusable-release-publish.yml and order
+# the publish job after it with `needs:`, so the release never appears public
+# without its asset and the path keeps working once GitHub immutable releases
+# are enabled (nolte/gh-plumbing#446, F-2).
+#
+# Guarantees:
+# - Every asset pattern must match at least one file; nothing is uploaded
+#   otherwise.
+# - Every asset is attested before any upload; a failed attestation uploads
+#   nothing.
+# - Only a draft is ever written to. A tag that names a published release
+#   fails the run before the build starts, and the draft state is re-checked
+#   right before the upload.
+# - Release metadata is never changed: no `gh release edit`, no body, name,
+#   draft, or prerelease update. Re-runs replace same-named assets on the
+#   draft (`gh release upload --clobber`).
+#
+# Reachability of the draft target from the integration branch is NOT checked
+# here; reusable-release-publish.yml keeps that gate for the publish itself.
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: |
+          Draft release to attach the assets to. Left empty, the single open
+          draft resolves to itself; several open drafts fail the run with a
+          list of their tags, never "newest wins". A tag that names a
+          published release fails the run without modifying it.
+        required: false
+        type: string
+        default: ""
+      task-target:
+        description: |
+          Task target that builds the archive, run at the draft's target
+          commit, for example `build`. It runs in a job with read-only
+          contents permission and no OIDC token.
+        required: true
+        type: string
+      assets:
+        description: |
+          Newline-separated asset paths or globs, relative to the repository
+          root, for example `build/nolte-styles.zip`. `**` matches across
+          directories. Every pattern must match at least one file, and the
+          matched file names must be unique because the release stores assets
+          by name.
+        required: true
+        type: string
+      task-version:
+        description: Exact Task release used to run the target.
+        required: false
+        type: string
+        default: "3.52.0"
+      dry-run:
+        description: When true, build and attest, but upload nothing.
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      tag:
+        description: The draft tag the run resolved.
+        value: ${{ jobs.resolve.outputs.tag }}
+      assets:
+        description: Newline-separated file names attached to the draft (empty on a dry run).
+        value: ${{ jobs.attest-attach.outputs.uploaded }}
+
+# Workflow level is the minimum; write scopes are granted per job
+# (spec/project/github-actions-best-practices/ §B).
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    name: Resolve draft
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.draft.outputs.tag }}
+      target_sha: ${{ steps.draft.outputs.target_sha }}
+    steps:
+      - name: Resolve draft
+        id: draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REQUESTED_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$REQUESTED_TAG" ]]; then
+            if ! release=$(gh release view "$REQUESTED_TAG" --json tagName,isDraft 2>/dev/null); then
+              echo "::error::No release with tag '$REQUESTED_TAG'."
+              exit 1
+            fi
+            if [[ "$(jq -r .isDraft <<<"$release")" != "true" ]]; then
+              echo "::error::Release '$REQUESTED_TAG' is already published. This workflow attaches assets to a draft only and leaves published releases untouched."
+              exit 1
+            fi
+            TAG="$REQUESTED_TAG"
+          else
+            drafts=$(gh release list --limit 100 --json isDraft,tagName --jq '[.[] | select(.isDraft)]')
+            total=$(jq 'length' <<<"$drafts")
+            if [[ "$total" != "1" ]]; then
+              echo "::error::No tag given and $total drafts are open. Pass 'tag' explicitly. Open drafts:"
+              jq -r '.[] | "  - \(.tagName)"' <<<"$drafts" >&2
+              exit 1
+            fi
+            TAG=$(jq -r '.[0].tagName' <<<"$drafts")
+            echo "::notice::No tag given; resolved the single open draft '$TAG'."
+          fi
+
+          target=$(gh release view "$TAG" --json targetCommitish --jq .targetCommitish)
+          # A branch name resolves to its current head; a SHA stays as it is.
+          sha=$(gh api "repos/$GH_REPO/commits/${target#refs/heads/}" --jq .sha)
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "target_sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Draft '$TAG' targets $sha."
+
+  build:
+    name: Build archive
+    needs: resolve
+    runs-on: ubuntu-latest
+    # The consumer's build code runs here, so this job holds no write scope
+    # and no OIDC token.
+    permissions:
+      contents: read
+    outputs:
+      files: ${{ steps.match.outputs.files }}
+    steps:
+      - name: Checkout draft target
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ needs.resolve.outputs.target_sha }}
+          persist-credentials: false
+
+      - name: Install Task
+        uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
+        with:
+          version: ${{ inputs.task-version }}
+          repo-token: ${{ github.token }}
+
+      - name: Run Task target
+        env:
+          # Taskfiles with remote includes need the experiment flag, and
+          # `--yes` accepts the remote-include prompt that has no terminal here.
+          TASK_X_REMOTE_TASKFILES: "1"
+          TASK_TARGET: ${{ inputs.task-target }}
+        run: task --yes "$TASK_TARGET"
+
+      - name: Match assets
+        id: match
+        env:
+          ASSETS: ${{ inputs.assets }}
+          TASK_TARGET: ${{ inputs.task-target }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob globstar
+          files=()
+          while IFS= read -r pattern; do
+            pattern="${pattern#"${pattern%%[![:space:]]*}"}"
+            pattern="${pattern%"${pattern##*[![:space:]]}"}"
+            [[ -z "$pattern" ]] && continue
+            # Unquoted on purpose: the pattern is expanded as a glob.
+            # shellcheck disable=SC2206
+            matches=( $pattern )
+            found=0
+            for f in "${matches[@]}"; do
+              if [[ -f "$f" ]]; then files+=("$f"); found=1; fi
+            done
+            if (( found == 0 )); then
+              echo "::error::Asset pattern '$pattern' matched no file after 'task $TASK_TARGET'."
+              exit 1
+            fi
+          done <<<"$ASSETS"
+
+          if (( ${#files[@]} == 0 )); then
+            echo "::error::The 'assets' input names no pattern."
+            exit 1
+          fi
+          mapfile -t files < <(printf '%s\n' "${files[@]}" | sort -u)
+          dupes=$(printf '%s\n' "${files[@]##*/}" | sort | uniq -d)
+          if [[ -n "$dupes" ]]; then
+            echo "::error::Several matched files share a name, but a release stores assets by name: $dupes"
+            exit 1
+          fi
+
+          mkdir -p "$RUNNER_TEMP/release-archive"
+          cp -- "${files[@]}" "$RUNNER_TEMP/release-archive/"
+          {
+            echo "files<<EOF"
+            printf '%s\n' "${files[@]##*/}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          printf 'Matched: %s\n' "${files[@]}"
+
+      - name: Hand the assets to the attesting job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-archive
+          path: ${{ runner.temp }}/release-archive/
+          if-no-files-found: error
+          retention-days: 1
+
+  attest-attach:
+    name: Attest and attach
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    # Scoped to the job that produces the attestation and writes the draft,
+    # never widened to the workflow (§B/§H).
+    #
+    # CALLERS MUST GRANT ALL THREE. A caller that does not does NOT receive a
+    # reduced token -- GitHub refuses to start the workflow, with
+    # startup_failure and zero jobs.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    outputs:
+      uploaded: ${{ steps.upload.outputs.uploaded }}
+    steps:
+      - name: Fetch the built assets
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-archive
+          path: release-archive
+
+      # Provenance records ORIGIN, not safety: an attested archive is one whose
+      # build path is known, not one judged secure (§H).
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: release-archive/*
+
+      - name: Attach to the draft
+        id: upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find release-archive -maxdepth 1 -type f | sort)
+          if [[ "$DRY_RUN" == "true" ]]; then
+            echo "::notice::Dry run: built and attested ${#files[@]} asset(s), uploaded nothing to '$TAG'."
+            { echo "### Release archive (dry run)"; printf -- "- \`%s\`\n" "${files[@]##*/}"; } >> "$GITHUB_STEP_SUMMARY"
+            echo "uploaded=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # The release may have been published while the archive was built.
+          if [[ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" != "true" ]]; then
+            echo "::error::Release '$TAG' was published during this run; nothing was uploaded."
+            exit 1
+          fi
+
+          # --clobber replaces same-named assets on the draft so re-runs are
+          # idempotent. It never touches the release body, name, or flags.
+          gh release upload "$TAG" "${files[@]}" --clobber
+          {
+            echo "uploaded<<EOF"
+            printf '%s\n' "${files[@]##*/}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          { echo "### Release archive"; echo; echo "Attached to draft \`$TAG\` before publish:"; printf -- "- \`%s\`\n" "${files[@]##*/}"; } >> "$GITHUB_STEP_SUMMARY"
