@@ -37,10 +37,10 @@ jobs:
   actionlint:
     name: Workflow Lint
     runs-on: ubuntu-latest
+    # No `checks: write`: findings are reported as workflow-command
+    # annotations, which need no API scope.
     permissions:
       contents: read
-      # reviewdog reports through the Checks API so findings appear inline.
-      checks: write
     steps:
       - name: Checkout sources
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -53,8 +53,13 @@ jobs:
           # pull request would pass silently -- which is exactly the gap this
           # workflow closes.
           filter_mode: nofilter
-          reporter: github-check
+          # `github-annotations`, not `github-check`: the Checks API answered
+          # reviewdog's update of its own check run with 404, failing this
+          # required check with no finding (#458). Annotations are workflow
+          # commands on stdout and need no API scope. They appear inline only
+          # on files a pull request changes, and GitHub shows at most 10 error
+          # annotations per step; the job log lists every finding.
+          reporter: github-annotations
           level: error
           fail_level: ${{ inputs.fail_level }}
-          fail_on_error: true
           actionlint_flags: ${{ inputs.actionlint_flags }}
