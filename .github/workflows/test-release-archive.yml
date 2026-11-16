@@ -1,0 +1,299 @@
+name: Test Release Archive
+
+# Self-test for reusable-release-archive.yml (F-2, nolte/gh-plumbing#446).
+# Every scenario works on throwaway draft releases created and deleted by this
+# run, so the release-drafter draft is never touched. Draft releases create no
+# git tag, so cleanup only deletes the releases.
+#
+# Scenarios:
+# - positive (pull requests and default dispatch): attach, re-attach with new
+#   content, dry run, then verify asset names, replaced content,
+#   `gh attestation verify`, an empty dry-run draft, and unchanged release
+#   metadata. The run is green when all of that holds.
+# - negative-empty-glob / negative-published (dispatch only): the archive call
+#   is expected to FAIL, so the run is red by design. The outcome is the
+#   `verify` job: green means the call failed and the release is unchanged.
+#   negative-published targets the latest published gh-plumbing release and
+#   compares its full metadata and asset list before and after.
+# A forced attestation failure has no live scenario: it would need a test-only
+# input on the public interface. The attest step runs before the upload step
+# in the same job, so a failed attestation stops the job before any upload.
+#
+# Re-run with "Re-run all jobs". "Re-run failed jobs" reuses the drafts of the
+# first attempt, which its cleanup already deleted.
+# A pull request from a fork can't grant the write scopes the reusable needs;
+# GitHub may then report startup_failure instead of skipping the run.
+
+on:
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: Which scenario to run.
+        type: choice
+        options: [positive, negative-empty-glob, negative-published]
+        default: positive
+  pull_request:
+    paths:
+      - .github/workflows/reusable-release-archive.yml
+      - .github/workflows/test-release-archive.yml
+      - Taskfile.yml
+
+permissions:
+  contents: read
+
+# Never cancel: an interrupted run could leave throwaway drafts behind.
+concurrency:
+  group: test-release-archive-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  SCENARIO: ${{ inputs.scenario || 'positive' }}
+  # One projection for every snapshot and comparison: release metadata plus
+  # its asset list, and the metadata alone.
+  META_FILTER: '{body,name,isDraft,isPrerelease,assets:[.assets[]|{name,size,url}]|sort_by(.name)}'
+  FIELDS_FILTER: '{body,name,isDraft,isPrerelease}'
+
+jobs:
+  setup:
+    name: Create throwaway drafts
+    # A fork's token can't create releases.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      scenario: ${{ steps.names.outputs.scenario }}
+      tag: ${{ steps.names.outputs.tag }}
+      dry_tag: ${{ steps.names.outputs.dry_tag }}
+      published_tag: ${{ steps.drafts.outputs.published_tag }}
+      draft_meta: ${{ steps.drafts.outputs.draft_meta }}
+      draft_fields: ${{ steps.drafts.outputs.draft_fields }}
+      published_meta: ${{ steps.drafts.outputs.published_meta }}
+    steps:
+      # Names are published first, so cleanup finds the drafts even when a
+      # later step of this job fails.
+      - name: Name the drafts
+        id: names
+        run: |
+          base="test-archive-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          {
+            echo "scenario=$SCENARIO"
+            echo "tag=$base"
+            echo "dry_tag=$base-dry"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create drafts and snapshot metadata
+        id: drafts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.names.outputs.tag }}
+          DRY_TAG: ${{ steps.names.outputs.dry_tag }}
+        run: |
+          set -euo pipefail
+          meta() { gh release view "$1" --json body,name,isDraft,isPrerelease,assets --jq "$META_FILTER" | sha256sum | cut -d' ' -f1; }
+          fields() { gh release view "$1" --json body,name,isDraft,isPrerelease --jq "$FIELDS_FILTER" | sha256sum | cut -d' ' -f1; }
+
+          # The reusable builds only from the run's own commit (github.sha; on a
+          # pull request, the merge commit), so the drafts target it.
+          for t in "$TAG" "$DRY_TAG"; do
+            gh release create "$t" --draft --target "$GITHUB_SHA" \
+              --title "Throwaway $t" --notes "Throwaway draft for test-release-archive.yml run $GITHUB_RUN_ID. Body must survive."
+          done
+          published=$(gh release list --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName // empty')
+          [[ -n "$published" ]] || { echo "::error::No published release to run negative-published against."; exit 1; }
+
+          # Assigned first: inside an echo argument, a failing command would
+          # not stop the step under set -e.
+          draft_meta=$(meta "$TAG")
+          draft_fields=$(fields "$TAG")
+          published_meta=$(meta "$published")
+          {
+            echo "published_tag=$published"
+            echo "draft_meta=$draft_meta"
+            echo "draft_fields=$draft_fields"
+            echo "published_meta=$published_meta"
+          } >> "$GITHUB_OUTPUT"
+
+  # --- positive ------------------------------------------------------------
+
+  archive-first:
+    needs: setup
+    if: needs.setup.outputs.scenario == 'positive'
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/reusable-release-archive.yml
+    with:
+      tag: ${{ needs.setup.outputs.tag }}
+      task-target: release-archive:fixture
+      assets: |
+        build/fixture-*.zip
+
+  record-first:
+    name: Record first upload
+    needs: [setup, archive-first]
+    runs-on: ubuntu-latest
+    # Draft releases are visible only to a token with push access.
+    permissions:
+      contents: write
+    outputs:
+      digests: ${{ steps.digests.outputs.digests }}
+    steps:
+      - id: digests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.setup.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --dir first
+          echo "digests=$(cd first && sha256sum -- * | sort -k2 | tr '\n' ';')" >> "$GITHUB_OUTPUT"
+
+  archive-again:
+    needs: [setup, record-first]
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/reusable-release-archive.yml
+    with:
+      tag: ${{ needs.setup.outputs.tag }}
+      task-target: release-archive:fixture
+      assets: |
+        build/fixture-*.zip
+
+  archive-dry:
+    needs: setup
+    if: needs.setup.outputs.scenario == 'positive'
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/reusable-release-archive.yml
+    with:
+      tag: ${{ needs.setup.outputs.dry_tag }}
+      task-target: release-archive:fixture
+      assets: build/fixture-*.zip
+      dry-run: true
+
+  # --- negative ------------------------------------------------------------
+
+  archive-empty-glob:
+    needs: setup
+    if: needs.setup.outputs.scenario == 'negative-empty-glob'
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/reusable-release-archive.yml
+    with:
+      tag: ${{ needs.setup.outputs.tag }}
+      task-target: release-archive:fixture
+      assets: |
+        build/fixture-*.zip
+        build/no-such-asset-*.zip
+
+  archive-published:
+    needs: setup
+    if: needs.setup.outputs.scenario == 'negative-published'
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/reusable-release-archive.yml
+    with:
+      tag: ${{ needs.setup.outputs.published_tag }}
+      task-target: release-archive:fixture
+      assets: build/fixture-*.zip
+
+  # --- verify and clean up -------------------------------------------------
+
+  verify:
+    name: Verify (${{ needs.setup.outputs.scenario }})
+    needs: [setup, record-first, archive-again, archive-dry, archive-empty-glob, archive-published]
+    if: always() && needs.setup.result == 'success'
+    runs-on: ubuntu-latest
+    # Draft releases are visible only to a token with push access.
+    permissions:
+      contents: write
+      attestations: read
+    steps:
+      - name: Verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SCENARIO: ${{ needs.setup.outputs.scenario }}
+          TAG: ${{ needs.setup.outputs.tag }}
+          DRY_TAG: ${{ needs.setup.outputs.dry_tag }}
+          PUBLISHED_TAG: ${{ needs.setup.outputs.published_tag }}
+          DRAFT_META: ${{ needs.setup.outputs.draft_meta }}
+          DRAFT_FIELDS: ${{ needs.setup.outputs.draft_fields }}
+          PUBLISHED_META: ${{ needs.setup.outputs.published_meta }}
+          FIRST_DIGESTS: ${{ needs.record-first.outputs.digests }}
+          AGAIN_RESULT: ${{ needs.archive-again.result }}
+          DRY_RESULT: ${{ needs.archive-dry.result }}
+          EMPTY_RESULT: ${{ needs.archive-empty-glob.result }}
+          PUBLISHED_RESULT: ${{ needs.archive-published.result }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$*"; exit 1; }
+          meta() { gh release view "$1" --json body,name,isDraft,isPrerelease,assets --jq "$META_FILTER" | sha256sum | cut -d' ' -f1; }
+          fields() { gh release view "$1" --json body,name,isDraft,isPrerelease --jq "$FIELDS_FILTER" | sha256sum | cut -d' ' -f1; }
+          assets() { gh release view "$1" --json assets --jq '[.assets[].name] | sort | join(",")'; }
+
+          case "$SCENARIO" in
+            positive)
+              [[ "$AGAIN_RESULT" == success ]] || fail "re-run call: $AGAIN_RESULT"
+              [[ "$DRY_RESULT" == success ]] || fail "dry-run call: $DRY_RESULT"
+              [[ "$(assets "$TAG")" == "fixture-a.zip,fixture-b.zip" ]] || fail "draft assets: $(assets "$TAG")"
+              [[ -z "$(assets "$DRY_TAG")" ]] || fail "dry run uploaded: $(assets "$DRY_TAG")"
+
+              gh release download "$TAG" --dir final
+              again=$(cd final && sha256sum -- * | sort -k2 | tr '\n' ';')
+              [[ "$again" != "$FIRST_DIGESTS" ]] || fail "re-run did not replace the asset content"
+
+              for f in final/*; do
+                gh attestation verify "$f" --repo "$GH_REPO" \
+                  --signer-workflow "$GH_REPO/.github/workflows/reusable-release-archive.yml" \
+                  --source-digest "$GITHUB_SHA"
+              done
+
+              # Body, name, and draft/prerelease flags must equal the snapshot
+              # taken at creation; only the asset list may change.
+              [[ "$(fields "$TAG")" == "$DRAFT_FIELDS" ]] || fail "release body, name, or flags changed"
+              ;;
+            negative-empty-glob)
+              [[ "$EMPTY_RESULT" == failure ]] || fail "expected the call to fail, got: $EMPTY_RESULT"
+              [[ "$(meta "$TAG")" == "$DRAFT_META" ]] || fail "draft was modified: assets $(assets "$TAG")"
+              ;;
+            negative-published)
+              [[ "$PUBLISHED_RESULT" == failure ]] || fail "expected the call to fail, got: $PUBLISHED_RESULT"
+              [[ "$(meta "$PUBLISHED_TAG")" == "$PUBLISHED_META" ]] || fail "published release $PUBLISHED_TAG was modified"
+              ;;
+            *) fail "unknown scenario $SCENARIO" ;;
+          esac
+          echo "::notice::Scenario '$SCENARIO' verified."
+
+  cleanup:
+    name: Delete throwaway drafts
+    needs: [setup, verify]
+    if: always() && needs.setup.outputs.tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.setup.outputs.tag }}
+          DRY_TAG: ${{ needs.setup.outputs.dry_tag }}
+        run: |
+          set -euo pipefail
+          for t in "$TAG" "$DRY_TAG"; do
+            # Only ever delete a draft this run created.
+            if [[ "$t" == test-archive-* ]] && [[ "$(gh release view "$t" --json isDraft --jq .isDraft)" == true ]]; then
+              gh release delete "$t" --yes
+            fi
+          done

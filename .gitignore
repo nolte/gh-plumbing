@@ -37,3 +37,7 @@ override.tf.json
 *_override.tf.json
 .terraformrc
 terraform.rc
+
+# Release archives the Task targets build (test-release-archive.yml fixture,
+# consumer archive builds).
+build/

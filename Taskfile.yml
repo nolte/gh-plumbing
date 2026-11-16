@@ -20,3 +20,12 @@ tasks:
     cmds:
     - task -l
     silent: true
+
+  release-archive:fixture:
+    desc: Build the fixture archives that test-release-archive.yml attaches to a throwaway draft
+    cmds:
+      - rm -rf build/fixture build/fixture-*.zip
+      - mkdir -p build/fixture
+      # Per-call content, so the self-test can tell a replaced asset from the old one.
+      - date +%s%N > build/fixture/nonce.txt
+      - cd build/fixture && zip -X -q ../fixture-a.zip nonce.txt && zip -X -q ../fixture-b.zip nonce.txt
