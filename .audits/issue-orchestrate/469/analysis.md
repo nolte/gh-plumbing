@@ -113,8 +113,8 @@ none
 | Kommentar nannte pr-lint als Vorbild / „other reusables" (5/26 setzen false) | cicd-pipeline-reviewer S2, code-security-reviewer S-3 | fixed directly (P1-Spezialist) | Predicate-Ausgabe; `reusable-pr-lint.yaml` checkt `.pr-lint` aus | – |
 | Host-Sprachen-Liste abschließend; „until logout" liest sich wie Zeitgrenze | cicd-pipeline-reviewer S1, code-security-reviewer S-1/S-2 | fixed directly (P1-Spezialist) | `reusable-pre-commit.yaml:74-78` vorher | – |
 | W-1: passwortloses sudo → Runner-Speicher (GITHUB_TOKEN, ACTIONS_RUNTIME_TOKEN, Secrets) | beide Reviewer | accepted residual, im Kommentar benannt | GitHub-Doku Runner-Images (passwordless sudo); CVE-2025-30066 | – |
-| W-2: Cache-Poisoning via ~/.cache/pre-commit bzw. ACTIONS_RUNTIME_TOKEN | code-security-reviewer | pending operator | suspected, nicht reproduziert | – |
-| Doku-Tipp: Bot-Account + PAT-Ablaufdatum | cicd-pipeline-reviewer S3 | pending operator | – | – |
+| W-2: Cache-Poisoning via ~/.cache/pre-commit bzw. ACTIONS_RUNTIME_TOKEN | code-security-reviewer | filed | suspected, nicht reproduziert | #472 |
+| Doku-Tipp: Bot-Account + PAT-Ablaufdatum | cicd-pipeline-reviewer S3 | fixed directly (prose-vale-curator) | Vale L43: 0 alerts | – |
 
 ## Dispatch log
 
