@@ -126,3 +126,4 @@ none
 
 2026-11-17 P5 handled by orchestrator — filed #467
 2026-11-17 P1 dispatched to nolte-engineering:fullstack-developer — 4 direct steps, all uses SHA-pinned, cache key verbatim; actionlint 1.7.12 exit 0, yaml parse exit 0; orchestrator added #467 reference
+2026-11-17 P2 dispatched to nolte-shared:prose-vale-curator — EN/DE L5+L33 updated; vale 3.15.2 on changed EN lines: 0 errors, 2 suggestions (1 new: Microsoft.Acronyms SHA; L33 SentenceLength pre-existing)
