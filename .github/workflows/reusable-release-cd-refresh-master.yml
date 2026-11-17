@@ -95,6 +95,9 @@ jobs:
           # commit, which a shallow clone cannot do.
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token || secrets.token }}
+          # Kept: the "Refresh the presentation branch" step runs
+          # `git fetch`, `git ls-remote` and `git push` against origin.
+          persist-credentials: true
 
       # A single write strategy cannot serve every presentation branch, because
       # real consumer configurations forbid opposite things (issue #414):

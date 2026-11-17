@@ -143,6 +143,9 @@ jobs:
           ref: develop
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token || secrets.token }}
+          # Kept: the "Align version-bearing files (primary path)" step
+          # runs `git push origin HEAD:develop` with this credential.
+          persist-credentials: true
 
       - name: Resolve draft
         id: draft

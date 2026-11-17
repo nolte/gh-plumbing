@@ -118,13 +118,20 @@ jobs:
   # workflows, so a push-only or write-scoped producer fails here. PyYAML comes
   # from the hash-pinned requirements-audit.txt, the same artefact the audit
   # workflow installs, rather than from a second, unhashed pin.
+  #
+  # The same job runs the guard behind #471: every actions/checkout step must
+  # decide `persist-credentials` explicitly, and a `true` must name the later
+  # step that needs the token. It shares this job because the job is a required
+  # context (`required-check-triggers-tests / Python Coverage`), so the guard
+  # blocks a merge without a new context in settings.yml. The second `--cov`
+  # keeps a separate coverage line per script.
   required-check-triggers-tests:
     uses: ./.github/workflows/reusable-python-coverage.yaml
     with:
       working-directory: scripts
       install-command: pip install --require-hashes --no-deps -r requirements-audit.txt && pip install pytest==9.1.1 pytest-cov==7.1.0
       coverage-source: required_check_triggers
-      pytest-args: tests/test_required_check_triggers.py
+      pytest-args: --cov=checkout_credentials tests/test_required_check_triggers.py tests/test_checkout_credentials.py
   # The check itself, not its tests. It runs on the pull request so a page
   # added in one language only, or a reference to a workflow that no longer
   # exists, fails here rather than reaching a release.

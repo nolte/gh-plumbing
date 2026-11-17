@@ -7,6 +7,8 @@ Runs a project's tests and surfaces the coverage report in the GitHub Actions jo
 
 Both render a Markdown table into `$GITHUB_STEP_SUMMARY` (even when the tests fail) and expose an optional `fail-under` gate.
 
+Neither workflow persists the checkout token (`persist-credentials: false`), so the install and test commands can't read it. A command that fetches from `origin` therefore works only in a public repository.
+
 ---
 
 ## Python

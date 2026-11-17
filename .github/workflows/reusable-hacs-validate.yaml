@@ -56,6 +56,8 @@ jobs:
     steps:
       - name: Checkout sources
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
 
       # A literal reference, not `hacs/action@${{ inputs.hacs_action_ref }}`.
       # GitHub Actions does not allow an expression in a step's `uses:`, so
@@ -83,6 +85,8 @@ jobs:
     steps:
       - name: Checkout sources
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
 
       # The Home Assistant docs reference hassfest as @master, but a branch is
       # mutable, so it is pinned here instead. home-assistant/actions carries no
