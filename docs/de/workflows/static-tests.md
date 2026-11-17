@@ -3,7 +3,6 @@
 Führt ein minimales Bündel statischer Analyse bei jedem Pull-Request und bei jedem Push auf den Default-Branch aus und liefert schnelles Feedback ohne externe Dienste.
 
 - [`pre-commit`](https://pre-commit.com), in einer festgelegten Version installiert, führt die in `.pre-commit-config.yaml` definierten Hooks auf allen Dateien aus; [`actions/cache`](https://github.com/actions/cache), auf einen vollständigen Commit-SHA gepinnt, cacht die Hook-Umgebungen
-- [`zbeekman/EditorConfig-Action`](https://github.com/zbeekman/EditorConfig-Action) prüft `.editorconfig`-Regeln
 
 ---
 

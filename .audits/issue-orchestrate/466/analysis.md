@@ -122,8 +122,15 @@ none
 |---|---|---|---|---|
 | Inline-pip-Pins in Workflows werden von Renovate nicht verfolgt | Research (Renovate-Config + git log) | filed (P5) | `customManagers` in `renovate-configs/common.json`; `git log -S'pytest=='` | #467 |
 
+| S1: Pin 4.5.0 stuft Consumer herab (Composite installierte latest) | cicd-pipeline-reviewer | fixed directly → 4.7.0 in Workflow + requirements-dev.txt | PyPI JSON: latest 4.7.0; venv-Test pre-commit 4.7.0 / Python 3.14.0 `run --all-files` exit 0 | – |
+| Docs nennen `zbeekman/EditorConfig-Action`, die kein Workflow nutzt | cicd-pipeline-reviewer | fixed directly (Zeile en/de entfernt) | `grep -rln EditorConfig .github/workflows/` exit 1 | – |
+| SHA `0057852…` = v4.3.0 unbestätigt | code-security-reviewer | dismissed (bestätigt) | `git ls-remote`: refs/tags/v4.3.0 und refs/tags/v4 → 0057852… | – |
+| W1/S2: Cache-Key ohne OS-/pre-commit-Version (geerbt) | cicd-pipeline-reviewer | pending operator | – | – |
+| SEC-003: Hook-Code kann persistiertes Checkout-Token/Docker-Creds lesen (geerbt) | code-security-reviewer | pending operator | – | – |
+
 ## Dispatch log
 
 2026-11-17 P5 handled by orchestrator — filed #467
 2026-11-17 P1 dispatched to nolte-engineering:fullstack-developer — 4 direct steps, all uses SHA-pinned, cache key verbatim; actionlint 1.7.12 exit 0, yaml parse exit 0; orchestrator added #467 reference
 2026-11-17 P2 dispatched to nolte-shared:prose-vale-curator — EN/DE L5+L33 updated; vale 3.15.2 on changed EN lines: 0 errors, 2 suggestions (1 new: Microsoft.Acronyms SHA; L33 SentenceLength pre-existing)
+2026-11-17 P3 cicd-pipeline-reviewer: 0 critical, 1 warning (inherited), 2 suggestions; code-security-reviewer: 0 critical/warning, 3 info; pre-commit gate exit 0; nested-pin scan 0 hits

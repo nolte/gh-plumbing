@@ -156,7 +156,7 @@ jobs:
         # track this inline pin yet -- see #467.
         run: |
           set -euo pipefail
-          python -m pip install pre-commit==4.5.0
+          python -m pip install pre-commit==4.7.0
 
       - name: List installed Python packages
         # Kept from the composite action, so the log still records the exact

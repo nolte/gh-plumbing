@@ -3,7 +3,6 @@
 Runs a minimal static analysis bundle on every pull request and on every push to the default branch to give fast feedback without external services.
 
 - [`pre-commit`](https://pre-commit.com), installed at a pinned version, runs the hooks defined in `.pre-commit-config.yaml` on all files; [`actions/cache`](https://github.com/actions/cache), pinned to a full commit SHA, caches the hook environments
-- [`zbeekman/EditorConfig-Action`](https://github.com/zbeekman/EditorConfig-Action) enforces `.editorconfig` rules
 
 ---
 
