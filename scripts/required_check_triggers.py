@@ -10,22 +10,28 @@ was exactly that: `static / Static CI Tests` came from a workflow triggered on
 
 Fixing that one workflow fixes one site. This script refuses the class.
 
-Predicate (spec/project/defect-class-guards §G3): for EVERY context listed under
-`branches[*].protection.required_status_checks.contexts` in
-`.github/settings.yml`, at least one non-reusable workflow under
-`.github/workflows/` produces it, and every workflow that produces it
+Predicate (spec/project/defect-class-guards §G3): for EVERY context the
+repository requires on any branch -- `branches[*].protection.
+required_status_checks.contexts` in `.github/settings.yml`, merged by branch
+`name` with `.github/commons-settings.yml` when the settings `_extends` them --
+at least one non-reusable workflow under `.github/workflows/` produces it, and
+every job that produces it
 
-  * triggers on `pull_request` -- `pull_request_target` does not count: it
-    runs the base ref by default, so the check would go green without testing
-    the pull request at all;
-  * does not narrow that trigger so the context can go unreported: no `paths`
-    or `paths-ignore` filter, no `branches` / `branches-ignore` filter that
-    excludes the protected branch, and, where `types` is given, both `opened`
-    and `synchronize` among them;
-  * grants no `write` scope to the producing job -- the job's own
-    `permissions:` block, or the workflow-level one when the job has none.
-    A fork pull request's token is read-only, so a producer that needs write
-    cannot do its work there.
+  * runs in a workflow triggered on `pull_request` -- `pull_request_target`
+    does not count: it runs the base ref by default, so the check would go
+    green without testing the pull request at all;
+  * isn't narrowed out of reporting: no `paths` or `paths-ignore` filter, no
+    `branches` / `branches-ignore` filter that excludes the protected branch
+    (GitHub filter-pattern semantics, last matching pattern wins), and, where
+    `types` is given, both `opened` and `synchronize` among them;
+  * carries no job-level `if:` -- a job skipped on a pull request reports
+    `skipped`, and a skipped job satisfies a required check without having run;
+  * grants no `write` scope -- the job's own `permissions:` block, or the
+    workflow-level one when the job has none. A fork pull request's token is
+    read-only, so a producer that needs write cannot do its work there;
+  * declares permissions at all, on the job or the workflow. Without either,
+    the token falls back to the repository default, which may be read/write,
+    and the same producer then behaves differently per repository setting.
 
 A context with no producer at all is a finding too: it can never report,
 on any pull request.
@@ -37,12 +43,16 @@ declaration, not from a list of workflow names, so a context added to
 id; when the caller job uses a reusable workflow by local path, the reusable
 must also carry a job with that display name, otherwise renaming the reusable
 job would orphan the context silently. A context without ` / ` is produced by
-a plain job whose `name:` (or id, when it has no name) equals it.
+a plain job whose `name:` (or id, when it has no name) equals it. A name part
+`<name> (<values>)` is a matrix leg and matches a job named `<name>` that has
+`strategy.matrix`; a job `name:` containing `${{` matches by its literal
+prefix up to the expression.
 
 Not covered: contexts that live only in a ruleset or were set through the
-branch-protection UI (the Probot Settings App doesn't sync them, #369), and
-contexts reported by external apps rather than workflows. Neither is in
-`settings.yml`, so neither is in reach of a file-based check.
+branch-protection UI without being declared (the Probot Settings App doesn't
+sync them, #369), and contexts reported by external apps rather than
+workflows. Neither is in the settings files, so neither is in reach of a
+file-based check.
 
 Reads only. Exits non-zero on any finding.
 """
@@ -50,8 +60,9 @@ Reads only. Exits non-zero on any finding.
 from __future__ import annotations
 
 import argparse
-import fnmatch
+import importlib.util
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -64,12 +75,26 @@ SEPARATOR = " / "
 # protection then waits for a context on a SHA nothing will ever report on.
 REQUIRED_TYPES = ("opened", "synchronize")
 
+# `Python Coverage (3.14, ubuntu-latest)` -- the name GitHub gives a matrix leg.
+MATRIX_LEG = re.compile(r"^(.*) \((.*)\)$")
 
-def finding(context: str, kind: str, message: str) -> dict:
-    return {"context": context, "kind": kind, "message": message}
+# The merge of settings.yml over the commons is branch_protection_audit.py's
+# job; it is loaded from beside this file rather than reimplemented, so the two
+# scripts cannot disagree about what a repository declares.
+_AUDIT_PATH = Path(__file__).resolve().parent / "branch_protection_audit.py"
+_audit_spec = importlib.util.spec_from_file_location("branch_protection_audit", _AUDIT_PATH)
+branch_protection_audit = importlib.util.module_from_spec(_audit_spec)
+assert _audit_spec.loader is not None
+_audit_spec.loader.exec_module(branch_protection_audit)
+
+
+def finding(context: str, kind: str, source: str, message: str) -> dict:
+    return {"context": context, "kind": kind, "source": source, "message": message}
 
 
 def load_yaml(path: Path) -> dict:
+    if not path.is_file():
+        return {}
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     return data if isinstance(data, dict) else {}
 
@@ -93,35 +118,46 @@ def triggers(workflow: dict) -> dict:
 
 def is_reusable_only(workflow: dict) -> bool:
     """True when `workflow_call` is the only trigger; such a file reports nothing itself."""
-    events = triggers(workflow)
-    return set(events) == {"workflow_call"}
+    return set(triggers(workflow)) == {"workflow_call"}
 
 
-def required_contexts(settings: dict) -> list[tuple[str, str]]:
-    """Every (branch, context) pair the protection declaration requires."""
+def required_contexts(settings: dict, commons: dict) -> list[tuple[str, str]]:
+    """Every (branch, context) pair the repository requires.
+
+    Branch names come from both files, because a branch the commons protect is
+    protected in the repository too when the settings extend them; the merge
+    for each branch is delegated to `branch_protection_audit.declared_contexts`.
+    """
+    names: list[str] = []
+    docs = [settings] + ([commons] if settings.get("_extends") else [])
+    for doc in docs:
+        for entry in doc.get("branches") or []:
+            if isinstance(entry, dict) and entry.get("name") and entry["name"] not in names:
+                names.append(str(entry["name"]))
     out = []
-    for branch in settings.get("branches") or []:
-        if not isinstance(branch, dict):
-            continue
-        protection = branch.get("protection") or {}
-        checks = protection.get("required_status_checks") or {}
-        for context in checks.get("contexts") or []:
-            out.append((str(branch.get("name", "")), str(context)))
+    for branch in names:
+        for context in branch_protection_audit.declared_contexts(settings, commons, branch):
+            out.append((branch, str(context)))
     return out
 
 
-def job_display_names(workflow: dict) -> set[str]:
-    return {
-        str(job.get("name", job_id))
-        for job_id, job in (workflow.get("jobs") or {}).items()
-        if isinstance(job, dict)
-    }
+def name_matches(job_id: str, job: dict, wanted: str) -> bool:
+    """Whether a job reports under the display name `wanted`."""
+    display = str(job.get("name", job_id))
+    if "${{" in display:
+        # The name is computed at run time; only its literal prefix is knowable.
+        return wanted.startswith(display.split("${{", 1)[0])
+    if display == wanted:
+        return True
+    leg = MATRIX_LEG.match(wanted)
+    has_matrix = isinstance(job.get("strategy"), dict) and "matrix" in job["strategy"]
+    return bool(leg and has_matrix and leg.group(1) in (display, job_id))
 
 
 def produces(root: Path, job_id: str, job: dict, context: str) -> bool:
     """Whether this caller job reports the given context."""
     if SEPARATOR not in context:
-        return "uses" not in job and str(job.get("name", job_id)) == context
+        return "uses" not in job and name_matches(job_id, job, context)
     caller_id, reusable_name = context.split(SEPARATOR, 1)
     if job_id != caller_id or "uses" not in job:
         return False
@@ -129,10 +165,11 @@ def produces(root: Path, job_id: str, job: dict, context: str) -> bool:
     if not uses.startswith("./"):
         # A remote reusable can't be read from here; the job id is all there is.
         return True
-    called = root / uses[2:].split("@", 1)[0]
-    if not called.is_file():
-        return False
-    return reusable_name in job_display_names(load_yaml(called))
+    called = load_yaml(root / uses[2:].split("@", 1)[0])
+    return any(
+        isinstance(rjob, dict) and name_matches(str(rid), rjob, reusable_name)
+        for rid, rjob in (called.get("jobs") or {}).items()
+    )
 
 
 def producers(root: Path, context: str) -> list[tuple[Path, dict, str, dict]]:
@@ -156,6 +193,53 @@ def as_list(value) -> list[str]:
     return [str(value)]
 
 
+def pattern_regex(pattern: str) -> re.Pattern:
+    """Translate a GitHub filter pattern into a regular expression.
+
+    `*` matches anything but `/`, `**` matches anything, `?` and `+` quantify
+    the preceding character (zero-or-one, one-or-more), `[...]` is a character
+    class and `\\` escapes the next character -- the GitHub filter-pattern
+    cheat sheet, rather than shell globbing, where `*` would cross `/`.
+    """
+    out, i = [], 0
+    while i < len(pattern):
+        char = pattern[i]
+        if pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+            continue
+        if char == "*":
+            out.append("[^/]*")
+        elif char in "?+":
+            out.append(char)
+        elif char == "[":
+            end = pattern.find("]", i + 1)
+            if end == -1:
+                out.append(re.escape(char))
+            else:
+                out.append(pattern[i:end + 1])
+                i = end + 1
+                continue
+        elif char == "\\" and i + 1 < len(pattern):
+            out.append(re.escape(pattern[i + 1]))
+            i += 2
+            continue
+        else:
+            out.append(re.escape(char))
+        i += 1
+    return re.compile("".join(out))
+
+
+def branch_selected(branch: str, patterns: list[str]) -> bool:
+    """Whether `patterns` select `branch`; a leading `!` negates, the last match wins."""
+    selected = False
+    for pattern in patterns:
+        negated = pattern.startswith("!")
+        if pattern_regex(pattern[1:] if negated else pattern).fullmatch(branch):
+            selected = not negated
+    return selected
+
+
 def check_trigger(branch: str, events: dict) -> list[str]:
     """Problems with the `pull_request` trigger; empty when it reports on every fork PR."""
     if "pull_request" not in events:
@@ -174,11 +258,9 @@ def check_trigger(branch: str, events: dict) -> list[str]:
         if key in config:
             problems.append(f"filters `pull_request` by `{key}`, so the context goes "
                             "unreported on pull requests outside it")
-    included = as_list(config.get("branches"))
-    if included and not any(fnmatch.fnmatchcase(branch, p) for p in included):
+    if "branches" in config and not branch_selected(branch, as_list(config["branches"])):
         problems.append(f"filters `pull_request` by `branches` that exclude `{branch}`")
-    excluded = as_list(config.get("branches-ignore"))
-    if any(fnmatch.fnmatchcase(branch, p) for p in excluded):
+    if branch_selected(branch, as_list(config.get("branches-ignore"))):
         problems.append(f"filters `pull_request` by `branches-ignore` that matches `{branch}`")
     types = as_list(config.get("types"))
     if types:
@@ -198,31 +280,60 @@ def write_scopes(permissions) -> list[str]:
     return []
 
 
-def audit(root: Path) -> list[dict]:
-    settings_path = root / ".github" / "settings.yml"
-    if not settings_path.is_file():
-        return []
+def check_job(name: str, workflow: dict, job_id: str, job: dict) -> list[tuple[str, str]]:
+    """(kind, message) problems with the producing job itself."""
     out = []
-    for branch, context in required_contexts(load_yaml(settings_path)):
-        found = producers(root, context)
-        if not found:
-            out.append(finding(context, "no-producer",
-                               f"`{branch}` requires it but no workflow under "
-                               ".github/workflows/ produces it, so it can never report"))
-            continue
-        for path, workflow, job_id, job in found:
-            name = path.relative_to(root)
-            for problem in check_trigger(branch, triggers(workflow)):
-                out.append(finding(context, "trigger", f"`{name}` {problem}"))
-            granted = job.get("permissions", workflow.get("permissions"))
-            scopes = write_scopes(granted)
-            if scopes:
-                out.append(finding(
-                    context, "write-permission",
+    if "if" in job:
+        out.append(("job-condition",
+                    f"`{name}` job `{job_id}` runs only `if: {job['if']}`; a skipped job "
+                    "satisfies a required check without having run"))
+    if "permissions" not in job and "permissions" not in workflow:
+        out.append(("no-permissions",
+                    f"`{name}` declares no `permissions:` on job `{job_id}` or the "
+                    "workflow, so the token falls back to the repository default"))
+    scopes = write_scopes(job.get("permissions", workflow.get("permissions")))
+    if scopes:
+        out.append(("write-permission",
                     f"`{name}` job `{job_id}` grants {', '.join(f'`{s}`' for s in scopes)}; "
-                    "a fork pull request's token is read-only",
-                ))
+                    "a fork pull request's token is read-only"))
     return out
+
+
+def audit(root: Path) -> list[dict]:
+    settings = load_yaml(root / ".github" / "settings.yml")
+    # The commons are read from this checkout. In the repository that ships
+    # them that is the copy `_extends` resolves to; in a consumer the file is
+    # absent and only the consumer's own declaration is checked.
+    commons = load_yaml(root / branch_protection_audit.COMMONS_PATH)
+
+    # One finding per (context, file, kind): a context required on several
+    # branches is one defect, not one per branch. Distinct problems of the same
+    # kind -- a `paths` filter and a `types` filter -- are joined, not dropped.
+    found: dict[tuple[str, str, str], list[str]] = {}
+
+    def add(context: str, source: str, kind: str, message: str) -> None:
+        messages = found.setdefault((context, source, kind), [])
+        if message not in messages:
+            messages.append(message)
+
+    for branch, context in required_contexts(settings, commons):
+        jobs = producers(root, context)
+        if not jobs:
+            add(context, "", "no-producer",
+                "required but no workflow under .github/workflows/ produces it, "
+                "so it can never report")
+            continue
+        for path, workflow, job_id, job in jobs:
+            name = str(path.relative_to(root))
+            for problem in check_trigger(branch, triggers(workflow)):
+                add(context, name, "trigger", f"`{name}` {problem}")
+            for kind, message in check_job(name, workflow, job_id, job):
+                add(context, name, kind, message)
+
+    return [
+        finding(context, kind, source, "; ".join(messages))
+        for (context, source, kind), messages in found.items()
+    ]
 
 
 def render(findings: list[dict]) -> str:

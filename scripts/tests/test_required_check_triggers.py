@@ -104,7 +104,7 @@ def test_context_without_producer_is_a_finding(repo):
     (repo / ".github" / "workflows" / "build.yaml").unlink()
     findings = guard.audit(repo)
     assert [f["kind"] for f in findings] == ["no-producer"]
-    assert "`develop` requires it" in findings[0]["message"]
+    assert "can never report" in findings[0]["message"]
 
 
 def test_renamed_reusable_job_orphans_the_context(repo):
@@ -200,7 +200,7 @@ def test_every_branch_and_every_producer_is_checked(repo):
           - lint
 """)
     write(repo / ".github" / "workflows" / "lint.yaml",
-          "on: push\njobs:\n  lint:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n")
+          "on: push\npermissions: read-all\njobs:\n  lint:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n")
     write(repo / ".github" / "workflows" / "second.yaml",
           caller(on="on:\n  schedule:\n    - cron: '0 0 * * *'"))
     findings = guard.audit(repo)
@@ -232,8 +232,191 @@ def test_findings_are_rendered_and_summarised(repo, monkeypatch, tmp_path_factor
     assert "no-producer" in summary.read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("branches, selected", [
+    (["**", "!develop"], False),      # a later negation wins over the match-all
+    (["!develop", "**"], True),       # ...and a later match wins over the negation
+    (["release*"], False),
+    (["release/*"], False),
+    (["dev*"], True),
+    (["*"], True),
+])
+def test_branch_filter_semantics_for_develop(branches, selected):
+    assert guard.branch_selected("develop", branches) is selected
+
+
+@pytest.mark.parametrize("pattern, branch, selected", [
+    ("release*", "release/1", False),   # `*` doesn't cross `/`
+    ("release/*", "release/1", True),
+    ("release/**", "release/1/hotfix", True),
+    ("release/*", "release/1/hotfix", False),
+    ("v?1", "v1", True),                # `?`: zero or one of the preceding char
+    ("v?1", "1", True),
+    ("re+lease", "reeelease", True),
+    ("[dm]aster", "master", True),
+    ("feature\\*", "feature*", True),
+    ("feature\\*", "featurex", False),
+])
+def test_branch_filter_pattern_characters(pattern, branch, selected):
+    assert guard.branch_selected(branch, [pattern]) is selected
+
+
+def test_negated_branch_filter_on_trigger_is_a_finding(repo):
+    write(repo / ".github" / "workflows" / "build.yaml",
+          caller(on="on:\n  pull_request:\n    branches: ['**', '!develop']"))
+    findings = guard.audit(repo)
+    assert [f["kind"] for f in findings] == ["trigger"]
+    assert "`branches` that exclude `develop`" in findings[0]["message"]
+
+
+def test_job_condition_is_a_finding(repo):
+    write(repo / ".github" / "workflows" / "build.yaml",
+          caller(permissions="    if: github.event_name == 'push'\n"))
+    findings = guard.audit(repo)
+    assert [f["kind"] for f in findings] == ["job-condition"]
+    assert "github.event_name == 'push'" in findings[0]["message"]
+
+
+def test_no_permissions_anywhere_is_a_finding(repo):
+    text = caller().replace("permissions:\n  contents: read\n", "")
+    write(repo / ".github" / "workflows" / "build.yaml", text)
+    findings = guard.audit(repo)
+    assert [f["kind"] for f in findings] == ["no-permissions"]
+    assert "repository default" in findings[0]["message"]
+
+
+def test_job_permissions_alone_satisfy_the_declaration(repo):
+    text = caller(permissions="    permissions:\n      contents: read\n").replace(
+        "permissions:\n  contents: read\njobs", "jobs")
+    write(repo / ".github" / "workflows" / "build.yaml", text)
+    assert kinds(repo) == []
+
+
+def test_context_required_on_several_branches_is_reported_once(repo):
+    write(repo / ".github" / "settings.yml", SETTINGS + """  - name: master
+    protection:
+      required_status_checks:
+        contexts:
+          - static / Static CI Tests
+""")
+    write(repo / ".github" / "workflows" / "build.yaml", caller(on="on: push"))
+    findings = guard.audit(repo)
+    assert [(f["context"], f["kind"]) for f in findings] == [
+        ("static / Static CI Tests", "trigger"),
+    ]
+
+
+def test_distinct_problems_of_one_kind_are_joined(repo):
+    write(repo / ".github" / "workflows" / "build.yaml",
+          caller(on="on:\n  pull_request:\n    paths: ['a/**']\n    types: [opened]"))
+    findings = guard.audit(repo)
+    assert len(findings) == 1
+    assert "`paths`" in findings[0]["message"] and "`synchronize`" in findings[0]["message"]
+
+
+COMMONS = """branches:
+  - name: develop
+    protection:
+      required_status_checks:
+        contexts: []
+  - name: master
+    protection:
+      required_status_checks:
+        contexts:
+          - static / Static CI Tests
+"""
+
+
+def test_commons_contexts_apply_when_settings_extend_them(repo):
+    write(repo / ".github" / "settings.yml", "_extends: x:.github/commons-settings.yml\n")
+    write(repo / ".github" / "commons-settings.yml", COMMONS)
+    assert guard.required_contexts(
+        guard.load_yaml(repo / ".github" / "settings.yml"),
+        guard.load_yaml(repo / ".github" / "commons-settings.yml"),
+    ) == [("master", "static / Static CI Tests")]
+    write(repo / ".github" / "workflows" / "build.yaml", caller(on="on: push"))
+    assert kinds(repo) == ["trigger"]
+
+
+def test_commons_are_ignored_without_extends(repo):
+    write(repo / ".github" / "settings.yml", "branches: []\n")
+    write(repo / ".github" / "commons-settings.yml", COMMONS)
+    write(repo / ".github" / "workflows" / "build.yaml", caller(on="on: push"))
+    assert kinds(repo) == []
+
+
+def test_own_entry_overrides_commons_entry_of_the_same_name(repo):
+    write(repo / ".github" / "settings.yml", "_extends: x:y\n" + SETTINGS.replace(
+        "develop", "master").replace("static / Static CI Tests", "other / Other"))
+    write(repo / ".github" / "commons-settings.yml", COMMONS)
+    contexts = guard.required_contexts(
+        guard.load_yaml(repo / ".github" / "settings.yml"),
+        guard.load_yaml(repo / ".github" / "commons-settings.yml"),
+    )
+    assert contexts == [("master", "other / Other")]
+
+
+MATRIX_REUSABLE = """on:
+  workflow_call:
+jobs:
+  coverage:
+    name: Python Coverage
+    strategy:
+      matrix:
+        python: ["3.13", "3.14"]
+    runs-on: ubuntu-latest
+    steps:
+      - run: true
+"""
+
+
+def test_matrix_leg_of_reusable_job_is_produced(repo):
+    write(repo / ".github" / "settings.yml",
+          SETTINGS.replace("static / Static CI Tests", "static / Python Coverage (3.14)"))
+    write(repo / ".github" / "workflows" / "reusable-static.yaml", MATRIX_REUSABLE)
+    assert kinds(repo) == []
+
+
+def test_matrix_leg_needs_a_matrix(repo):
+    write(repo / ".github" / "settings.yml",
+          SETTINGS.replace("static / Static CI Tests", "static / Static CI Tests (3.14)"))
+    assert kinds(repo) == ["no-producer"]
+
+
+def test_plain_matrix_job_context_is_produced(repo):
+    write(repo / ".github" / "settings.yml",
+          SETTINGS.replace("static / Static CI Tests", "lint (3.14)"))
+    write(repo / ".github" / "workflows" / "lint.yaml", """on: pull_request
+permissions:
+  contents: read
+jobs:
+  lint:
+    strategy:
+      matrix:
+        python: ["3.14"]
+    runs-on: ubuntu-latest
+    steps:
+      - run: true
+""")
+    assert kinds(repo) == []
+
+
+def test_expression_in_job_name_matches_by_prefix(repo):
+    write(repo / ".github" / "settings.yml",
+          SETTINGS.replace("static / Static CI Tests", "static / Static CI Tests on ubuntu"))
+    write(repo / ".github" / "workflows" / "reusable-static.yaml",
+          REUSABLE.replace("name: Static CI Tests",
+                           "name: Static CI Tests on ${{ inputs.os }}"))
+    assert kinds(repo) == []
+    write(repo / ".github" / "settings.yml",
+          SETTINGS.replace("static / Static CI Tests", "static / Lint on ubuntu"))
+    assert kinds(repo) == ["no-producer"]
+
+
 def test_this_repository_has_no_findings():
-    contexts = guard.required_contexts(guard.load_yaml(REPO_ROOT / ".github" / "settings.yml"))
+    contexts = guard.required_contexts(
+        guard.load_yaml(REPO_ROOT / ".github" / "settings.yml"),
+        guard.load_yaml(REPO_ROOT / ".github" / "commons-settings.yml"),
+    )
     # Guard against a vacuous pass: a moved settings file would yield no contexts.
     assert contexts
     assert guard.audit(REPO_ROOT) == []
