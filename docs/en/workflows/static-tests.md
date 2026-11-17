@@ -2,7 +2,7 @@
 
 Runs a minimal static analysis bundle on every pull request and on every push to the default branch to give fast feedback without external services.
 
-- [`pre-commit`](https://pre-commit.com), installed at a pinned version, runs the hooks defined in `.pre-commit-config.yaml` on all files; [`actions/cache`](https://github.com/actions/cache), pinned to a full commit SHA, caches the hook environments
+- [`pre-commit`](https://pre-commit.com), installed at a pinned version, runs the hooks defined in `.pre-commit-config.yaml` on all files; [`actions/cache`](https://github.com/actions/cache), pinned to a full commit SHA, caches the hook environments (see [Hook environment cache](#hook-environment-cache))
 
 ---
 
@@ -24,6 +24,20 @@ jobs:
 
 !!! warning "Fork pull requests need the `pull_request` trigger"
     A fork never pushes to the base repository. With a push-only trigger the required check never reports on a pull request from a fork, so that pull request stays blocked. `pull_request_target` isn't an alternative. By default it checks out the base branch, so the required check passes without testing the pull request's changes. Checking out the pull request's head instead runs the fork's code with the base repository's write token and secrets. On a fork pull request `reusable-trivy.yaml` skips uploading its scan report to the Security tab, because the token there has read-only access.
+
+---
+
+## Hook environment cache
+
+The workflow caches `~/.cache/pre-commit`, where pre-commit installs the hook environments. The cache key combines the runner's operating system release, the installed pre-commit version, the Python installation path, and a hash of `.pre-commit-config.yaml`. A new Ubuntu image behind `ubuntu-latest` or a new pre-commit version therefore starts a fresh cache instead of restoring environments built for another system.
+
+Restoring and saving are separate steps. The workflow saves the cache only in a `pull_request` run, only on a cache miss, and before `pre-commit run` executes any hook. A cache saved by a pull request run is visible to that pull request only. Runs on the default branch, pushes to other branches, and `pull_request_target` runs restore at most and never save. This keeps hook code from writing hook environments into the default branch's cache, which every branch of the repository restores from.
+
+!!! info "Fewer cache hits"
+    The default branch never receives a saved cache. Runs on the default branch and the first run of each pull request install the hook environments from scratch, and the next run of the same pull request restores them. A caller that triggers the workflow only on `push` never uses the cache.
+
+!!! warning "Residual risk"
+    Hook code runs on the runner and can read the token the runner uses for the cache service. With it, hook code can still write any cache entry in the current run's scope, which on the default branch is the default branch's scope. Splitting restore and save doesn't close this path. Only running the hooks isolated from the runner, for example in a container without the runner context, does.
 
 ---
 
