@@ -52,6 +52,7 @@ jobs:
     uses: nolte/gh-plumbing/.github/workflows/reusable-release-publish.yml@<tag>
     with:
       tag: ${{ needs.archive.outputs.tag }}
+      expected-target-sha: ${{ needs.archive.outputs.target-sha }}
       dry_run: ${{ inputs.dry_run }}
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}
@@ -119,12 +120,29 @@ und die angehängten Dateinamen als `assets` zurück.
     von `develop` aus nicht erreichbar ist. Diese Prüfung läuft im
     Publish-Job, nach diesem.
 
-!!! warning "Nicht mit `auto-align: true` kombinieren"
+## Genau den Commit veröffentlichen, aus dem das Archiv stammt
+
+Gib `target-sha` als `expected-target-sha` an den Publish-Workflow weiter, wie
+im Verwendungsbeispiel. Der Publish-Workflow vergleicht das Ziel des Entwurfs
+dann zweimal mit diesem Commit: direkt nachdem er den Entwurf aufgelöst hat
+und noch einmal direkt vor dem Veröffentlichen. Weicht das Ziel ab, verweigert
+er das Veröffentlichen, etwa wenn nach dem Archiv-Build ein Merge auf
+`develop` kam. Baue das Archiv dann aus dem neuen Commit und veröffentliche
+erneut.
+
+Beim Veröffentlichen setzt der Workflow das Ziel des Entwurfs außerdem fest
+auf diesen Commit. Ein Entwurf, der auf einen Branch zeigt, kann sich zwischen
+Prüfung und Veröffentlichen so nicht mehr verschieben.
+
+!!! warning "`expected-target-sha` verweigert `auto-align: true`"
 
     Mit `auto-align: true` committet der Publish-Workflow die Versionsanhebung
     auf `develop` und setzt das Ziel des Entwurfs auf diesen Commit. Der Tag
-    zeigt dann auf einen Commit, aus dem das Archiv nicht gebaut wurde, und dem
-    Archiv fehlen die angeglichenen Versionsdateien.
+    zeigte dann auf einen Commit, aus dem das Archiv nicht gebaut wurde, und
+    dem Archiv fehlten die angeglichenen Versionsdateien. Der Publish-Workflow
+    verweigert die Kombination deshalb, bevor er etwas schreibt. Gleiche die
+    Versionsdateien zuerst über einen `chore(release): <tag>`-Pull-Request an
+    und starte danach Archiv und Publish ohne `auto-align`.
 
 ## Entfernte Taskfile-Includes
 

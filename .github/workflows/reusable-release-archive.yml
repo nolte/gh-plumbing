@@ -24,9 +24,12 @@ name: Release Archive
 #
 # Reachability of the draft target from the integration branch is NOT checked
 # here; reusable-release-publish.yml keeps that gate for the publish itself.
-# Its `auto-align: true` path commits on develop and moves the draft target
-# after this workflow ran, so the archive would no longer come from the tagged
-# commit: don't combine the two.
+# Pass this workflow's `target-sha` output to the publish workflow's
+# `expected-target-sha` input: publish then refuses when the draft target
+# moved after the archive was built (a merge on a branch-named target, a
+# manual edit), and pins the target to that commit before the flip. Publish
+# also refuses `expected-target-sha` together with `auto-align: true`, whose
+# alignment commit would move the target after this workflow ran (#456).
 
 on:
   workflow_call:

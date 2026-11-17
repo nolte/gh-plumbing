@@ -101,7 +101,15 @@ jobs:
 !!! tip "Ein gebautes Archiv vor dem Veröffentlichen anhängen"
     Um ein mit Task gebautes Archiv mit Build-Provenance auszuliefern, rufe
     [`reusable-release-archive.yml`](release-archive.md) vor diesem Workflow auf
-    und ordne den Publish-Job per `needs:` dahinter ein.
+    und ordne den Publish-Job per `needs:` dahinter ein. Gib den Output
+    `target-sha` des Archivs als `expected-target-sha` weiter: Der Workflow
+    verweigert dann das Veröffentlichen, wenn das Ziel des Entwurfs nicht mehr
+    der Commit ist, aus dem das Archiv stammt, und er verweigert den Input
+    zusammen mit `auto-align: true`.
+
+    | Input | Default | Wirkung |
+    | --- | --- | --- |
+    | `expected-target-sha` | leer | Vollständiger Commit-SHA, dem das Ziel des Entwurfs entsprechen muss; der Workflow setzt das Ziel vor dem Veröffentlichen fest darauf |
 
 !!! tip "Dry Run"
     `dry_run: true` setzen, um jeden Validierungs-Gate auszuführen, ohne den
