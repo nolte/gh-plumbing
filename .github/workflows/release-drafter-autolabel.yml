@@ -1,0 +1,29 @@
+name: Release Drafter Autolabel
+
+# `pull_request_target`, not `pull_request`: a fork pull request gets a
+# read-only token under `pull_request`, and #461 -- the case this exists for --
+# came from a fork. The local `uses:` path below resolves against the base
+# branch under this trigger, so a pull request cannot change what runs on it.
+# See reusable-release-drafter-autolabel.yml for why no pull request code runs.
+#
+# `edited` reruns it when the title changes; `synchronize` is left out because
+# a new commit changes neither the title nor the head branch name.
+on:
+  pull_request_target:
+    types: [opened, reopened, edited]
+
+# Explicit permissions per spec/project/github-actions-best-practices §B:
+# workflow level is the minimum, write scopes are granted per job.
+permissions:
+  contents: read
+
+jobs:
+  autolabel:
+    # Must grant every scope the called job declares, or GitHub refuses to
+    # start the run with `startup_failure` and no logs (#422).
+    permissions:
+      contents: read
+      pull-requests: write # the called workflow adds the type label
+    uses: ./.github/workflows/reusable-release-drafter-autolabel.yml
+    secrets:
+      token: ${{ secrets.GITHUB_TOKEN }}

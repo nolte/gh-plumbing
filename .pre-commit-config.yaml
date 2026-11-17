@@ -15,3 +15,10 @@ repos:
             language: python
             additional_dependencies: ['pyyaml']
             files: '^\.github/commons-settings\.yml$'
+          - id: release-category-labels
+            name: No area label selects a release-notes category (see #413, #475)
+            entry: .github/scripts/check-release-category-labels.py
+            language: python
+            additional_dependencies: ['pyyaml']
+            files: '^\.github/commons-(release-drafter|boring-cyborg)\.yml$'
+            pass_filenames: false
