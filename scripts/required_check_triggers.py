@@ -146,7 +146,16 @@ def name_matches(job_id: str, job: dict, wanted: str) -> bool:
     display = str(job.get("name", job_id))
     if "${{" in display:
         # The name is computed at run time; only its literal prefix is knowable.
-        return wanted.startswith(display.split("${{", 1)[0])
+        prefix = display.split("${{", 1)[0]
+        if prefix:
+            return wanted.startswith(prefix)
+        # A name that STARTS with an expression has no literal prefix, and ""
+        # is a prefix of every context -- the job would "produce" all of them
+        # and hide a real orphan. Fall back to the job id instead: wrong in the
+        # loud direction (a context this job really reports may come out as
+        # no-producer, which a reader can see and fix by giving the name a
+        # literal prefix), never in the silent one.
+        return wanted == job_id
     if display == wanted:
         return True
     leg = MATRIX_LEG.match(wanted)
@@ -200,34 +209,52 @@ def pattern_regex(pattern: str) -> re.Pattern:
     the preceding character (zero-or-one, one-or-more), `[...]` is a character
     class and `\\` escapes the next character -- the GitHub filter-pattern
     cheat sheet, rather than shell globbing, where `*` would cross `/`.
+
+    Never raises. A `?` or `+` with no preceding character to quantify -- at
+    the start, or after a wildcard or another quantifier -- is taken literally,
+    and anything `re` still rejects (a reversed range in `[...]`, say) yields a
+    pattern that matches nothing. One malformed filter must not crash the audit
+    of every other context.
     """
     out, i = [], 0
+    # Whether the last emitted token is a single atom `?` / `+` may quantify.
+    quantifiable = False
     while i < len(pattern):
         char = pattern[i]
         if pattern.startswith("**", i):
             out.append(".*")
+            quantifiable = False
             i += 2
             continue
         if char == "*":
             out.append("[^/]*")
+            quantifiable = False
         elif char in "?+":
-            out.append(char)
+            out.append(char if quantifiable else re.escape(char))
+            quantifiable = not quantifiable
         elif char == "[":
             end = pattern.find("]", i + 1)
             if end == -1:
                 out.append(re.escape(char))
+                quantifiable = True
             else:
                 out.append(pattern[i:end + 1])
+                quantifiable = True
                 i = end + 1
                 continue
         elif char == "\\" and i + 1 < len(pattern):
             out.append(re.escape(pattern[i + 1]))
+            quantifiable = True
             i += 2
             continue
         else:
             out.append(re.escape(char))
+            quantifiable = True
         i += 1
-    return re.compile("".join(out))
+    try:
+        return re.compile("".join(out))
+    except re.error:
+        return re.compile(r"(?!)")
 
 
 def branch_selected(branch: str, patterns: list[str]) -> bool:

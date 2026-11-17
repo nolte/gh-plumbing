@@ -412,6 +412,35 @@ def test_expression_in_job_name_matches_by_prefix(repo):
     assert kinds(repo) == ["no-producer"]
 
 
+def test_name_starting_with_expression_does_not_match_everything(repo):
+    # "" is a prefix of every context; such a job must not mask an orphan.
+    write(repo / ".github" / "workflows" / "reusable-static.yaml",
+          REUSABLE.replace("name: Static CI Tests", "name: ${{ inputs.label }} checks"))
+    assert kinds(repo) == ["no-producer"]
+    # The job id is the fallback, so a context naming it is still produced.
+    write(repo / ".github" / "settings.yml",
+          SETTINGS.replace("static / Static CI Tests", "static / static"))
+    assert kinds(repo) == []
+
+
+@pytest.mark.parametrize("pattern, branch, selected", [
+    ("+foo", "+foo", True),          # nothing to quantify: a literal `+`
+    ("?foo", "?foo", True),
+    ("?foo", "foo", False),
+    ("*?", "a?", True),              # after a wildcard: literal as well
+    ("a++", "a+", True),             # a quantifier can't be quantified
+    ("[z-a]", "a", False),           # rejected by `re`: matches nothing
+])
+def test_pattern_without_quantifiable_atom_never_raises(pattern, branch, selected):
+    assert guard.branch_selected(branch, [pattern]) is selected
+
+
+def test_malformed_branch_filter_does_not_crash_the_audit(repo):
+    write(repo / ".github" / "workflows" / "build.yaml",
+          caller(on="on:\n  pull_request:\n    branches: ['+foo', '[z-a]']"))
+    assert kinds(repo) == ["trigger"]
+
+
 def test_this_repository_has_no_findings():
     contexts = guard.required_contexts(
         guard.load_yaml(REPO_ROOT / ".github" / "settings.yml"),
