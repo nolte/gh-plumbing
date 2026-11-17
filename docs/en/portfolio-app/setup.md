@@ -258,16 +258,18 @@ If a cascade still fails to fire, check:
 ## Branch-protection bypass (phase 2)
 
 `commons-settings.yml` declares the App as a push-restriction actor
-on the `develop` and `master` branches. Because consumer repositories
-extend the commons through `_extends:`, the bypass propagates to
-every adopter automatically once the App reaches an installation in
-their repository.
+on the `master` branch. Because consumer repositories extend the
+commons through `_extends:`, the entry reaches every adopter. The
+commons declare no `develop` entry: each consumer declares its own
+complete `develop` protection, and that protection together with any
+rulesets decides whether the App may push to `develop`
+([ADR-005](../decisions/adr-005-consumer-owned-develop-protection.md)).
 
 The configured slug is **`nolte-portfolio-app`**:
 
 ```yaml title=".github/commons-settings.yml"
 branches:
-  - name: develop
+  - name: master
     protection:
       enforce_admins: true
       restrictions:
@@ -277,15 +279,14 @@ branches:
           - nolte-portfolio-app
 ```
 
-The same block applies to `master`.
-
 !!! warning "Personal accounts can't honour `restrictions.apps`"
     GitHub limits `restrictions.users` / `.teams` / `.apps` to
-    organisation-owned repositories. The Probot Settings App skips
-    the field without error when it lands in a personal-account
-    repository. Personal-account consumers either operate without
-    push restrictions or override the branches block in their
-    per-repo `.github/settings.yml`.
+    organisation-owned repositories. The Probot Settings App passes
+    the field through unchanged, so GitHub rejects the whole update for
+    the branch with 422 in a personal-account repository, and the
+    entry applies nothing. Personal-account consumers operate without
+    push restrictions and declare their own complete branch entry with
+    `restrictions: null`.
 
 !!! tip "Pre-condition for phase 2"
     Before merging the phase-2 PR, the App must already live in
@@ -298,10 +299,11 @@ The same block applies to `master`.
 
 ## Version-bearing file alignment (primary path)
 
-Phase 2 installs the App and names it as a `develop` bypass actor.
-After that, a caller can opt into the **workflow-driven primary path**
-for version-bearing-file alignment
-(`spec/project/release-automation/` §Version-bearing file alignment).
+Phase 2 installs the App. `develop`'s own branch protection and
+rulesets must also let the App push there. After that, a caller can
+opt into the **workflow-driven primary path** for version-bearing-file
+alignment (`spec/project/release-automation/` §Version-bearing file
+alignment).
 The caller passes `auto-align: true` to `reusable-release-publish.yml`.
 With the opt-in set and an App token present, the reusable then does
 three things before it verifies:
@@ -329,9 +331,10 @@ verifies on the runner. It never pushes and never realigns the draft.
     A direct push to `develop` under `enforce_admins: true` with
     required status checks works only when the App is a genuine bypass
     actor. `dry_run` can't exercise it. The remediation for a rejected
-    first push is the branch-protection bypass-actor setting—the
-    phase-2 block. An operator applies it through the GitHub UI when the
-    Probot App skips a protection field. It's not a workflow change.
+    first push lies in `develop`'s branch protection or rulesets, which
+    the consumer owns
+    ([ADR-005](../decisions/adr-005-consumer-owned-develop-protection.md)).
+    It's not a workflow change.
     The run degrades to the operator fallback rather than wedging the
     release.
 

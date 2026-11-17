@@ -1,6 +1,6 @@
 # ADR-002: Branch Protection prüfen, bevor die Defaults geändert werden
 
-**Status:** Angenommen (2026-08-01) · **Issue:** [#387](https://github.com/nolte/gh-plumbing/issues/387)
+**Status:** Angenommen (2026-08-01) · offene Frage beantwortet durch [ADR-005](adr-005-consumer-owned-develop-protection.md) · **Issue:** [#387](https://github.com/nolte/gh-plumbing/issues/387)
 
 ## Kontext
 
@@ -56,3 +56,4 @@ verlangen deshalb eine Prüfung über die API statt über die Einstellungsseite.
 Die offene Frage, ob `restrictions` auf `develop` überhaupt etwas bringt, bleibt
 offen. Die Commons begründen es für `master`, wo die Release-Kaskade mit einem
 App-Token pusht. Diese Begründung überträgt sich nicht ohne Weiteres.
+[ADR-005](adr-005-consumer-owned-develop-protection.md) beantwortet sie für `develop`.

@@ -7,7 +7,15 @@
 # file as well (a comment touch is enough) so the App re-runs the merge.
 # Tracked by https://github.com/nolte/gh-plumbing/issues/331.
 #
-# Last propagation: 2026-11-17 — declare `required-check-triggers-tests /
+# Last propagation: 2026-11-17 (second) — commons-settings.yml no longer
+# declares a `develop` entry (#442, ADR-005): its `restrictions.apps` can't
+# work on a user-owned repository, and arrays from `_extends` may be
+# concatenated rather than merged by `name`, which would race this file's own
+# entry. The develop entry below therefore carries the complete protection
+# payload itself. Verify through the API afterwards that all contexts,
+# `strict` and `enforce_admins` are still live.
+#
+# Previous propagation: 2026-11-17 — declare `required-check-triggers-tests /
 # Python Coverage` as a required context on develop: the suite of the guard
 # that refuses a required context fork pull requests can't report (#462).
 # The App applied it on merge, as verified through the API on 2026-11-17.
@@ -48,10 +56,9 @@
 # checks on develop. commons-settings.yml leaves develop's
 # `required_status_checks.contexts` empty by portfolio policy ("Consumers
 # MUST declare their own required-check contexts in their per-repo
-# .github/settings.yml"); the branches block below supplies them. Per the
-# Probot Settings App `_extends` merge rules, branch entries merge by
-# `name`, so declaring only `develop` here keeps the `master` block and
-# develop's `enforce_admins` / `restrictions` from commons untouched.
+# .github/settings.yml"); the branches block below supplies them. (This
+# note used to say branch entries merge by `name`. The current App source
+# concatenates `_extends` arrays instead; #442 has the detail.)
 # (Previous propagation 2026-05-20 — Phase 2 of #330: declare
 # nolte-portfolio-app as branch-protection bypass actor on develop and
 # master.)
@@ -65,8 +72,9 @@ repository:
   topics: github, plumbing
 
 branches:
-  # Merges by `name` into the commons `develop` block; only
-  # required_status_checks.contexts is overridden here. The check
+  # The complete `develop` protection payload. The commons declare no
+  # `develop` entry (#442, ADR-005), so nothing is inherited here: every
+  # field the branch-protection API requires is set in this block. The check
   # contexts are "<caller-job-id> / <reusable-job-display-name>":
   # `static` job → reusable-pre-commit's "Static CI Tests";
   # `docs` job → reusable-mkdocs-build's "MkDocs Build";
@@ -81,6 +89,7 @@ branches:
   # since a failed App run is silent.
   - name: develop
     protection:
+      required_pull_request_reviews: null
       required_status_checks:
         strict: true
         contexts:
@@ -89,8 +98,10 @@ branches:
           - actionlint / Workflow Lint
           - pr-lint / PR Lint
           - required-check-triggers-tests / Python Coverage
+      enforce_admins: true
       # Push restrictions are only available for organization-owned repositories
       # (GitHub REST, Update branch protection); the commons' apps restriction
-      # makes the whole develop update fail with 422 on this user-owned repository,
-      # so contexts declared after it never applied (nolte/gh-plumbing#416).
+      # used to make the whole develop update fail with 422 on this user-owned
+      # repository, so contexts declared after it never applied
+      # (nolte/gh-plumbing#416). The commons no longer declare it (#442).
       restrictions: null
