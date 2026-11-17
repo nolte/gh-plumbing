@@ -46,9 +46,11 @@ jobs:
       # available the reusable aligns every version-bearing file, commits
       # `chore(release): <tag>` on develop, and pushes (spec/project/
       # release-automation/ §Version-bearing file alignment → Primary path).
-      # nolte-portfolio-app is a declared bypass actor on develop
-      # (.github/commons-settings.yml restrictions.apps); a push rejected by
-      # branch protection degrades gracefully to the operator fallback path.
+      # Whether the App may push to develop is decided by develop's branch
+      # protection and rulesets, not by the commons: classic push
+      # restrictions can't be set on this user-owned repository (#442,
+      # ADR-005). A push rejected by branch protection degrades gracefully
+      # to the operator fallback path.
       auto-align: true
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}

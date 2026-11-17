@@ -449,3 +449,15 @@ def test_this_repository_has_no_findings():
     # Guard against a vacuous pass: a moved settings file would yield no contexts.
     assert contexts
     assert guard.audit(REPO_ROOT) == []
+
+
+def test_this_repository_branch_entries_apply_and_do_not_race():
+    """#442: every own branch entry is a complete payload, and none shares a
+    name with a commons entry, so neither merge behaviour of the Settings App
+    can drop or race it."""
+    settings = guard.load_yaml(REPO_ROOT / ".github" / "settings.yml")
+    commons = guard.load_yaml(REPO_ROOT / ".github" / "commons-settings.yml")
+    names = [e["name"] for e in settings.get("branches") or []]
+    assert names  # not vacuous
+    for name in names:
+        assert guard.branch_protection_audit.entry_findings(settings, commons, name) == []

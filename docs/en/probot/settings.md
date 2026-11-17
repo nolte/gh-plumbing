@@ -8,7 +8,7 @@ Shared rules cover:
 - Issue/PR features (issues, projects, wiki, pages, downloads)
 - Merge strategies (`allow_squash_merge`, `allow_merge_commit`, `allow_rebase_merge`)
 - `delete_branch_on_merge`
-- Branch protection for `master` and `develop`
+- Branch protection for `master` (`develop` is yours to declare, see below)
 - Shared label palette
 
 ---
@@ -27,6 +27,33 @@ repository:
 
 !!! tip "Overrides"
     Keys in your local `.github/settings.yml` override the inherited values. Only specify what differs from the shared defaults.
+    This doesn't hold reliably for list entries such as `branches:`. The App may
+    append your entries to the inherited ones instead of merging them by `name`
+    ([#442](https://github.com/nolte/gh-plumbing/issues/442)).
+
+!!! warning "Declare a complete `develop` entry yourself"
+    The commons declare no `develop` protection. Declare it in your own
+    `.github/settings.yml`, with all four fields the branch-protection API
+    requires and `restrictions: null`:
+
+    ```yaml
+    branches:
+      - name: develop
+        protection:
+          required_pull_request_reviews: null
+          required_status_checks:
+            strict: true
+            contexts:            # your own required checks
+              - static / Static CI Tests
+          enforce_admins: true
+          restrictions: null
+    ```
+
+    An entry that omits one of the four fields fails with 422, and so does any
+    push restriction on a repository a personal account owns. An inherited
+    `develop` entry could also race your own when the App appends list entries.
+    [ADR-005](../decisions/adr-005-consumer-owned-develop-protection.md) has the
+    reasoning.
 
 !!! danger "`topics` takes a comma-separated string, never a YAML list"
     Use the comma-separated form shown in the example. A list costs you the

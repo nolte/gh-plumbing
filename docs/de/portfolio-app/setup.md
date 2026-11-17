@@ -263,16 +263,19 @@ Wenn ein Cascade immer noch nicht triggert, prüfen:
 ## Branch-Protection-Bypass (Phase 2)
 
 `commons-settings.yml` deklariert die App als Push-Restriction-Actor
-auf den Branches `develop` und `master`. Da Konsumenten-Repositories
-die Commons per `_extends:` einbinden, propagiert der Bypass
-automatisch zu jedem Adopter, sobald die App in dessen Repository
-installiert ist.
+auf dem Branch `master`. Da Konsumenten-Repositories die Commons per
+`_extends:` einbinden, erreicht der Eintrag jeden Adopter. Einen
+`develop`-Eintrag deklarieren die Commons nicht: Jeder Konsument
+deklariert seine vollständige `develop`-Protection selbst, und diese
+Protection entscheidet zusammen mit etwaigen Rulesets, ob die App auf
+`develop` pushen darf
+([ADR-005](../decisions/adr-005-consumer-owned-develop-protection.md)).
 
 Der konfigurierte Slug ist **`nolte-portfolio-app`**:
 
 ```yaml title=".github/commons-settings.yml"
 branches:
-  - name: develop
+  - name: master
     protection:
       enforce_admins: true
       restrictions:
@@ -282,15 +285,15 @@ branches:
           - nolte-portfolio-app
 ```
 
-Derselbe Block gilt für `master`.
-
 !!! warning "Persönliche Accounts unterstützen `restrictions.apps` nicht"
     GitHub beschränkt `restrictions.users` / `.teams` / `.apps` auf
-    Organisations-Repositories. Die Probot Settings App überspringt
-    das Feld still, wenn es in einem persönlichen Account landet.
-    Persönliche-Account-Konsumenten arbeiten entweder ohne
-    Push-Restriktionen oder überschreiben den Branches-Block in
-    ihrem per-Repo-`.github/settings.yml`.
+    Organisations-Repositories. Die Probot Settings App reicht das Feld
+    unverändert durch, daher lehnt GitHub in einem Repository eines
+    persönlichen Accounts die gesamte Aktualisierung für den Branch mit
+    422 ab, und der Eintrag wendet nichts an. Konsumenten mit
+    persönlichem Account arbeiten ohne Push-Restriktionen und
+    deklarieren ihren vollständigen Branch-Eintrag selbst, mit
+    `restrictions: null`.
 
 !!! tip "Vorbedingung für Phase 2"
     Vor dem Merge des Phase-2-PRs muss die App bereits in jedem
@@ -304,8 +307,8 @@ Derselbe Block gilt für `master`.
 
 ## Versionstragende Datei-Ausrichtung (Primärpfad)
 
-Sobald die App installiert **und** als `develop`-Bypass-Actor benannt
-ist (der Phase-2-Block oben), kann ein Aufrufer den
+Sobald die App installiert ist **und** die Branch Protection und
+Rulesets von `develop` ihr den Push erlauben, kann ein Aufrufer den
 **workflow-getriebenen Primärpfad** für die Ausrichtung versionstragender
 Dateien (`spec/project/release-automation/` §Version-bearing file
 alignment) aktivieren, indem er `auto-align: true` an
@@ -337,10 +340,10 @@ aus und verifiziert, pusht aber nie und richtet den Draft nicht neu aus.
     Ein direkter Push auf `develop` unter `enforce_admins: true` mit
     erforderlichen Status-Checks wird nur akzeptiert, wenn die App ein
     echter Bypass-Actor ist. `dry_run` kann das nicht ausüben. Wird der
-    erste echte Push abgelehnt, ist die Abhilfe die Bypass-Actor-
-    Einstellung der Branch-Protection (der Phase-2-Block, über die
-    GitHub-UI angewendet, wenn die Probot-App ein Schutzfeld nicht
-    synchronisiert), keine Workflow-Änderung; der Lauf degradiert auf den
+    erste echte Push abgelehnt, liegt die Abhilfe in der Branch Protection
+    oder den Rulesets von `develop`, die der Konsument selbst verantwortet
+    ([ADR-005](../decisions/adr-005-consumer-owned-develop-protection.md)),
+    nicht in einer Workflow-Änderung; der Lauf degradiert auf den
     Operator-Fallback, statt das Release zu blockieren.
 
 ---

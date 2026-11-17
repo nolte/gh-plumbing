@@ -16,6 +16,7 @@ here when it changes what consumers inherit.
 | [ADR-002](adr-002-branch-protection-verification.md) | Verify branch protection before changing its defaults | Accepted |
 | [ADR-003](adr-003-workflow-validation-gate.md) | Gate workflow validity on a required check | Accepted |
 | [ADR-004](adr-004-spec-drift-routing.md) | Route the Q2 spec-drift cluster through the roadmap | Accepted |
+| [ADR-005](adr-005-consumer-owned-develop-protection.md) | Consumers declare their own complete develop protection | Accepted |
 
 ## Format
 

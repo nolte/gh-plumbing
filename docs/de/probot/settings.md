@@ -8,7 +8,7 @@ Die geteilten Regeln umfassen:
 - Issue- und PR-Funktionen (Issues, Projects, Wiki, Pages, Downloads)
 - Merge-Strategien (`allow_squash_merge`, `allow_merge_commit`, `allow_rebase_merge`)
 - `delete_branch_on_merge`
-- Branch-Protection für `master` und `develop`
+- Branch-Protection für `master` (`develop` deklariert jeder Consumer selbst, siehe unten)
 - Geteilte Label-Palette
 
 ---
@@ -27,6 +27,35 @@ repository:
 
 !!! tip "Overrides"
     Schlüssel in der lokalen `.github/settings.yml` überschreiben die geerbten Werte. Dort nur angeben, was vom geteilten Default abweicht.
+    Für Listeneinträge wie `branches:` gilt das nicht verlässlich. Die App hängt
+    die eigenen Einträge unter Umständen an die geerbten an, statt sie über
+    `name` zusammenzuführen
+    ([#442](https://github.com/nolte/gh-plumbing/issues/442)).
+
+!!! warning "Einen vollständigen `develop`-Eintrag selbst deklarieren"
+    Die Commons deklarieren keine `develop`-Protection. Sie gehört in die
+    eigene `.github/settings.yml`, mit allen vier Feldern, die die
+    Branch-Protection-API verlangt, und `restrictions: null`:
+
+    ```yaml
+    branches:
+      - name: develop
+        protection:
+          required_pull_request_reviews: null
+          required_status_checks:
+            strict: true
+            contexts:            # die eigenen Required Checks
+              - static / Static CI Tests
+          enforce_admins: true
+          restrictions: null
+    ```
+
+    Ein Eintrag, dem eines der vier Felder fehlt, scheitert mit 422, ebenso
+    jede Push-Restriktion in einem Repository eines persönlichen Kontos. Ein
+    geerbter `develop`-Eintrag könnte außerdem mit dem eigenen um die Wette
+    schreiben, wenn die App Listeneinträge aneinanderhängt.
+    [ADR-005](../decisions/adr-005-consumer-owned-develop-protection.md) enthält
+    die Begründung.
 
 !!! danger "`topics` erwartet einen kommagetrennten String, niemals eine YAML-Liste"
     `topics: a, b, c` schreiben, wie oben. Eine Liste kostet den kompletten

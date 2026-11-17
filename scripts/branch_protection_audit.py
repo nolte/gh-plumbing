@@ -97,8 +97,11 @@ def read_yaml_file(repo: str, path: str, token: str):
 def declared_contexts(settings, commons, branch: str):
     """Resolve the contexts a repository declares for one branch.
 
-    The Probot Settings App merges `branches:` entries by `name`, so a per-repo
-    entry overrides the commons entry of the same name field by field.
+    A per-repo entry wins over the commons entry of the same name. That is the
+    behaviour the hosted Probot Settings App shows; its current source
+    concatenates `_extends` arrays instead (#442). Both readings agree as long
+    as the commons and the repository don't declare the same branch, which is
+    why the commons no longer declare `develop`.
     """
     def contexts_from(doc):
         if not isinstance(doc, dict):
@@ -121,6 +124,54 @@ def declared_contexts(settings, commons, branch: str):
     return []
 
 
+# The fields GitHub's "Update branch protection" endpoint requires (each may be
+# null, none may be absent). The Settings App PUTs a branch entry as it stands,
+# so an entry missing one is rejected with 422 and nothing in it applies.
+REQUIRED_PROTECTION_FIELDS = (
+    "required_status_checks",
+    "enforce_admins",
+    "required_pull_request_reviews",
+    "restrictions",
+)
+
+
+def _entry(doc, branch: str):
+    """The `branches:` entry named `branch` in `doc`, or None."""
+    if not isinstance(doc, dict):
+        return None
+    for entry in doc.get("branches") or []:
+        if isinstance(entry, dict) and entry.get("name") == branch:
+            return entry
+    return None
+
+
+def entry_findings(settings, commons, branch: str) -> list[str]:
+    """Declaration faults that make a branch entry apply nothing, or race (#442).
+
+    Both are silent: the Settings App reports neither, and the live protection
+    simply stops following the declaration.
+    """
+    findings = []
+    own = _entry(settings, branch)
+    protection = (own or {}).get("protection")
+    if isinstance(protection, dict):
+        absent = [f for f in REQUIRED_PROTECTION_FIELDS if f not in protection]
+        if absent:
+            findings.append(
+                f"the `{branch}` entry omits {', '.join(f'`{f}`' for f in absent)}; "
+                "the branch-protection API requires every one of them, so the "
+                "Settings App update for this branch fails and later changes to "
+                "it stop applying (#442)"
+            )
+    if own is not None and settings.get("_extends") and _entry(commons, branch) is not None:
+        findings.append(
+            f"both this repository and the commons declare `{branch}`; the "
+            "Settings App source concatenates `_extends` arrays, so the two "
+            "entries can be applied in parallel and the last write wins (#442)"
+        )
+    return findings
+
+
 def audit_repo(repo: str, branch: str, commons, token: str) -> dict:
     result = {"repo": repo, "branch": branch, "notes": []}
 
@@ -138,6 +189,7 @@ def audit_repo(repo: str, branch: str, commons, token: str) -> dict:
     result["extends"] = settings.get("_extends") or "(none)"
     declared = declared_contexts(settings, commons, branch)
     result["declared"] = declared
+    result["notes"].extend(entry_findings(settings, commons, branch))
 
     # Read rulesets FIRST. A repository with no classic branch protection can
     # still be fully protected by one, so returning early on a 404 from the
@@ -239,21 +291,26 @@ def audit_repo(repo: str, branch: str, commons, token: str) -> dict:
     live = sorted(set(classic) | set(ruleset_ctx))
     result["live"] = live
 
-    # Distinguish "the commons were applied and something was dropped" from
-    # "the commons were never applied". The commons declare enforce_admins and
-    # strict for develop; a repository that extends them and reports neither is
-    # a different fault from one that reports both and is missing a context.
+    # Distinguish "the declared block was applied and something was dropped"
+    # from "the declared block was never applied". A branch entry that declares
+    # enforce_admins and reports none is a different fault from one that
+    # reports it and is missing a context. The repository's own entry wins;
+    # the commons only count when the repository extends them and declares
+    # no entry of that name (the commons no longer declare `develop`, #442).
+    sources = [settings]
     if settings.get("_extends") and isinstance(commons, dict):
-        for entry in commons.get("branches") or []:
-            if entry.get("name") != branch:
-                continue
-            wanted = entry.get("protection") or {}
-            if wanted.get("enforce_admins") and not result["enforce_admins"]:
-                result["notes"].append(
-                    "extends the commons but `enforce_admins` is not enforced -- "
-                    "the commons block looks unapplied, not merely incomplete"
-                )
-            break
+        sources.append(commons)
+    for doc in sources:
+        entry = _entry(doc, branch)
+        if entry is None:
+            continue
+        wanted = entry.get("protection") or {}
+        if wanted.get("enforce_admins") and not result["enforce_admins"]:
+            result["notes"].append(
+                "declares `enforce_admins` but it is not enforced -- "
+                "the declared block looks unapplied, not merely incomplete"
+            )
+        break
 
     missing = [c for c in declared if c not in live]
     extra = [c for c in live if c not in declared]
