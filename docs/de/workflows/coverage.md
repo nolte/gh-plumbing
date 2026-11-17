@@ -7,6 +7,8 @@ Führt die Tests eines Projekts aus und stellt den Coverage-Bericht in der Job-Z
 
 Beide rendern eine Markdown-Tabelle in `$GITHUB_STEP_SUMMARY` — auch wenn die Tests fehlschlagen — und bieten ein optionales `fail-under`-Gate.
 
+Keiner der beiden Workflows persistiert das Checkout-Token (`persist-credentials: false`), damit die Install- und Test-Befehle es nicht lesen können. Ein Befehl, der von `origin` fetcht, funktioniert deshalb nur in einem öffentlichen Repository.
+
 ---
 
 ## Python
