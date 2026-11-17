@@ -9,7 +9,9 @@ name: Static CI Tests
 # deliberately NOT used: by default it checks out the base ref, so the checks
 # would go green without testing the pull request's changes, and checking out
 # the head explicitly would run fork code with the base repository's write
-# token and secrets.
+# token and secrets. The flip side -- under `pull_request` a fork runs its own
+# copy of this file and could edit the jobs until they pass -- is what the
+# required `fork-guard` commit status refuses (fork-guard.yaml, #465).
 on:
   pull_request:
   push:

@@ -1,0 +1,31 @@
+name: Fork Guard
+
+# `pull_request_target`, not `pull_request`: under `pull_request` a fork runs
+# its own copy of this file and could edit the check away. This trigger runs
+# the definition from the default branch, and the local `uses:` path below
+# resolves there as well, so a pull request can't change what judges it
+# (#465). See reusable-fork-guard.yaml for why no pull request code runs.
+#
+# Required on develop as the commit status `fork-guard`
+# (.github/settings.yml), which the called job posts -- not as this job's own
+# check run, whose name a fork's workflow could reuse.
+# `opened`, `synchronize` and `reopened` report it on every head commit;
+# `edited` reruns it when the pull request is retargeted to another base
+# branch, which changes its diff.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+
+# Explicit permissions per spec/project/github-actions-best-practices §B:
+# workflow level is the minimum, write scopes are granted per job.
+permissions:
+  contents: read
+
+jobs:
+  fork-guard:
+    # Must grant every scope the called job declares, or GitHub refuses to
+    # start the run with `startup_failure` and no logs (#422).
+    permissions:
+      contents: read
+      statuses: write # the called job posts the `fork-guard` commit status
+    uses: ./.github/workflows/reusable-fork-guard.yaml
