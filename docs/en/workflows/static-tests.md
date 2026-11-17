@@ -38,7 +38,9 @@ Two optional parameters move the count to a per-account budget:
 | Parameter | Kind | Default | Purpose |
 | --- | --- | --- | --- |
 | `dockerhub-username` | input | `""` | Docker Hub account name. A username isn't secret, so it travels as an input. Empty skips the login step. |
-| `dockerhub-token` | secret | unset | Docker Hub access token for that account. A read-only token is enough; nothing here pushes. |
+| `dockerhub-token` | secret | unset | Docker Hub personal access token for that account. It must have the "Public Repo Read-only" scope, because pre-commit hooks in the same job can read it. |
+
+Create the token on a dedicated Docker ID used only by CI (a bot account), not a personal one, give it an expiration date, and rotate it. Hook code can read the token, so a leak then spends only that account's pull quota and exposes no identity you use elsewhere. For the same reason the workflow doesn't persist the checkout token (`persist-credentials: false`). A hook that fetches from `origin` therefore works only in a public repository, and a private consumer needs a workflow of its own.
 
 ```yaml title=".github/workflows/build-static-tests.yaml"
 jobs:
