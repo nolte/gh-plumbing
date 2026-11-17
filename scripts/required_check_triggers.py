@@ -36,6 +36,19 @@ every job that produces it
 A context with no producer at all is a finding too: it can never report,
 on any pull request.
 
+One exception, by name: a context in STATUS_PRODUCERS (#465) is a commit
+status, posted by a guard that must run the default branch's definition
+precisely so that a fork can't rewrite it. Its workflow is held to the mirror
+rule instead -- it triggers on `pull_request_target` and NOT on `pull_request`
+(where the fork's own copy would run), with the same filter rules; no job of
+it, nor of a reusable it calls by local path, has an `actions/checkout` step,
+so no pull request code runs with the base repository's token; a step in it
+posts the status (`/statuses/` and `context=<name>` in one `run:`); its jobs
+carry no `if:` and declare permissions; and the only `write` scope they may
+hold is `statuses`, the one that posts the verdict. A fork can't hold that
+scope, which is why the verdict is a status: a check run of the same name is
+something a fork's own workflow can report too.
+
 Selector (§G6): the set of contexts is read from the branch-protection
 declaration, not from a list of workflow names, so a context added to
 `settings.yml` is covered without anyone opting it in. A context
@@ -74,6 +87,24 @@ SEPARATOR = " / "
 # without `synchronize` it does not rerun on a new head commit, and a strict
 # protection then waits for a context on a SHA nothing will ever report on.
 REQUIRED_TYPES = ("opened", "synchronize")
+
+# Required contexts reported as a commit status from `pull_request_target`,
+# mapped to the workflow (relative to the repository root) that posts them.
+# Named one by one rather than inferred from their shape: any
+# `pull_request_target` job without a checkout would otherwise pass, including
+# one that checks nothing. A listed workflow is still refused if it also
+# triggers on `pull_request`, checks out code, or holds any write scope but
+# `statuses`.
+STATUS_PRODUCERS = {
+    # Fails a fork pull request that changes what the required checks run
+    # (#465); under `pull_request` the fork would run its own copy of it.
+    "fork-guard": ".github/workflows/fork-guard.yaml",
+}
+
+# The one write scope a STATUS_PRODUCERS workflow needs.
+STATUS_SCOPE = "statuses"
+
+CHECKOUT_ACTION = "actions/checkout"
 
 # `Python Coverage (3.14, ubuntu-latest)` -- the name GitHub gives a matrix leg.
 MATRIX_LEG = re.compile(r"^(.*) \((.*)\)$")
@@ -276,26 +307,91 @@ def check_trigger(branch: str, events: dict) -> list[str]:
         listed = ", ".join(f"`{e}`" for e in events) or "nothing"
         return [f"doesn't trigger on `pull_request` (triggers: {listed}), so a fork "
                 "pull request never gets this context"]
+    return check_filters(branch, "pull_request", events["pull_request"])
 
-    config = events["pull_request"] or {}
+
+def check_base_ref_trigger(branch: str, events: dict) -> list[str]:
+    """Problems with a STATUS_PRODUCERS workflow's trigger (#465)."""
+    problems = []
+    if "pull_request" in events:
+        problems.append("posts a guard status but also triggers on `pull_request`, "
+                        "where a fork runs its own copy of it")
+    if "pull_request_target" not in events:
+        listed = ", ".join(f"`{e}`" for e in events) or "nothing"
+        problems.append(f"posts a guard status but doesn't trigger on "
+                        f"`pull_request_target` (triggers: {listed})")
+        return problems
+    return problems + check_filters(branch, "pull_request_target",
+                                    events["pull_request_target"])
+
+
+def check_filters(branch: str, event: str, config) -> list[str]:
+    """Filters on `event` that keep the context from reporting on some pull request."""
+    config = config or {}
     if not isinstance(config, dict):
         return []
     problems = []
     for key in ("paths", "paths-ignore"):
         if key in config:
-            problems.append(f"filters `pull_request` by `{key}`, so the context goes "
+            problems.append(f"filters `{event}` by `{key}`, so the context goes "
                             "unreported on pull requests outside it")
     if "branches" in config and not branch_selected(branch, as_list(config["branches"])):
-        problems.append(f"filters `pull_request` by `branches` that exclude `{branch}`")
+        problems.append(f"filters `{event}` by `branches` that exclude `{branch}`")
     if branch_selected(branch, as_list(config.get("branches-ignore"))):
-        problems.append(f"filters `pull_request` by `branches-ignore` that matches `{branch}`")
+        problems.append(f"filters `{event}` by `branches-ignore` that matches `{branch}`")
     types = as_list(config.get("types"))
     if types:
         missing = [t for t in REQUIRED_TYPES if t not in types]
         if missing:
-            problems.append("restricts `pull_request` `types` without "
+            problems.append(f"restricts `{event}` `types` without "
                             + ", ".join(f"`{t}`" for t in missing))
     return problems
+
+
+def checkout_steps(root: Path, workflow: dict) -> list[str]:
+    """Where a job checks out code: "job `<id>`", prefixed by the reusable's path.
+
+    Covers every job of the workflow, not only the one producing the context --
+    all of them run under the same trigger with the same token -- and every
+    reusable they call by local path, since under `pull_request_target` a local
+    path resolves on the default branch and is part of what runs.
+    """
+    out = []
+    for where, job_id, job in job_tree(root, workflow):
+        for step in job.get("steps") or []:
+            uses = str(step.get("uses", "")) if isinstance(step, dict) else ""
+            if uses.split("@", 1)[0] == CHECKOUT_ACTION:
+                out.append(f"{where}job `{job_id}`")
+                break
+    return out
+
+
+def job_tree(root: Path, workflow: dict, seen: frozenset[str] = frozenset()):
+    """(prefix, job id, job) for every job of the workflow and of the reusables
+    it calls by local path; `seen` stops a reusable that calls itself."""
+    for job_id, job in (workflow.get("jobs") or {}).items():
+        if not isinstance(job, dict):
+            continue
+        yield "", str(job_id), job
+        uses = str(job.get("uses", ""))
+        if uses.startswith("./"):
+            called = uses[2:].split("@", 1)[0]
+            if called in seen:
+                continue
+            for where, inner_id, inner in job_tree(root, load_yaml(root / called),
+                                                   seen | {called}):
+                yield f"`{called}` {where}", inner_id, inner
+
+
+def posts_status(root: Path, workflow: dict, context: str) -> bool:
+    """Whether a `run:` step in the job tree posts the commit status `context`."""
+    marker = re.compile(r"context=[\"']?" + re.escape(context) + r"[\"']?(\s|$)")
+    for _, _, job in job_tree(root, workflow):
+        for step in job.get("steps") or []:
+            run = str(step.get("run", "")) if isinstance(step, dict) else ""
+            if "/statuses/" in run and marker.search(run):
+                return True
+    return False
 
 
 def write_scopes(permissions) -> list[str]:
@@ -307,7 +403,8 @@ def write_scopes(permissions) -> list[str]:
     return []
 
 
-def check_job(name: str, workflow: dict, job_id: str, job: dict) -> list[tuple[str, str]]:
+def check_job(name: str, workflow: dict, job_id: str, job: dict,
+              allowed_writes: frozenset[str] = frozenset()) -> list[tuple[str, str]]:
     """(kind, message) problems with the producing job itself."""
     out = []
     if "if" in job:
@@ -318,12 +415,38 @@ def check_job(name: str, workflow: dict, job_id: str, job: dict) -> list[tuple[s
         out.append(("no-permissions",
                     f"`{name}` declares no `permissions:` on job `{job_id}` or the "
                     "workflow, so the token falls back to the repository default"))
-    scopes = write_scopes(job.get("permissions", workflow.get("permissions")))
+    scopes = [s for s in write_scopes(job.get("permissions", workflow.get("permissions")))
+              if s not in allowed_writes]
     if scopes:
         out.append(("write-permission",
                     f"`{name}` job `{job_id}` grants {', '.join(f'`{s}`' for s in scopes)}; "
                     "a fork pull request's token is read-only"))
     return out
+
+
+def audit_status_producer(root: Path, branch: str, context: str, add) -> None:
+    """Hold a STATUS_PRODUCERS workflow to the mirror rule (#465)."""
+    name = STATUS_PRODUCERS[context]
+    workflow = load_yaml(root / name)
+    if not workflow:
+        add(context, "", "no-producer",
+            f"required commit status, but `{name}`, which should post it, doesn't exist")
+        return
+    if not posts_status(root, workflow, context):
+        add(context, name, "no-producer",
+            f"`{name}` should post this commit status, but no `run:` step in it or a "
+            f"reusable it calls by local path does (`/statuses/` and `context={context}`)")
+    for problem in check_base_ref_trigger(branch, triggers(workflow)):
+        add(context, name, "trigger", f"`{name}` {problem}")
+    for where in checkout_steps(root, workflow):
+        add(context, name, "checkout",
+            f"`{name}` runs under `pull_request_target`, and {where} checks out "
+            "code: never run pull request code with the base repository's token")
+    for job_id, job in (workflow.get("jobs") or {}).items():
+        if isinstance(job, dict):
+            for kind, message in check_job(name, workflow, str(job_id), job,
+                                           frozenset({STATUS_SCOPE})):
+                add(context, name, kind, message)
 
 
 def audit(root: Path) -> list[dict]:
@@ -344,6 +467,9 @@ def audit(root: Path) -> list[dict]:
             messages.append(message)
 
     for branch, context in required_contexts(settings, commons):
+        if context in STATUS_PRODUCERS:
+            audit_status_producer(root, branch, context, add)
+            continue
         jobs = producers(root, context)
         if not jobs:
             add(context, "", "no-producer",
@@ -351,7 +477,7 @@ def audit(root: Path) -> list[dict]:
                 "so it can never report")
             continue
         for path, workflow, job_id, job in jobs:
-            name = str(path.relative_to(root))
+            name = path.relative_to(root).as_posix()
             for problem in check_trigger(branch, triggers(workflow)):
                 add(context, name, "trigger", f"`{name}` {problem}")
             for kind, message in check_job(name, workflow, job_id, job):
@@ -367,7 +493,7 @@ def render(findings: list[dict]) -> str:
     lines = ["# Required-check triggers", ""]
     if not findings:
         lines.append("No findings. Every required context is produced by a workflow "
-                     "that runs, read-only, on fork pull requests.")
+                     "that reports it on fork pull requests, read-only or as a guard status.")
         return "\n".join(lines)
     lines.append(f"**{len(findings)} finding(s).**")
     lines.append("")

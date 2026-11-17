@@ -27,6 +27,41 @@ jobs:
 
 ---
 
+## Fork-Wächter
+
+Erforderliche Checks wie `static / Static CI Tests` laufen bei `pull_request`, und GitHub führt einen `pull_request`-Workflow aus dem Merge-Commit des Pull-Requests aus. Bei einem Fork-Pull-Request stammen die Workflow-Dateien und die Skripte, die sie aufrufen, aus dem Fork. Ein Fork kann sie also so lange ändern, bis jeder Job durchläuft. Ein erforderlicher Kontext nennt nur die App und den Check, daher erfüllt ihn auch ein Check, den der Fork definiert.
+
+`reusable-fork-guard.yaml` ist der Check, den ein Fork nicht umschreiben kann. Rufe ihn aus einem `pull_request_target`-Workflow auf und verlange seinen Kontext neben den anderen:
+
+```yaml title=".github/workflows/fork-guard.yaml"
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  fork-guard:
+    permissions:
+      contents: read
+      statuses: write
+    uses: nolte/gh-plumbing/.github/workflows/reusable-fork-guard.yaml@<tag>
+```
+
+Der Workflow meldet sein Ergebnis als Commit-Status `fork-guard`, und diesen Status verlangst du als Kontext. Der Check schlägt fehl, wenn der Pull-Request aus einem Fork stammt und einen geschützten Pfad hinzufügt, ändert, entfernt oder umbenennt. Standardmäßig sind das `.github/*`, `scripts/*`, das Taskfile und `taskfiles/*`, `.pre-commit-config.yaml`, jede `requirements*.txt`, die Konfigurationsdateien von pytest und coverage sowie `mkdocs.yml`. Mit `protected-paths` ersetzt du die Liste. Jede Zeile ist ein Bash-Muster, und `*` passt auch auf `/`. Ein Pull-Request aus einem Branch desselben Repositorys besteht den Check. Um eine berechtigte Fork-Änderung an einem geschützten Pfad zu übernehmen, pusht ein Maintainer sie erneut auf einen Branch des Repositorys.
+
+!!! warning "Warum `pull_request_target` hier sicher ist"
+    `pull_request_target` führt die Definition aus dem Default-Branch aus, der Pull-Request kann also weder den Check noch seine Liste ändern. Der Workflow checkt nichts aus und liest keinen Dateiinhalt. Er listet die geänderten Dateinamen über die Compare-API und vergleicht sie als reine Zeichenketten. Sein einziges Schreibrecht ist `statuses`, um das Ergebnis zu melden. Füge ihm keinen Checkout hinzu.
+
+!!! warning "Den Status verlangen, nicht den Check-Run"
+    Der Check-Run des Jobs heißt `fork-guard / Protected Paths`. Verlange diesen Namen nicht: Ein Fork kann einen Workflow mit einem gleichnamigen Job hinzufügen, der durchläuft, und dieselbe App meldet dann beide Check-Runs. Einen Commit-Status kann ein Fork nicht setzen, weil das Token seines `pull_request`-Laufs nur Leserechte hat.
+
+!!! info "Den Kontext einführen"
+    `pull_request_target` führt die Workflow-Datei aus dem Basis-Branch aus. Merge den Workflow vor oder zusammen mit der Änderung, die seinen Kontext verlangt. Die Branch-Protection ändert sich erst, wenn die Settings den Default-Branch erreichen, und dann liegt der Workflow schon dort.
+
+---
+
 ## Cache der Hook-Umgebungen
 
 Der Workflow cacht `~/.cache/pre-commit`, wo pre-commit die Hook-Umgebungen installiert. Der Cache-Key setzt sich aus dem Betriebssystem-Release des Runners, der installierten pre-commit-Version, dem Python-Installationspfad und einem Hash der `.pre-commit-config.yaml` zusammen. Ein neues Ubuntu-Image hinter `ubuntu-latest` oder eine neue pre-commit-Version startet deshalb einen frischen Cache, statt Umgebungen wiederherzustellen, die für ein anderes System gebaut wurden.

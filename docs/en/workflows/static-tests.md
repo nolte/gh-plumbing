@@ -27,6 +27,41 @@ jobs:
 
 ---
 
+## Fork guard
+
+Required checks such as `static / Static CI Tests` run on `pull_request`, and GitHub runs a `pull_request` workflow from the pull request's merge commit. On a fork pull request, the workflow files and the scripts they call come from the fork. A fork can therefore edit them until every job passes. A required context names only the app and the check, so a check the fork defines satisfies it.
+
+`reusable-fork-guard.yaml` is the check a fork can't rewrite. Call it from a `pull_request_target` workflow and require its context next to the others:
+
+```yaml title=".github/workflows/fork-guard.yaml"
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  fork-guard:
+    permissions:
+      contents: read
+      statuses: write
+    uses: nolte/gh-plumbing/.github/workflows/reusable-fork-guard.yaml@<tag>
+```
+
+The workflow posts its verdict as the commit status `fork-guard`, and that status is the context to require. The check fails when the pull request comes from a fork and adds, changes, removes, or renames a protected path. By default those are `.github/*`, `scripts/*`, the Taskfile and `taskfiles/*`, `.pre-commit-config.yaml`, any `requirements*.txt`, the pytest and coverage configuration files, and `mkdocs.yml`. Pass `protected-paths` to replace the list. Each line is a bash pattern, and `*` also matches `/`. A pull request from a branch of the same repository passes. To land a legitimate fork change to a protected path, a maintainer re-pushes it to a branch of the repository.
+
+!!! warning "Why `pull_request_target` is safe here"
+    `pull_request_target` runs the definition from the default branch, so the pull request can't change the check or its list. The workflow checks out nothing and reads no file content. It lists the changed file names through the compare API and matches them as plain strings. Its only write scope is `statuses`, for posting the verdict. Don't add a checkout to it.
+
+!!! warning "Require the status, not the check run"
+    The job's own check run has the name `fork-guard / Protected Paths`. Don't require that name: a fork can add a workflow with a job of the same name that passes, and the same app then reports both check runs. A fork can't post a commit status, because the token of its `pull_request` run has read-only access.
+
+!!! info "Rolling out the context"
+    `pull_request_target` runs the workflow file from the base branch. Merge the workflow before, or together with, the change that makes its context required. Branch protection changes only when the settings reach the default branch, and by then the workflow is there.
+
+---
+
 ## Hook environment cache
 
 The workflow caches `~/.cache/pre-commit`, where pre-commit installs the hook environments. The cache key combines the runner's operating system release, the installed pre-commit version, the Python installation path, and a hash of `.pre-commit-config.yaml`. A new Ubuntu image behind `ubuntu-latest` or a new pre-commit version therefore starts a fresh cache instead of restoring environments built for another system.

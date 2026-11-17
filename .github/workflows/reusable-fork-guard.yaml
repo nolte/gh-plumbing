@@ -1,0 +1,206 @@
+name: Reusable — Fork Guard
+
+# Fails when a pull request from a fork changes a file that defines what the
+# required checks execute (#465).
+#
+# The required checks run on `pull_request`, and GitHub runs a `pull_request`
+# workflow from the pull request's merge commit -- the fork's own copy of the
+# workflow files and of the scripts they call. A fork can therefore edit them
+# until every job exits 0, and the required contexts turn green without having
+# checked anything. A required context is bound only to an app and a name, and
+# every workflow job reports through the same GitHub Actions app, so a job the
+# fork defines satisfies it.
+#
+# This check is the one a fork can't rewrite. Call it from a
+# `pull_request_target` workflow: that trigger runs the definition from the
+# base repository's default branch, so neither this file nor the
+# protected-path list comes from the pull request. The usual
+# `pull_request_target` risk -- fork code running with the base repository's
+# token -- is out of reach because nothing from the pull request runs here:
+# there is no checkout, no file content is read, and the only pull-request
+# data used are the head repository name and the changed file names, passed
+# through `env:` and compared as plain strings. Keep it that way: never add a
+# checkout to this workflow.
+#
+# The verdict is reported as the COMMIT STATUS `fork-guard` on the pull
+# request's head commit, and that status is the context to require -- not the
+# job's own check run. A fork can name a job in its own `pull_request`
+# workflow `fork-guard / Protected Paths` and report that check run green from
+# the same app; GitHub warns that equal names across workflows make the result
+# ambiguous. A fork can't create a commit status: its `pull_request` token is
+# read-only. Only this job, under `pull_request_target`, holds
+# `statuses: write`.
+#
+# A same-repository pull request passes: pushing a branch here needs write
+# access. A maintainer lands a legitimate fork change by re-pushing it to a
+# branch of this repository.
+on:
+  workflow_call:
+    inputs:
+      protected-paths:
+        description: |
+          Newline-separated bash patterns, matched with `[[ path == pattern ]]`,
+          where `*` also matches `/`. Blank lines and lines starting with `#`
+          are ignored. A fork pull request that adds, changes, removes or
+          renames a file matching one of them fails the check; for a rename,
+          both the old and the new name count.
+        required: false
+        type: string
+        default: |
+          # Workflows, the scripts and actions they call, and the Probot settings.
+          .github/*
+          scripts/*
+          # Task runner, pre-commit and the shellcheck that actionlint runs.
+          Taskfile.yml
+          Taskfile.yaml
+          taskfiles/*
+          .pre-commit-config.yaml
+          .shellcheckrc
+          # Python dependencies and test configuration: what pytest loads.
+          *requirements*.txt
+          pyproject.toml
+          setup.cfg
+          tox.ini
+          pytest.ini
+          .pytest.ini
+          pytest.toml
+          .pytest.toml
+          .coveragerc
+          conftest.py
+          # MkDocs configuration, including any build hooks it names.
+          mkdocs.yml
+
+# Explicit permissions per spec/project/github-actions-best-practices §B:
+# workflow level is the minimum, write scopes are granted per job.
+permissions:
+  contents: read
+
+# One group per pull request. A superseded run judged a head commit that is
+# no longer the one to merge; the newer run posts the status for the new one.
+concurrency:
+  group: fork-guard-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fork-guard:
+    name: Protected Paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read # the compare API lists the changed files
+      statuses: write # posts the `fork-guard` commit status, the required context
+    steps:
+      - name: Refuse protected-path changes from a fork
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # Pull-request data, fork-controlled where it names the fork. Read
+          # only from the environment, never interpolated into this script.
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+          PROTECTED_PATHS: ${{ inputs.protected-paths }}
+        run: |
+          set -euo pipefail
+
+          # Under any other trigger a fork runs its own copy of this file, and
+          # the check would prove nothing. Nothing is posted: the status stays
+          # missing, which blocks.
+          if [[ "${EVENT_NAME}" != "pull_request_target" ]]; then
+            echo "::error title=Fork guard::called under '${EVENT_NAME}'; call it from a 'pull_request_target' workflow"
+            exit 1
+          fi
+          if ! [[ "${BASE_SHA}" =~ ^[0-9a-f]{40,64}$ && "${HEAD_SHA}" =~ ^[0-9a-f]{40,64}$ && "${CHANGED_FILES}" =~ ^[0-9]+$ ]]; then
+            echo "::error title=Fork guard::the event carries no usable base/head commit or changed-file count"
+            exit 1
+          fi
+
+          # Posts the verdict on the head commit and ends the step with it.
+          # Every path below ends here, and an unexpected error posts a
+          # failure through the EXIT trap, so a broken run never leaves the
+          # commit without a verdict it could mistake for a pending one.
+          posted=""
+          finish() {
+            posted=1
+            gh api --silent -X POST "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
+              -f state="$1" -f context=fork-guard -f description="$2" -f target_url="${RUN_URL}"
+            if [[ "$1" == "success" ]]; then
+              echo "$2"
+              exit 0
+            fi
+            echo "::error title=Fork guard::$2"
+            exit 1
+          }
+          trap '[[ -n "${posted}" ]] || finish failure "The fork guard stopped before reaching a verdict."' EXIT
+
+          # A deleted fork leaves HEAD_REPO empty; that counts as a fork.
+          if [[ -n "${HEAD_REPO}" && "${HEAD_REPO}" == "${BASE_REPO}" ]]; then
+            finish success "Same-repository pull request: nothing to guard."
+          fi
+
+          # Compare the two commits the event names rather than listing the
+          # pull request's files: the pull request's head can move while this
+          # runs, a commit can't. The three-dot form diffs from the merge base,
+          # as the pull request does.
+          compare="${RUNNER_TEMP}/compare.json"
+          gh api "repos/${GITHUB_REPOSITORY}/compare/${BASE_SHA}...${HEAD_SHA}?per_page=1" > "${compare}"
+
+          # The compare API lists at most 300 files. A list that reaches that
+          # cap, or is shorter than the pull request's own count, may hide
+          # paths, so fail closed.
+          listed="$(jq '.files | length' "${compare}")"
+          if (( listed >= 300 || listed < CHANGED_FILES )); then
+            finish failure "Lists ${listed} of ${CHANGED_FILES} changed files, so not every path can be checked. Re-push the change to a branch here."
+          fi
+
+          patterns=()
+          while IFS= read -r line; do
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+            [[ -z "${line}" || "${line}" == \#* ]] && continue
+            patterns+=("${line}")
+          done <<< "${PROTECTED_PATHS}"
+          if (( ${#patterns[@]} == 0 )); then
+            finish failure "No protected paths given."
+          fi
+
+          # NUL-separated, so a file name containing a newline stays one name.
+          # Written to a file first, so a failing jq stops the step under
+          # `set -e` instead of leaving an empty list that would pass.
+          names="${RUNNER_TEMP}/names"
+          jq --raw-output0 '.files[] | .filename, (.previous_filename // empty)' "${compare}" > "${names}"
+          read_names=0
+          hits=()
+          while IFS= read -r -d '' path; do
+            read_names=$((read_names + 1))
+            for pattern in "${patterns[@]}"; do
+              # Unquoted on purpose: the right-hand side of `==` is a pattern.
+              # shellcheck disable=SC2053
+              if [[ "${path}" == ${pattern} ]]; then
+                hits+=("${path}")
+                break
+              fi
+            done
+          done < "${names}"
+          if (( read_names < listed )); then
+            finish failure "Read ${read_names} of ${listed} file names from the comparison."
+          fi
+
+          if (( ${#hits[@]} == 0 )); then
+            finish success "Fork pull request: none of its ${listed} changed files is protected."
+          fi
+
+          # File names come from the fork. Suspend workflow commands while
+          # printing them, so a crafted name can't be read as one, and quote
+          # each with %q so it stays on one line.
+          resume="$(openssl rand -hex 16)"
+          echo "::stop-commands::${resume}"
+          echo "This fork pull request changes files that define what the required checks execute:"
+          for path in "${hits[@]}"; do
+            printf '  - %q\n' "${path}"
+          done
+          echo "::${resume}::"
+          finish failure "Changes ${#hits[@]} protected path(s). A maintainer can re-push it to a branch of this repository."

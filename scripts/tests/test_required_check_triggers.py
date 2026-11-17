@@ -461,3 +461,179 @@ def test_this_repository_branch_entries_apply_and_do_not_race():
     assert names  # not vacuous
     for name in names:
         assert guard.branch_protection_audit.entry_findings(settings, commons, name) == []
+
+
+# --- Status producers (#465) ---------------------------------------------
+#
+# A guard that must not be rewritable by a fork runs under
+# `pull_request_target`, which the rule above refuses for every other
+# producer, and reports a commit status, which a fork can't write. The
+# exemption is by context name, and the named workflow is held to the mirror
+# rule: `pull_request_target` without `pull_request`, no checkout, a step that
+# posts the status, and no write scope but `statuses`.
+
+GUARD_PATH = ".github/workflows/fork-guard.yaml"
+
+GUARD_SETTINGS = SETTINGS.replace("static / Static CI Tests", "fork-guard")
+
+POST_STEP = """      - run: |
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \\
+            -f state=success -f context=fork-guard
+"""
+
+GUARD_REUSABLE = """on:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  fork-guard:
+    name: Protected Paths
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+{steps}"""
+
+GUARD_CALLER = """{on}
+permissions:
+  contents: read
+jobs:
+  fork-guard:
+    permissions:
+      contents: read
+      statuses: write
+    uses: ./.github/workflows/reusable-fork-guard.yaml
+{extra}"""
+
+CHECKOUT_STEP = ("      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803\n"
+                 "        with:\n          persist-credentials: false\n")
+
+
+@pytest.fixture
+def guard_repo(tmp_path):
+    """A healthy status producer: `pull_request_target`, no checkout, posts the status."""
+    write(tmp_path / ".github" / "settings.yml", GUARD_SETTINGS)
+    write(tmp_path / ".github" / "workflows" / "reusable-fork-guard.yaml",
+          GUARD_REUSABLE.format(steps=POST_STEP))
+    write(tmp_path / GUARD_PATH, guard_caller())
+    return tmp_path
+
+
+def guard_caller(on: str = "on:\n  pull_request_target:\n    types: [opened, synchronize, reopened]",
+                 extra: str = "") -> str:
+    return GUARD_CALLER.format(on=on, extra=extra)
+
+
+def test_status_producer_on_pull_request_target_passes(guard_repo):
+    assert guard.audit(guard_repo) == []
+
+
+def test_status_context_is_not_matched_by_a_check_run_name(guard_repo, monkeypatch):
+    # Without the exemption the plain context `fork-guard` would need a plain
+    # job of that name -- the shape a fork could add itself.
+    monkeypatch.setattr(guard, "STATUS_PRODUCERS", {})
+    assert kinds(guard_repo) == ["no-producer"]
+
+
+def test_missing_status_workflow_is_a_finding(guard_repo):
+    (guard_repo / GUARD_PATH).unlink()
+    findings = guard.audit(guard_repo)
+    assert [f["kind"] for f in findings] == ["no-producer"]
+    assert "doesn't exist" in findings[0]["message"]
+
+
+@pytest.mark.parametrize("steps", [
+    "      - run: true\n",
+    POST_STEP.replace("context=fork-guard", "context=fork-guard-2"),
+    POST_STEP.replace("/statuses/", "/check-runs/"),
+])
+def test_status_must_actually_be_posted(guard_repo, steps):
+    write(guard_repo / ".github" / "workflows" / "reusable-fork-guard.yaml",
+          GUARD_REUSABLE.format(steps=steps))
+    findings = guard.audit(guard_repo)
+    assert [f["kind"] for f in findings] == ["no-producer"]
+    assert "no `run:` step" in findings[0]["message"]
+
+
+def test_unlisted_pull_request_target_producer_is_still_refused(repo):
+    write(repo / ".github" / "workflows" / "build.yaml",
+          caller(on="on:\n  pull_request_target:"))
+    findings = guard.audit(repo)
+    assert [f["kind"] for f in findings] == ["trigger"]
+    assert "`pull_request_target` only" in findings[0]["message"]
+
+
+@pytest.mark.parametrize("on, fragment", [
+    ("on:\n  pull_request:\n  pull_request_target:", "also triggers on `pull_request`"),
+    ("on: [pull_request, pull_request_target]", "also triggers on `pull_request`"),
+    ("on: pull_request", "doesn't trigger on `pull_request_target`"),
+    ("on: push", "doesn't trigger on `pull_request_target`"),
+    ("on:\n  pull_request_target:\n    types: [opened]", "`pull_request_target` `types` without `synchronize`"),
+    ("on:\n  pull_request_target:\n    paths: ['.github/**']", "filters `pull_request_target` by `paths`"),
+    ("on:\n  pull_request_target:\n    branches: [master]", "`branches` that exclude `develop`"),
+])
+def test_status_producer_trigger_problems(guard_repo, on, fragment):
+    write(guard_repo / GUARD_PATH, guard_caller(on=on))
+    findings = guard.audit(guard_repo)
+    assert [f["kind"] for f in findings] == ["trigger"]
+    assert fragment in findings[0]["message"]
+
+
+def test_checkout_in_called_reusable_is_a_finding(guard_repo):
+    write(guard_repo / ".github" / "workflows" / "reusable-fork-guard.yaml",
+          GUARD_REUSABLE.format(steps=CHECKOUT_STEP + POST_STEP))
+    findings = guard.audit(guard_repo)
+    assert [f["kind"] for f in findings] == ["checkout"]
+    assert "`.github/workflows/reusable-fork-guard.yaml` job `fork-guard`" in findings[0]["message"]
+
+
+def test_checkout_in_another_job_of_the_workflow_is_a_finding(guard_repo):
+    # Every job of a `pull_request_target` workflow runs with the base token,
+    # not only the one that posts the status.
+    write(guard_repo / GUARD_PATH, guard_caller(extra=(
+        "  other:\n    runs-on: ubuntu-latest\n    steps:\n" + CHECKOUT_STEP)))
+    findings = guard.audit(guard_repo)
+    assert [f["kind"] for f in findings] == ["checkout"]
+    assert "job `other`" in findings[0]["message"]
+
+
+def test_self_calling_reusable_does_not_recurse_forever(guard_repo):
+    write(guard_repo / ".github" / "workflows" / "reusable-fork-guard.yaml",
+          GUARD_REUSABLE.format(steps=POST_STEP)
+          + "  again:\n    uses: ./.github/workflows/reusable-fork-guard.yaml\n")
+    assert guard.audit(guard_repo) == []
+
+
+def test_status_producer_keeps_the_other_rules(guard_repo):
+    # `statuses: write` is the one scope it may hold; any other write, and a
+    # job condition, are refused as for every producer.
+    write(guard_repo / GUARD_PATH, guard_caller().replace(
+        "      statuses: write\n    uses",
+        "      statuses: write\n      pull-requests: write\n"
+        "    if: github.event.pull_request.head.repo.fork\n    uses"))
+    findings = guard.audit(guard_repo)
+    assert sorted(f["kind"] for f in findings) == ["job-condition", "write-permission"]
+    assert "`statuses`" not in next(
+        f["message"] for f in findings if f["kind"] == "write-permission")
+
+
+def test_status_scope_is_still_refused_for_check_run_producers(repo):
+    write(repo / ".github" / "workflows" / "build.yaml",
+          caller(permissions="    permissions:\n      contents: read\n"
+                             "      statuses: write\n"))
+    assert kinds(repo) == ["write-permission"]
+
+
+def test_status_exemptions_name_existing_workflows():
+    # A stale entry would silently exempt whatever later takes that path.
+    for name in guard.STATUS_PRODUCERS.values():
+        assert (REPO_ROOT / name).is_file(), name
+
+
+def test_this_repository_requires_the_fork_guard_on_develop():
+    contexts = guard.required_contexts(
+        guard.load_yaml(REPO_ROOT / ".github" / "settings.yml"),
+        guard.load_yaml(REPO_ROOT / ".github" / "commons-settings.yml"),
+    )
+    assert ("develop", "fork-guard") in contexts

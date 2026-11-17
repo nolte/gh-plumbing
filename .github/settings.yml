@@ -7,7 +7,15 @@
 # file as well (a comment touch is enough) so the App re-runs the merge.
 # Tracked by https://github.com/nolte/gh-plumbing/issues/331.
 #
-# Last propagation: 2026-11-17 (second) — commons-settings.yml no longer
+# Last propagation: 2026-11-17 (third) — require the commit status
+# `fork-guard` on develop: posted from `pull_request_target`, so a fork can't
+# rewrite it, it fails a fork pull request that changes what the other
+# required checks execute (#465). Its workflow lands in the same change; the
+# App applies the context on the push to develop, when that workflow already
+# exists there. Verify through the API afterwards that all six contexts are
+# live.
+#
+# Previous propagation: 2026-11-17 (second) — commons-settings.yml no longer
 # declares a `develop` entry (#442, ADR-005): its `restrictions.apps` can't
 # work on a user-owned repository, and arrays from `_extends` may be
 # concatenated rather than merged by `name`, which would race this file's own
@@ -81,8 +89,16 @@ branches:
   # `actionlint` job → reusable-actionlint's "Workflow Lint";
   # `pr-lint` job → reusable-pr-lint's "PR Lint";
   # `required-check-triggers-tests` job → reusable-python-coverage's
-  # "Python Coverage" -- the suite of the guard that refuses a required
-  # context fork pull requests can't report (#462).
+  # "Python Coverage" -- the suites of two guards: the one that refuses a
+  # required context fork pull requests can't report (#462), and the one that
+  # makes every actions/checkout decide `persist-credentials` (#471);
+  # `fork-guard` is not a check run but the commit status that
+  # reusable-fork-guard posts (fork-guard.yaml, `pull_request_target`). It
+  # fails a fork pull request that changes the workflows, scripts or
+  # configuration the contexts above run from, since those run from the
+  # fork's own copy (#465). A status, because a fork can't write one; the
+  # job's own check run, `fork-guard / Protected Paths`, is a name a fork's
+  # workflow could report too.
   # The Settings App applies these contexts on the next push that touches
   # this file. Verify the live set through the API
   # (`gh api repos/nolte/gh-plumbing/branches/develop/protection/required_status_checks`),
@@ -98,6 +114,7 @@ branches:
           - actionlint / Workflow Lint
           - pr-lint / PR Lint
           - required-check-triggers-tests / Python Coverage
+          - fork-guard
       enforce_admins: true
       # Push restrictions are only available for organization-owned repositories
       # (GitHub REST, Update branch protection); the commons' apps restriction
