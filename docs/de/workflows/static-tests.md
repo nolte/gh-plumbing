@@ -2,7 +2,7 @@
 
 Führt ein minimales Bündel statischer Analyse bei jedem Pull-Request und bei jedem Push auf den Default-Branch aus und liefert schnelles Feedback ohne externe Dienste.
 
-- [`pre-commit`](https://pre-commit.com), in einer festgelegten Version installiert, führt die in `.pre-commit-config.yaml` definierten Hooks auf allen Dateien aus; [`actions/cache`](https://github.com/actions/cache), auf einen vollständigen Commit-SHA gepinnt, cacht die Hook-Umgebungen
+- [`pre-commit`](https://pre-commit.com), in einer festgelegten Version installiert, führt die in `.pre-commit-config.yaml` definierten Hooks auf allen Dateien aus; [`actions/cache`](https://github.com/actions/cache), auf einen vollständigen Commit-SHA gepinnt, cacht die Hook-Umgebungen (siehe [Cache der Hook-Umgebungen](#cache-der-hook-umgebungen))
 
 ---
 
@@ -24,6 +24,20 @@ jobs:
 
 !!! warning "Fork-Pull-Requests brauchen den Trigger `pull_request`"
     Ein Fork pusht nie in das Basis-Repository. Mit einem reinen Push-Trigger meldet sich der erforderliche Check bei einem Pull-Request aus einem Fork nie, und dieser Pull-Request bleibt blockiert. `pull_request_target` ist keine Alternative. Standardmäßig checkt es den Basis-Branch aus, der erforderliche Check wird also grün, ohne die Änderungen des Pull-Requests zu testen. Checkt man stattdessen den Head des Pull-Requests aus, läuft der Code des Forks mit dem Schreib-Token und den Secrets des Basis-Repositorys. Bei einem Fork-Pull-Request überspringt `reusable-trivy.yaml` den Upload seines Scan-Berichts in den Security-Tab, weil das Token dort nur Leserechte hat.
+
+---
+
+## Cache der Hook-Umgebungen
+
+Der Workflow cacht `~/.cache/pre-commit`, wo pre-commit die Hook-Umgebungen installiert. Der Cache-Key setzt sich aus dem Betriebssystem-Release des Runners, der installierten pre-commit-Version, dem Python-Installationspfad und einem Hash der `.pre-commit-config.yaml` zusammen. Ein neues Ubuntu-Image hinter `ubuntu-latest` oder eine neue pre-commit-Version startet deshalb einen frischen Cache, statt Umgebungen wiederherzustellen, die für ein anderes System gebaut wurden.
+
+Wiederherstellen und Speichern sind getrennte Schritte. Der Workflow speichert den Cache nur in einem `pull_request`-Lauf, nur bei einem Cache-Miss und bevor `pre-commit run` irgendeinen Hook ausführt. Einen Cache, den ein Pull-Request-Lauf speichert, sieht nur dieser Pull-Request. Läufe auf dem Default-Branch, Pushes auf andere Branches und `pull_request_target`-Läufe stellen höchstens wieder her und speichern nie. So kann Hook-Code keine Hook-Umgebungen in den Cache des Default-Branches schreiben, aus dem jeder Branch des Repositorys wiederherstellt.
+
+!!! info "Weniger Cache-Treffer"
+    Der Default-Branch erhält nie einen gespeicherten Cache. Läufe auf dem Default-Branch und der erste Lauf jedes Pull-Requests installieren die Hook-Umgebungen von Grund auf, der nächste Lauf desselben Pull-Requests stellt sie wieder her. Ein Aufrufer, der den Workflow nur bei `push` auslöst, nutzt den Cache nie.
+
+!!! warning "Restrisiko"
+    Hook-Code läuft auf dem Runner und kann das Token lesen, mit dem der Runner den Cache-Dienst anspricht. Damit kann Hook-Code weiterhin jeden Cache-Eintrag im Scope des aktuellen Laufs schreiben, auf dem Default-Branch also im Scope des Default-Branches. Die Trennung von Wiederherstellen und Speichern schließt diesen Weg nicht. Das gelingt nur, wenn die Hooks isoliert vom Runner laufen, zum Beispiel in einem Container ohne den Runner-Kontext.
 
 ---
 
