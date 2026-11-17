@@ -71,10 +71,11 @@ on:
           Docker Hub personal access token matching `inputs.dockerhub-username`.
           It MUST be created with the "Public Repo Read-only" access scope.
           Nothing in this workflow pushes, and a wider scope is not merely
-          unnecessary but exposed: every non-docker hook language (e.g. python,
-          node, golang, system, script), including its environment install,
-          runs on the host in the same job and can read `~/.docker/config.json`
-          while it runs. The post-step logout of `docker/login-action` does not
+          unnecessary but exposed: the hook environments are installed before
+          the login, but the hooks that `pre-commit run` then executes in every
+          non-docker language (e.g. python, node, golang, system, script) run on
+          the host in the same job and can read `~/.docker/config.json` while
+          they run. The post-step logout of `docker/login-action` does not
           revoke a token that was already read, and with passwordless sudo a
           hook can also read it from runner memory. The scope is therefore the
           only control: anything broader than public read-only would be handed
@@ -124,6 +125,57 @@ jobs:
           # missed this hardcoded one.
           python-version: '3.14'
 
+      # The three steps below and `Run pre-commit` at the end replace
+      # `pre-commit/action` v3.0.1, a composite action whose own cache step
+      # references `actions/cache@v4` by tag. The repository setting
+      # `sha_pinning_required` checks nested references as well, so a single
+      # tag two levels down fails the whole job. Inlining the composite keeps
+      # its behaviour and puts every `uses:` under this file's control, where it
+      # is pinned to a full commit SHA. The hook-environment install and the
+      # Docker Hub login sit between the cache and the run; see the next step.
+      - name: Install pre-commit
+        # Inline rather than `-r requirements-dev.txt`: this reusable runs in
+        # the consumer's checkout, where no gh-plumbing requirements file
+        # exists. Same version as `requirements-dev.txt`. Renovate does not
+        # track this inline pin yet -- see #467.
+        run: |
+          set -euo pipefail
+          python -m pip install pre-commit==4.7.0
+
+      - name: List installed Python packages
+        # Kept from the composite action, so the log still records the exact
+        # resolved versions consumers have been able to read there.
+        run: |
+          set -euo pipefail
+          python -m pip freeze --local
+
+      - name: Cache pre-commit hook environments
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/pre-commit
+          # Copied verbatim from `pre-commit/action` v3.0.1, prefix and
+          # separators included, so caches consumers already built under the
+          # composite action keep hitting after the switch.
+          key: pre-commit-3|${{ env.pythonLocation }}|${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - name: Install hook environments
+        # Every hook environment -- the pip/npm/... install of each third-party
+        # hook repository -- is built here, as are the cache restore and the
+        # pip install above, all before any Docker Hub credential exists on the
+        # runner. The login below writes `~/.docker/config.json` only for
+        # `pre-commit run`, which needs it because `language: docker_image`
+        # hooks pull lazily through `docker run`. Accepted trade-off: hooks with
+        # `language: docker` build their image in this step, so their
+        # base-image pulls stay anonymous and count against the shared per-IP
+        # rate limit. Unlike `pre-commit run`, which installs only the hooks of
+        # the stage it runs, `install-hooks` builds the environments of every
+        # stage -- `manual` and `commit-msg` hooks included -- so a consumer
+        # whose non-default-stage hook cannot be installed on this runner fails
+        # here, although `pre-commit run` would never execute that hook.
+        run: |
+          set -euo pipefail
+          pre-commit install-hooks
+
       - name: Log in to Docker Hub
         id: dockerhub-login
         # Skipped, not failed, when the caller supplies nothing. An anonymous
@@ -168,37 +220,6 @@ jobs:
                    "'dockerhub-token' secret of the calling workflow."
               ;;
           esac
-
-      # The four steps below replace `pre-commit/action` v3.0.1, a composite
-      # action whose own cache step references `actions/cache@v4` by tag. The
-      # repository setting `sha_pinning_required` checks nested references as
-      # well, so a single tag two levels down fails the whole job. Inlining the
-      # composite keeps its behaviour and puts every `uses:` under this file's
-      # control, where it is pinned to a full commit SHA.
-      - name: Install pre-commit
-        # Inline rather than `-r requirements-dev.txt`: this reusable runs in
-        # the consumer's checkout, where no gh-plumbing requirements file
-        # exists. Same version as `requirements-dev.txt`. Renovate does not
-        # track this inline pin yet -- see #467.
-        run: |
-          set -euo pipefail
-          python -m pip install pre-commit==4.7.0
-
-      - name: List installed Python packages
-        # Kept from the composite action, so the log still records the exact
-        # resolved versions consumers have been able to read there.
-        run: |
-          set -euo pipefail
-          python -m pip freeze --local
-
-      - name: Cache pre-commit hook environments
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ~/.cache/pre-commit
-          # Copied verbatim from `pre-commit/action` v3.0.1, prefix and
-          # separators included, so caches consumers already built under the
-          # composite action keep hitting after the switch.
-          key: pre-commit-3|${{ env.pythonLocation }}|${{ hashFiles('.pre-commit-config.yaml') }}
 
       - name: Run pre-commit
         run: |
