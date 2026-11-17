@@ -104,6 +104,16 @@ exclude-labels:
   - "release"
   - "experimental"
 
+# Release notes lint PR titles as metadata, not as prose. A title such as
+# `fix(ci): update actionlint and reviewdog` otherwise triggers Vale's spelling
+# and terminology rules and blocks publishing. Escape literal backticks so a
+# title cannot terminate the inline code span.
+# `@$AUTHOR`, not `$AUTHORS`: the reusable pins release-drafter v6.4.0, and
+# `$AUTHORS` only exists from v7.6.0 on -- v6 leaves it in the notes verbatim.
+# Switch to `$AUTHORS` (co-authors included) together with the v7 bump.
+change-template: '- `$TITLE` (#$NUMBER) @$AUTHOR'
+change-title-escapes: '`'
+
 template: |
   ## Changes
 

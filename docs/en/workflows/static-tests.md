@@ -1,9 +1,8 @@
 # Static tests
 
-Runs a minimal static analysis bundle on every push to give fast feedback without external services.
+Runs a minimal static analysis bundle on every pull request and on every push to the default branch to give fast feedback without external services.
 
-- [`pre-commit/action`](https://github.com/pre-commit/action) runs hooks defined in `.pre-commit-config.yaml`
-- [`zbeekman/EditorConfig-Action`](https://github.com/zbeekman/EditorConfig-Action) enforces `.editorconfig` rules
+- [`pre-commit`](https://pre-commit.com), installed at a pinned version, runs the hooks defined in `.pre-commit-config.yaml` on all files; [`actions/cache`](https://github.com/actions/cache), pinned to a full commit SHA, caches the hook environments
 
 ---
 
@@ -11,7 +10,9 @@ Runs a minimal static analysis bundle on every push to give fast feedback withou
 
 ```yaml title=".github/workflows/build-static-tests.yaml"
 on:
+  pull_request:
   push:
+    branches: [develop] # replace with your default branch
 
 jobs:
   static:
@@ -21,11 +22,14 @@ jobs:
 !!! tip "Required status check"
     Combine the workflow with a branch-protection rule that requires the `static / Static CI Tests` check—see [Settings](../probot/settings.md).
 
+!!! warning "Fork pull requests need the `pull_request` trigger"
+    A fork never pushes to the base repository. With a push-only trigger the required check never reports on a pull request from a fork, so that pull request stays blocked. `pull_request_target` isn't an alternative. By default it checks out the base branch, so the required check passes without testing the pull request's changes. Checking out the pull request's head instead runs the fork's code with the base repository's write token and secrets. On a fork pull request `reusable-trivy.yaml` skips uploading its scan report to the Security tab, because the token there has read-only access.
+
 ---
 
 ## Docker Hub rate limits
 
-A hook declared with `language: docker_image` pulls its image on every run, and pre-commit can't cache it: that language sets `ENVIRONMENT_DIR = None` with `install_environment = no_install`, so the image stays in the Docker daemon's store and never reaches `~/.cache/pre-commit`, the only path `pre-commit/action` hands to `actions/cache`.
+A hook declared with `language: docker_image` pulls its image on every run, and pre-commit can't cache it: that language sets `ENVIRONMENT_DIR = None` with `install_environment = no_install`, so the image stays in the Docker daemon's store and never reaches `~/.cache/pre-commit`, the only path this workflow hands to `actions/cache`.
 
 An anonymous pull counts against a budget that belongs to the source IP address, and GitHub-hosted runners share egress addresses across the platform. The lane therefore spends a budget that every other repository on the same runner network also spends, so a rate-limit rejection can redden a required check for a reason unrelated to the diff.
 
@@ -34,7 +38,9 @@ Two optional parameters move the count to a per-account budget:
 | Parameter | Kind | Default | Purpose |
 | --- | --- | --- | --- |
 | `dockerhub-username` | input | `""` | Docker Hub account name. A username isn't secret, so it travels as an input. Empty skips the login step. |
-| `dockerhub-token` | secret | unset | Docker Hub access token for that account. A read-only token is enough; nothing here pushes. |
+| `dockerhub-token` | secret | unset | Docker Hub personal access token for that account. It must have the "Public Repo Read-only" scope, because pre-commit hooks in the same job can read it. |
+
+Create the token on a dedicated Docker ID used only by CI (a bot account), not a personal one, give it an expiration date, and rotate it. Hook code can read the token, so a leak then spends only that account's pull quota and exposes no identity you use elsewhere. For the same reason the workflow doesn't persist the checkout token (`persist-credentials: false`). A hook that fetches from `origin` therefore works only in a public repository, and a private consumer needs a workflow of its own.
 
 ```yaml title=".github/workflows/build-static-tests.yaml"
 jobs:

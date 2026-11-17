@@ -6,9 +6,13 @@ name: PR Lint
 # a `feat(...)` merged carrying only `chore`, and titles using types the
 # checker does not accept (`ci(...)`) landing without objection.
 #
-# Separate from build-static-tests.yaml on purpose. That workflow triggers on
-# `push:`, which carries no `github.event.pull_request` -- the checker reads the
-# title, body and number from exactly that context, so it cannot live there.
+# Separate from build-static-tests.yaml on purpose, although both trigger on
+# `pull_request`. This one needs different `types:` -- it must rerun on
+# `edited` and `ready_for_review` when only the title or body changes, and
+# doing that in the static bundle would rerun all of it for a text edit. It
+# also needs a different permission set: `pull-requests: read` and
+# `issues: read`, which the static bundle doesn't, while that bundle's
+# `security-events: write` has no business here.
 # `synchronize` and `ready_for_review` are included because a body edited after
 # opening, or a draft promoted to ready, both change what is being judged.
 on:

@@ -7,7 +7,14 @@
 # file as well (a comment touch is enough) so the App re-runs the merge.
 # Tracked by https://github.com/nolte/gh-plumbing/issues/331.
 #
-# Last propagation: 2026-09-13 (second) — require the `pr-lint / PR Lint`
+# Last propagation: 2026-11-17 — declare `required-check-triggers-tests /
+# Python Coverage` as a required context on develop: the suite of the guard
+# that refuses a required context fork pull requests can't report (#462).
+# The App applied it on merge, as verified through the API on 2026-11-17.
+# Earlier notes said the App doesn't sync contexts (#369). That was the
+# commons `restrictions` 422 aborting the whole develop update, fixed in #416.
+#
+# Previous propagation: 2026-09-13 (second) — require the `pr-lint / PR Lint`
 # context on develop. This repository ships reusable-pr-lint.yaml and did not
 # run it: two consumers already require the check while the origin judged its
 # own pull requests by nothing (#386). Verify through the API afterwards, not
@@ -64,7 +71,14 @@ branches:
   # `static` job → reusable-pre-commit's "Static CI Tests";
   # `docs` job → reusable-mkdocs-build's "MkDocs Build";
   # `actionlint` job → reusable-actionlint's "Workflow Lint";
-  # `pr-lint` job → reusable-pr-lint's "PR Lint".
+  # `pr-lint` job → reusable-pr-lint's "PR Lint";
+  # `required-check-triggers-tests` job → reusable-python-coverage's
+  # "Python Coverage" -- the suite of the guard that refuses a required
+  # context fork pull requests can't report (#462).
+  # The Settings App applies these contexts on the next push that touches
+  # this file. Verify the live set through the API
+  # (`gh api repos/nolte/gh-plumbing/branches/develop/protection/required_status_checks`),
+  # since a failed App run is silent.
   - name: develop
     protection:
       required_status_checks:
@@ -74,6 +88,7 @@ branches:
           - docs / MkDocs Build
           - actionlint / Workflow Lint
           - pr-lint / PR Lint
+          - required-check-triggers-tests / Python Coverage
       # Push restrictions are only available for organization-owned repositories
       # (GitHub REST, Update branch protection); the commons' apps restriction
       # makes the whole develop update fail with 422 on this user-owned repository,
