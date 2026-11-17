@@ -10,8 +10,8 @@ name: Reusable — Pre-Commit
 # cache it -- `pre_commit/languages/docker_image.py` sets `ENVIRONMENT_DIR = None`
 # with `install_environment = no_install`, so the image lives only in the Docker
 # daemon's store and never lands under `~/.cache/pre-commit`, which is the only
-# path `pre-commit/action` hands to `actions/cache`. There is nothing for that
-# cache to hold. Measured on nolte/kamerplanter#1321, whose two hooks
+# path this workflow hands to `actions/cache`. There is nothing for that cache
+# to hold. Measured on nolte/kamerplanter#1321, whose two hooks
 # (`rhysd/actionlint`, `koalaman/shellcheck-precommit`) return
 # `ratelimit-limit: 100;w=3600` with no publisher exemption.
 #
@@ -143,4 +143,38 @@ jobs:
               ;;
           esac
 
-      - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
+      # The four steps below replace `pre-commit/action` v3.0.1, a composite
+      # action whose own cache step references `actions/cache@v4` by tag. The
+      # repository setting `sha_pinning_required` checks nested references as
+      # well, so a single tag two levels down fails the whole job. Inlining the
+      # composite keeps its behaviour and puts every `uses:` under this file's
+      # control, where it is pinned to a full commit SHA.
+      - name: Install pre-commit
+        # Inline rather than `-r requirements-dev.txt`: this reusable runs in
+        # the consumer's checkout, where no gh-plumbing requirements file
+        # exists. Same version as `requirements-dev.txt`. Renovate does not
+        # track this inline pin yet -- see #467.
+        run: |
+          set -euo pipefail
+          python -m pip install pre-commit==4.5.0
+
+      - name: List installed Python packages
+        # Kept from the composite action, so the log still records the exact
+        # resolved versions consumers have been able to read there.
+        run: |
+          set -euo pipefail
+          python -m pip freeze --local
+
+      - name: Cache pre-commit hook environments
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/pre-commit
+          # Copied verbatim from `pre-commit/action` v3.0.1, prefix and
+          # separators included, so caches consumers already built under the
+          # composite action keep hitting after the switch.
+          key: pre-commit-3|${{ env.pythonLocation }}|${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - name: Run pre-commit
+        run: |
+          set -euo pipefail
+          pre-commit run --show-diff-on-failure --color=always --all-files

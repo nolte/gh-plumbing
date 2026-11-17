@@ -120,6 +120,9 @@ none
 
 | Finding | Source | Outcome | Reproduction | Issue |
 |---|---|---|---|---|
-| Inline-pip-Pins in Workflows werden von Renovate nicht verfolgt | Research (Renovate-Config + git log) | filed (P5) | `customManagers` in `renovate-configs/common.json`; `git log -S'pytest=='` | tbd |
+| Inline-pip-Pins in Workflows werden von Renovate nicht verfolgt | Research (Renovate-Config + git log) | filed (P5) | `customManagers` in `renovate-configs/common.json`; `git log -S'pytest=='` | #467 |
 
 ## Dispatch log
+
+2026-11-17 P5 handled by orchestrator — filed #467
+2026-11-17 P1 dispatched to nolte-engineering:fullstack-developer — 4 direct steps, all uses SHA-pinned, cache key verbatim; actionlint 1.7.12 exit 0, yaml parse exit 0; orchestrator added #467 reference
