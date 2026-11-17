@@ -40,7 +40,7 @@ Zwei optionale Parameter verschieben die Zählung auf ein Konto-Budget:
 | `dockerhub-username` | Input | `""` | Docker-Hub-Kontoname. Ein Benutzername ist nicht geheim, deshalb reist er als Input. Leer überspringt den Login-Schritt. |
 | `dockerhub-token` | Secret | nicht gesetzt | Docker-Hub-Personal-Access-Token zu diesem Konto. Es muss den Scope „Public Repo Read-only“ haben, weil pre-commit-Hooks im selben Job es lesen können. |
 
-Das Token gehört auf ein eigenes Bot- oder Service-Konto statt auf ein persönliches, mit Ablaufdatum und regelmäßiger Rotation. Da Hook-Code es lesen kann, verbraucht ein Leck dann nur das Pull-Kontingent dieses Kontos und legt keine anderswo genutzte Identität offen.
+Das Token gehört zu einer eigenen Docker ID, die nur die CI nutzt (ein Bot-Konto), nicht zu einer persönlichen, und bekommt ein Ablaufdatum und regelmäßige Rotation. Da Hook-Code es lesen kann, verbraucht ein Leck dann nur das Pull-Kontingent dieses Kontos und legt keine anderswo genutzte Identität offen. Aus demselben Grund persistiert der Workflow das Checkout-Token nicht (`persist-credentials: false`). Ein Hook, der von `origin` fetcht, funktioniert deshalb nur in einem öffentlichen Repository, und ein privater Aufrufer braucht einen eigenen Workflow.
 
 ```yaml title=".github/workflows/build-static-tests.yaml"
 jobs:
