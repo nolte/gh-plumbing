@@ -1,6 +1,6 @@
 # Static tests
 
-Runs a minimal static analysis bundle on every push to give fast feedback without external services.
+Runs a minimal static analysis bundle on every pull request and on every push to the default branch to give fast feedback without external services.
 
 - [`pre-commit/action`](https://github.com/pre-commit/action) runs hooks defined in `.pre-commit-config.yaml`
 - [`zbeekman/EditorConfig-Action`](https://github.com/zbeekman/EditorConfig-Action) enforces `.editorconfig` rules
@@ -11,7 +11,9 @@ Runs a minimal static analysis bundle on every push to give fast feedback withou
 
 ```yaml title=".github/workflows/build-static-tests.yaml"
 on:
+  pull_request:
   push:
+    branches: [develop] # replace with your default branch
 
 jobs:
   static:
@@ -20,6 +22,9 @@ jobs:
 
 !!! tip "Required status check"
     Combine the workflow with a branch-protection rule that requires the `static / Static CI Tests` check—see [Settings](../probot/settings.md).
+
+!!! warning "Fork pull requests need the `pull_request` trigger"
+    A fork never pushes to the base repository. With a push-only trigger the required check never reports on a pull request from a fork, so that pull request stays blocked. `pull_request_target` isn't an alternative. By default it checks out the base branch, so the required check passes without testing the pull request's changes. Checking out the pull request's head instead runs the fork's code with the base repository's write token and secrets. On a fork pull request `reusable-trivy.yaml` skips uploading its scan report to the Security tab, because the token there has read-only access.
 
 ---
 

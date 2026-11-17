@@ -1,7 +1,19 @@
 name: Static CI Tests
 
+# `pull_request` is what makes the required contexts report on fork pull
+# requests: a fork never pushes to this repository, so with a push-only trigger
+# `static / Static CI Tests`, `docs / MkDocs Build` and `actionlint / Workflow
+# Lint` never reported there and the pull request stayed blocked (#461, #462).
+# `push` is narrowed to develop and master so a same-repository branch with an
+# open pull request doesn't run the bundle twice. `pull_request_target` is
+# deliberately NOT used: by default it checks out the base ref, so the checks
+# would go green without testing the pull request's changes, and checking out
+# the head explicitly would run fork code with the base repository's write
+# token and secrets.
 on:
+  pull_request:
   push:
+    branches: [develop, master]
   workflow_dispatch:
 # Explicit permissions per spec/project/github-actions-best-practices §B:
 # workflow level is the minimum, write scopes are granted per job.
@@ -11,6 +23,8 @@ permissions:
 
 # Pre-merge feedback, so cancel-in-progress is true: a superseded run on the
 # same ref has nothing left to tell us and only delays the run that matters.
+# Pull-request runs group by `refs/pull/N/merge`, so each pull request has its
+# own group, separate from the develop and master pushes.
 # This is the §F SHOULD, not the MUST -- the four jobs below are read-only and
 # would not corrupt anything by overlapping, they would merely waste a runner.
 #

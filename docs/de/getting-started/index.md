@@ -40,12 +40,16 @@
 
 ```yaml title=".github/workflows/build-static-tests.yaml"
 on:
+  pull_request:
   push:
+    branches: [develop] # durch den eigenen Default-Branch ersetzen
 
 jobs:
   static:
     uses: nolte/gh-plumbing/.github/workflows/reusable-pre-commit.yaml@<tag>
 ```
+
+Behalte den Trigger `pull_request`: Ohne ihn meldet sich der erforderliche Check bei einem Pull-Request aus einem Fork nie. Siehe [Statische Tests](../workflows/static-tests.md).
 
 !!! note "Referenz-Auswahl"
     - `@develop` folgt immer dem aktuellen Stand. Empfohlen für interne Repositories, die dieses Projekt begleiten.

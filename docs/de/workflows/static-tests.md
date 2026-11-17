@@ -1,6 +1,6 @@
 # Statische Tests
 
-Führt ein minimales Bündel statischer Analyse bei jedem Push aus und liefert schnelles Feedback ohne externe Dienste.
+Führt ein minimales Bündel statischer Analyse bei jedem Pull-Request und bei jedem Push auf den Default-Branch aus und liefert schnelles Feedback ohne externe Dienste.
 
 - [`pre-commit/action`](https://github.com/pre-commit/action) führt die in `.pre-commit-config.yaml` definierten Hooks aus
 - [`zbeekman/EditorConfig-Action`](https://github.com/zbeekman/EditorConfig-Action) prüft `.editorconfig`-Regeln
@@ -11,7 +11,9 @@ Führt ein minimales Bündel statischer Analyse bei jedem Push aus und liefert s
 
 ```yaml title=".github/workflows/build-static-tests.yaml"
 on:
+  pull_request:
   push:
+    branches: [develop] # durch den eigenen Default-Branch ersetzen
 
 jobs:
   static:
@@ -20,6 +22,9 @@ jobs:
 
 !!! tip "Erforderlicher Status-Check"
     Kombiniere den Workflow mit einer Branch-Protection-Regel, die den Check `static / Static CI Tests` verlangt — siehe [Settings](../probot/settings.md).
+
+!!! warning "Fork-Pull-Requests brauchen den Trigger `pull_request`"
+    Ein Fork pusht nie in das Basis-Repository. Mit einem reinen Push-Trigger meldet sich der erforderliche Check bei einem Pull-Request aus einem Fork nie, und dieser Pull-Request bleibt blockiert. `pull_request_target` ist keine Alternative. Standardmäßig checkt es den Basis-Branch aus, der erforderliche Check wird also grün, ohne die Änderungen des Pull-Requests zu testen. Checkt man stattdessen den Head des Pull-Requests aus, läuft der Code des Forks mit dem Schreib-Token und den Secrets des Basis-Repositorys. Bei einem Fork-Pull-Request überspringt `reusable-trivy.yaml` den Upload seines Scan-Berichts in den Security-Tab, weil das Token dort nur Leserechte hat.
 
 ---
 
