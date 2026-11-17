@@ -2,8 +2,7 @@
 
 Führt ein minimales Bündel statischer Analyse bei jedem Pull-Request und bei jedem Push auf den Default-Branch aus und liefert schnelles Feedback ohne externe Dienste.
 
-- [`pre-commit/action`](https://github.com/pre-commit/action) führt die in `.pre-commit-config.yaml` definierten Hooks aus
-- [`zbeekman/EditorConfig-Action`](https://github.com/zbeekman/EditorConfig-Action) prüft `.editorconfig`-Regeln
+- [`pre-commit`](https://pre-commit.com), in einer festgelegten Version installiert, führt die in `.pre-commit-config.yaml` definierten Hooks auf allen Dateien aus; [`actions/cache`](https://github.com/actions/cache), auf einen vollständigen Commit-SHA gepinnt, cacht die Hook-Umgebungen
 
 ---
 
@@ -30,7 +29,7 @@ jobs:
 
 ## Docker-Hub-Rate-Limits
 
-Ein Hook mit `language: docker_image` zieht sein Image bei jedem Lauf, und pre-commit kann es nicht cachen: Diese Sprache setzt `ENVIRONMENT_DIR = None` mit `install_environment = no_install`, das Image bleibt also im Store des Docker-Daemons und landet nie unter `~/.cache/pre-commit` — dem einzigen Pfad, den `pre-commit/action` an `actions/cache` übergibt.
+Ein Hook mit `language: docker_image` zieht sein Image bei jedem Lauf, und pre-commit kann es nicht cachen: Diese Sprache setzt `ENVIRONMENT_DIR = None` mit `install_environment = no_install`, das Image bleibt also im Store des Docker-Daemons und landet nie unter `~/.cache/pre-commit` — dem einzigen Pfad, den dieser Workflow an `actions/cache` übergibt.
 
 Ein anonymer Pull zählt gegen ein Budget, das an der Quell-IP hängt, und GitHub-gehostete Runner teilen sich ihre Ausgangsadressen plattformweit. Die Lane verbraucht damit ein Budget, das jedes andere Repository im selben Runner-Netz ebenfalls verbraucht — eine Rate-Limit-Ablehnung kann einen erforderlichen Check also aus einem Grund rot färben, der nichts mit dem Diff zu tun hat.
 

@@ -42,7 +42,7 @@ uses: nolte/gh-plumbing/.github/workflows/reusable-<name>.yaml@<tag>
 
     ---
 
-    Pre-commit + EditorConfig linting for any repository.
+    Runs the pre-commit hooks a repository declares.
 
     [:octicons-arrow-right-24: reusable-pre-commit](static-tests.md)
 

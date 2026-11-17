@@ -2,8 +2,7 @@
 
 Runs a minimal static analysis bundle on every pull request and on every push to the default branch to give fast feedback without external services.
 
-- [`pre-commit/action`](https://github.com/pre-commit/action) runs hooks defined in `.pre-commit-config.yaml`
-- [`zbeekman/EditorConfig-Action`](https://github.com/zbeekman/EditorConfig-Action) enforces `.editorconfig` rules
+- [`pre-commit`](https://pre-commit.com), installed at a pinned version, runs the hooks defined in `.pre-commit-config.yaml` on all files; [`actions/cache`](https://github.com/actions/cache), pinned to a full commit SHA, caches the hook environments
 
 ---
 
@@ -30,7 +29,7 @@ jobs:
 
 ## Docker Hub rate limits
 
-A hook declared with `language: docker_image` pulls its image on every run, and pre-commit can't cache it: that language sets `ENVIRONMENT_DIR = None` with `install_environment = no_install`, so the image stays in the Docker daemon's store and never reaches `~/.cache/pre-commit`, the only path `pre-commit/action` hands to `actions/cache`.
+A hook declared with `language: docker_image` pulls its image on every run, and pre-commit can't cache it: that language sets `ENVIRONMENT_DIR = None` with `install_environment = no_install`, so the image stays in the Docker daemon's store and never reaches `~/.cache/pre-commit`, the only path this workflow hands to `actions/cache`.
 
 An anonymous pull counts against a budget that belongs to the source IP address, and GitHub-hosted runners share egress addresses across the platform. The lane therefore spends a budget that every other repository on the same runner network also spends, so a rate-limit rejection can redden a required check for a reason unrelated to the diff.
 

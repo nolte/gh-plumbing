@@ -43,7 +43,7 @@ uses: nolte/gh-plumbing/.github/workflows/reusable-<name>.yaml@<tag>
 
     ---
 
-    Pre-Commit- und EditorConfig-Linting für jedes Repository.
+    Führt die Pre-Commit-Hooks aus, die ein Repository deklariert.
 
     [:octicons-arrow-right-24: reusable-pre-commit](static-tests.md)
 
