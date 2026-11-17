@@ -20,15 +20,16 @@ version-resolver:
     labels:
       - feat
       - enhancement
+  # Type labels only. `documentation`, `project-config` and `cicd` used to sit
+  # here too; they are area labels boring-cyborg derives from the touched paths
+  # (see the Maintenance note below). With `default: patch` they never changed
+  # the result, but listing them kept the area/type confusion alive (#475).
   patch:
     labels:
       - fix
       - bug
       - chore
       - docs
-      - documentation
-      - project-config
-      - cicd
       - dependencies
       - security
   default: patch
@@ -57,13 +58,15 @@ categories:
   # a type label rather than replacing it. release-drafter lists a pull request
   # under every matching category, so `fix(workflows):` appeared under both Bug
   # Fixes and Maintenance, and `fix(vale):` under three headings at once (#413).
+  # `documentation` stayed behind and is the same class: boring-cyborg applies
+  # it to every pull request touching `docs/**`, so a `fix(ci):` that also
+  # updated a page rendered under both Bug Fixes and Maintenance (#475). The
+  # type label for a docs pull request is `docs`, from the `docs(...)` title.
+  # `.github/scripts/check-release-category-labels.py` refuses the class.
   - title: 🧰 Maintenance
     labels:
       - "chore"
-      # `docs` and `documentation` are the labels that exist; the previous
-      # `documentations` entry matched nothing in any portfolio repository.
       - "docs"
-      - "documentation"
 
 autolabeler:
   # Derive the type label from the title, so every pull request carries exactly
@@ -74,6 +77,13 @@ autolabeler:
   # label at all (the uncategorised remainder). Deriving it removes all three
   # shapes at once, and is what makes reducing Maintenance above safe: a pull
   # request touching only `.github/workflows/**` still lands under its type.
+  #
+  # release-drafter evaluates this block only on `pull_request` and
+  # `pull_request_target` events, never on the `push` that updates the draft.
+  # A repository gets it by calling `reusable-release-drafter-autolabel.yml`
+  # from a `pull_request_target` workflow; without that caller the block is
+  # inert and type labels depend on someone applying them by hand -- which is
+  # how the fork pull request #461 landed uncategorised (#475).
   #
   # `chore(release):` matches both this and the `release` rule below; that is
   # intended, since `release` is an exclude-label and wins by removing the entry

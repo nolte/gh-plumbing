@@ -1,0 +1,58 @@
+name: Release Drafter Autolabel
+
+# Runs the `autolabeler:` block of the release-drafter configuration -- and
+# nothing else -- so every pull request carries the type label its
+# Conventional-Commits title implies and lands under one changelog category.
+#
+# release-drafter evaluates `autolabeler:` only on `pull_request` and
+# `pull_request_target` events. `reusable-release-drafter.yml` runs on the
+# `push` that updates the draft, so the block never ran there, and a fork pull
+# request merged without a hand-applied type label landed in the uncategorised
+# remainder (#461, #475).
+#
+# Call it from a `pull_request_target` workflow: under `pull_request` a fork
+# pull request gets a read-only token and the label write fails. That is safe
+# here because nothing from the pull request is executed -- there is no
+# checkout, and release-drafter reads only the title and head branch name from
+# the event payload, matching them against regexes from the base branch's
+# configuration. Keep it that way: never add a checkout of the pull request
+# head to this workflow.
+#
+# Separate from `reusable-release-drafter.yml` on purpose. That workflow's job
+# needs `contents: write`, this one `pull-requests: write`, and a called
+# workflow that declares a scope its caller doesn't grant fails with
+# `startup_failure` (#422) -- adding the scope there would have broken every
+# existing consumer.
+on:
+  workflow_call:
+    secrets:
+      token:
+        required: true
+
+# Explicit permissions per spec/project/github-actions-best-practices §B:
+# workflow level is the minimum, write scopes are granted per job.
+permissions:
+  contents: read
+
+# One group per pull request. Labels are only ever added, so a superseded run
+# (an earlier title) has nothing left to contribute.
+concurrency:
+  group: release-drafter-autolabel-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  autolabel:
+    name: Autolabel
+    permissions:
+      contents: read # release-drafter reads its configuration through the API
+      pull-requests: write # adds the type label to the pull request
+    runs-on: ubuntu-latest
+    steps:
+      - name: Apply type label from the title
+        uses: release-drafter/release-drafter@6a93d829887aa2e0748befe2e808c66c0ec6e4c7 # v6.4.0
+        with:
+          # Autolabel only. The draft is maintained on push by
+          # reusable-release-drafter.yml; a pull request must not rewrite it.
+          disable-releaser: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.token }}

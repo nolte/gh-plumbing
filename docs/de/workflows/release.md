@@ -1,8 +1,9 @@
 # Release
 
-Das Release-Handling erstreckt sich über drei Workflows und eine Probot-Konfiguration.
+Das Release-Handling erstreckt sich über vier Workflows und eine Probot-Konfiguration.
 
 - **`reusable-release-drafter.yml`** pflegt den Release-Entwurf mit generiertem Changelog, sobald Pull Requests gemerged werden.
+- **`reusable-release-drafter-autolabel.yml`** setzt das Typ-Label aus dem Titel jedes Pull Requests, damit der Changelog ihn unter genau einer Kategorie führt.
 - **`reusable-release-publish.yml`** befördert den offenen Entwurf zu einem veröffentlichten Release für einen bestimmten Tag, mit optionalem Dry-Run-Validierungs-Gate.
 - **`reusable-release-cd-refresh-master.yml`** richtet den Präsentationsbranch auf den veröffentlichten Release-Tag aus, damit er immer dem aktuellen Release entspricht. Er liest die Protection des Ziels und wählt die Schreibstrategie daraus: einen Merge-Commit, wo Merge-Commits erlaubt sind, einen `force-with-lease`-Reset, wo sie es nicht sind, und eine laute Verweigerung, wo das Ziel beides verbietet. Siehe [ADR-001](../decisions/adr-001-presentation-branch-reset.md).
 - **`_extends: gh-plumbing:.github/commons-release-drafter.yml`** liefert die geteilte Release-Drafter-Kategorisierung.
@@ -34,6 +35,34 @@ _extends: gh-plumbing:.github/commons-release-drafter.yml
 
 !!! tip "Kategorisierung"
     Release-Drafter sortiert PRs anhand von Labels. [commons-settings](../probot/settings.md) deklariert die geteilte Label-Palette, und [boring-cyborg](../probot/labelling.md) hängt die Labels an die einzelnen PRs.
+
+### Typ-Labels an Pull Requests
+
+Die Kategorien greifen nur auf *Typ*-Labels: `feat`, `fix`, `chore`, `docs`. Der Block `autolabeler:` in der geteilten Konfiguration leitet dieses Label aus dem Conventional-Commits-Titel ab. Release-Drafter führt ihn nur bei Pull-Request-Events aus, nie beim Push, der den Entwurf aktualisiert. Ohne den folgenden Workflow landet ein Pull Request, der ohne von Hand gesetztes Typ-Label gemerged wird, unter keiner Kategorie.
+
+```yaml title=".github/workflows/release-drafter-autolabel.yml"
+on:
+  pull_request_target:
+    types: [opened, reopened, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  autolabel:
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: nolte/gh-plumbing/.github/workflows/reusable-release-drafter-autolabel.yml@<tag>
+    secrets:
+      token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+!!! warning "Warum `pull_request_target`"
+    Unter `pull_request` erhält ein Pull Request aus einem Fork ein Token mit reinen Leserechten, und das Setzen des Labels schlägt fehl. Der Reusable checkt nichts aus und liest nur Titel und Branch-Namen, also läuft kein Code aus dem Pull Request mit dem Schreib-Token. Füge ihm keinen Checkout des Pull-Request-Heads hinzu.
+
+!!! note "Bereichs-Labels sind keine Kategorien"
+    boring-cyborg-Labels wie `documentation` oder `cicd` beschreiben, *wo* ein Pull Request etwas geändert hat. Eine Kategorie, die auf eines davon griff, listete den Pull Request ein zweites Mal neben seinem Typ. Ein Pre-commit-Hook in diesem Repository verweigert diese Kombination.
 
 ---
 

@@ -32,6 +32,7 @@ Centralised reusable [GitHub Actions workflows](https://docs.github.com/en/actio
 | ```reusable-release-archive.yml```           | Build a release archive through a Task target, attest its build provenance, and attach it to the release-drafter draft before publish. |
 | ```reusable-release-cd-refresh-master.yml``` | Fast-forward `master` to the latest published release tag so `master` always represents the latest release.                                                      |
 | ```reusable-release-drafter.yml```           | Update the open draft release with a changelog from merged PRs via [release-drafter/release-drafter](https://github.com/release-drafter/release-drafter).        |
+| ```reusable-release-drafter-autolabel.yml``` | Apply the type label a pull request's Conventional-Commits title implies, fork pull requests included, so it lands under one changelog category. |
 | ```reusable-release-publish.yml```           | Promote an open release-drafter draft to a published release for a given tag, with an optional dry-run validation gate; for HACS integrations it attaches a `<domain>.zip` asset to the draft before publish. |
 | ```reusable-spelling-vale.yaml```            | Lint Markdown prose via [errata-ai/vale-action](https://github.com/errata-ai/vale-action) with inline reviewdog annotations on pull requests.                    |
 | ```reusable-sphinx.yaml```                   | Build and publish a [Sphinx](https://www.sphinx-doc.org/en/master) documentation site to [GitHub Pages](https://pages.github.com/).                              |
