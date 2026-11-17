@@ -112,6 +112,17 @@ jobs:
       install-command: pip install pytest==9.1.1 pytest-cov==7.1.0
       coverage-source: docs_freshness
       pytest-args: tests/test_docs_freshness.py
+  # Guards the class behind #462: a required context whose workflow never runs
+  # on a fork pull request leaves it blocked without any failed check. The
+  # suite includes a run against this repository's own settings.yml and
+  # workflows, so a push-only or write-scoped producer fails here.
+  required-check-triggers-tests:
+    uses: ./.github/workflows/reusable-python-coverage.yaml
+    with:
+      working-directory: scripts
+      install-command: pip install pytest==9.1.1 pytest-cov==7.1.0 pyyaml==6.0.3
+      coverage-source: required_check_triggers
+      pytest-args: tests/test_required_check_triggers.py
   # The check itself, not its tests. It runs on the pull request so a page
   # added in one language only, or a reference to a workflow that no longer
   # exists, fails here rather than reaching a release.
