@@ -136,8 +136,9 @@ jobs:
       - name: Install pre-commit
         # Inline rather than `-r requirements-dev.txt`: this reusable runs in
         # the consumer's checkout, where no gh-plumbing requirements file
-        # exists. Same version as `requirements-dev.txt`. Renovate does not
-        # track this inline pin yet -- see #467.
+        # exists. Same version as `requirements-dev.txt`: the preset's inline
+        # pip pin manager tracks this line, and its `pre-commit` group bumps
+        # both pins on one branch (#467).
         run: |
           set -euo pipefail
           python -m pip install pre-commit==4.7.0
