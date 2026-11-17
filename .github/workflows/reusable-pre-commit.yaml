@@ -69,9 +69,15 @@ on:
       dockerhub-token:
         description: |
           Docker Hub personal access token matching `inputs.dockerhub-username`.
-          A public-repo-read token is sufficient; nothing in this workflow
-          pushes. Required in practice whenever `dockerhub-username` is set, but
-          declared optional so that a caller which sets neither still resolves.
+          It MUST be created with the "Public Repo Read-only" access scope.
+          Nothing in this workflow pushes, and a wider scope is not merely
+          unnecessary but exposed: host-language pre-commit hooks (python,
+          system, script) run in the same job and can read
+          `~/.docker/config.json` until `docker/login-action` logs out in its
+          post step, after the hooks have finished. Anything broader than
+          public read-only would be handed to third-party hook code. Required in
+          practice whenever `dockerhub-username` is set, but declared optional
+          so that a caller which sets neither still resolves.
         required: false
 
 # Explicit permissions per spec/project/github-actions-best-practices §B:
@@ -87,6 +93,17 @@ jobs:
     steps:
       - name: Checkout sources
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          # Not persisted, like `reusable-pr-lint.yaml` (the other reusables
+          # follow in #471). `pre-commit run` executes hook code from
+          # third-party repositories later in this job, and a persisted token --
+          # in v6 a file under `$RUNNER_TEMP` that `.git/config` includes -- is
+          # readable by any process in the job.
+          # Nothing here needs authenticated git: the job holds `contents: read`
+          # only, and pre-commit clones the hook repositories into its own cache
+          # anonymously. A future private consumer whose hook fetches `origin`
+          # would need a workflow of its own rather than a token left lying here.
+          persist-credentials: false
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:

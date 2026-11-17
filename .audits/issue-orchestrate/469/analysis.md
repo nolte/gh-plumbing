@@ -112,3 +112,6 @@ none
 |---|---|---|---|---|
 
 ## Dispatch log
+
+2026-11-17 P3 handled by orchestrator — filed #471
+2026-11-17 P1 dispatched to nolte-engineering:fullstack-developer — persist-credentials: false + read-only PAT requirement; actionlint exit 0; orchestrator corrected "matching the other reusables" (5/26 set it, see #471)
