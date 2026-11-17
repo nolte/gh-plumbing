@@ -125,8 +125,8 @@ none
 | S1: Pin 4.5.0 stuft Consumer herab (Composite installierte latest) | cicd-pipeline-reviewer | fixed directly → 4.7.0 in Workflow + requirements-dev.txt | PyPI JSON: latest 4.7.0; venv-Test pre-commit 4.7.0 / Python 3.14.0 `run --all-files` exit 0 | – |
 | Docs nennen `zbeekman/EditorConfig-Action`, die kein Workflow nutzt | cicd-pipeline-reviewer | fixed directly (Zeile en/de entfernt) | `grep -rln EditorConfig .github/workflows/` exit 1 | – |
 | SHA `0057852…` = v4.3.0 unbestätigt | code-security-reviewer | dismissed (bestätigt) | `git ls-remote`: refs/tags/v4.3.0 und refs/tags/v4 → 0057852… | – |
-| W1/S2: Cache-Key ohne OS-/pre-commit-Version (geerbt) | cicd-pipeline-reviewer | pending operator | – | – |
-| SEC-003: Hook-Code kann persistiertes Checkout-Token/Docker-Creds lesen (geerbt) | code-security-reviewer | pending operator | – | – |
+| W1/S2: Cache-Key ohne OS-/pre-commit-Version (geerbt) | cicd-pipeline-reviewer | filed | – | #468 |
+| SEC-003: Hook-Code kann persistiertes Checkout-Token/Docker-Creds lesen (geerbt) | code-security-reviewer | filed | – | #469 |
 
 ## Dispatch log
 
