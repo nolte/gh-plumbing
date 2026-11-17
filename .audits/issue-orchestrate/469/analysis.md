@@ -110,9 +110,15 @@ none
 
 | Finding | Source | Outcome | Reproduction | Issue |
 |---|---|---|---|---|
+| Kommentar nannte pr-lint als Vorbild / „other reusables" (5/26 setzen false) | cicd-pipeline-reviewer S2, code-security-reviewer S-3 | fixed directly (P1-Spezialist) | Predicate-Ausgabe; `reusable-pr-lint.yaml` checkt `.pr-lint` aus | – |
+| Host-Sprachen-Liste abschließend; „until logout" liest sich wie Zeitgrenze | cicd-pipeline-reviewer S1, code-security-reviewer S-1/S-2 | fixed directly (P1-Spezialist) | `reusable-pre-commit.yaml:74-78` vorher | – |
+| W-1: passwortloses sudo → Runner-Speicher (GITHUB_TOKEN, ACTIONS_RUNTIME_TOKEN, Secrets) | beide Reviewer | accepted residual, im Kommentar benannt | GitHub-Doku Runner-Images (passwordless sudo); CVE-2025-30066 | – |
+| W-2: Cache-Poisoning via ~/.cache/pre-commit bzw. ACTIONS_RUNTIME_TOKEN | code-security-reviewer | pending operator | suspected, nicht reproduziert | – |
+| Doku-Tipp: Bot-Account + PAT-Ablaufdatum | cicd-pipeline-reviewer S3 | pending operator | – | – |
 
 ## Dispatch log
 
 2026-11-17 P3 handled by orchestrator — filed #471
 2026-11-17 P1 dispatched to nolte-engineering:fullstack-developer — persist-credentials: false + read-only PAT requirement; actionlint exit 0; orchestrator corrected "matching the other reusables" (5/26 set it, see #471)
 2026-11-17 P2 dispatched to nolte-shared:prose-vale-curator — EN/DE L41 require Public Repo Read-only PAT; vale on L41: 0 alerts; corpus grep: no other copies
+2026-11-17 P4 cicd-pipeline-reviewer: 0 critical/0 warning/3 suggestions; code-security-reviewer: 0 critical, 2 warning (residual), 2 info, 3 suggestions; comment fixes returned to P1 specialist; actionlint exit 0

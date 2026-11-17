@@ -71,13 +71,16 @@ on:
           Docker Hub personal access token matching `inputs.dockerhub-username`.
           It MUST be created with the "Public Repo Read-only" access scope.
           Nothing in this workflow pushes, and a wider scope is not merely
-          unnecessary but exposed: host-language pre-commit hooks (python,
-          system, script) run in the same job and can read
-          `~/.docker/config.json` until `docker/login-action` logs out in its
-          post step, after the hooks have finished. Anything broader than
-          public read-only would be handed to third-party hook code. Required in
-          practice whenever `dockerhub-username` is set, but declared optional
-          so that a caller which sets neither still resolves.
+          unnecessary but exposed: every non-docker hook language (e.g. python,
+          node, golang, system, script), including its environment install,
+          runs on the host in the same job and can read `~/.docker/config.json`
+          while it runs. The post-step logout of `docker/login-action` does not
+          revoke a token that was already read, and with passwordless sudo a
+          hook can also read it from runner memory. The scope is therefore the
+          only control: anything broader than public read-only would be handed
+          to third-party hook code. Required in practice whenever
+          `dockerhub-username` is set, but declared optional so that a caller
+          which sets neither still resolves.
         required: false
 
 # Explicit permissions per spec/project/github-actions-best-practices §B:
@@ -94,11 +97,17 @@ jobs:
       - name: Checkout sources
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          # Not persisted, like `reusable-pr-lint.yaml` (the other reusables
-          # follow in #471). `pre-commit run` executes hook code from
-          # third-party repositories later in this job, and a persisted token --
-          # in v6 a file under `$RUNNER_TEMP` that `.git/config` includes -- is
+          # Not persisted, like the consumer checkout in
+          # `reusable-docs-freshness.yaml` (the remaining checkouts follow in
+          # #471). `pre-commit run` executes hook code from third-party
+          # repositories later in this job, and a persisted token -- in v6 a
+          # file under `$RUNNER_TEMP` that `.git/config` includes -- is
           # readable by any process in the job.
+          # This removes the unprivileged path, a file any process can read; it
+          # is not a boundary against hostile hook code. Hooks run with
+          # passwordless sudo on GitHub-hosted runners and can read the runner
+          # process's memory, so the real limit on the job token is
+          # `permissions: contents: read`.
           # Nothing here needs authenticated git: the job holds `contents: read`
           # only, and pre-commit clones the hook repositories into its own cache
           # anonymously. A future private consumer whose hook fetches `origin`
