@@ -100,7 +100,14 @@ jobs:
 !!! tip "Attach a built archive before publish"
     To ship a Task-built archive with build provenance, run
     [`reusable-release-archive.yml`](release-archive.md) ahead of this workflow
-    and order the publish job after it with `needs:`.
+    and order the publish job after it with `needs:`. Pass the archive's
+    `target-sha` output as `expected-target-sha`. The workflow then refuses to
+    publish when the draft target is no longer the commit the archive came
+    from. It also refuses the input together with `auto-align: true`.
+
+    | Input | Default | Effect |
+    | --- | --- | --- |
+    | `expected-target-sha` | empty | Full commit SHA the draft target must equal; the workflow pins the target to it before publishing |
 
 !!! tip "Dry run"
     Set `dry_run: true` to run every validation gate without flipping the

@@ -98,6 +98,26 @@ on:
         required: false
         type: boolean
         default: true
+      expected-target-sha:
+        description: |
+          The commit the release archive was built from. Feed it from
+          `needs.<archive-job>.outputs.target-sha` of
+          `reusable-release-archive.yml`, so the tag lands on the commit the
+          archive and its provenance record name (issue #456).
+
+          Empty (the default) keeps today's behaviour exactly. Set, the
+          workflow refuses to publish when the draft target is not that
+          commit -- checked right after the draft is resolved, and again
+          immediately before the flip, which pins the target to the SHA in
+          the same edit so a branch-named target cannot move in between.
+
+          It cannot be combined with `auto-align: true`: alignment commits on
+          develop and moves the draft target after the archive was built, so
+          the two would always disagree. Align first through the
+          `chore(release): <tag>` PR, then run archive and publish.
+        required: false
+        type: string
+        default: ""
     secrets:
       token:
         required: true
@@ -209,6 +229,61 @@ jobs:
 
           echo "target_sha=$sha" >> "$GITHUB_OUTPUT"
           echo "Draft '$TAG' resolved at $sha (reachable from origin/develop)."
+
+      # Issue #456: the archive is built from the draft target in a separate
+      # workflow, and this one resolves the target again. Between the two, a
+      # merge on a branch-named target or an edited draft can move it, and the
+      # tag would then name a commit the archive was not built from. Runs on
+      # the dry run too -- the mismatch is the thing an operator wants to see
+      # before committing to a publish. Refuses before any write.
+      - name: Check the draft target against the expected commit
+        if: ${{ inputs.expected-target-sha != '' }}
+        env:
+          EXPECTED_TARGET_SHA: ${{ inputs.expected-target-sha }}
+          AUTO_ALIGN: ${{ inputs.auto-align }}
+          TAG: ${{ steps.draft.outputs.tag }}
+          DRAFT_TARGET: ${{ steps.draft.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+          expected="${EXPECTED_TARGET_SHA,,}"
+          if [[ ! "$expected" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::expected-target-sha '$EXPECTED_TARGET_SHA' is not a full 40-character commit SHA. Pass needs.<archive-job>.outputs.target-sha from reusable-release-archive.yml unchanged."
+            exit 1
+          fi
+
+          if [[ "$AUTO_ALIGN" == "true" ]]; then
+            echo "::error::expected-target-sha cannot be combined with auto-align: true. Alignment commits on develop and moves the draft target after the archive was built, so the tag could never land on the archived commit. Align first through the 'chore(release): $TAG' PR, then run archive and publish with auto-align off."
+            exit 1
+          fi
+
+          # Resolve draft turns only refs/heads/* (what release-drafter sets)
+          # into a commit and passes a bare branch name, as a draft edited by
+          # hand can carry, through as-is. Normalise it the same way the flip
+          # step does, so both compare commit to commit. A branch is read from
+          # origin, never from a local branch of the same name.
+          resolve_commit() {
+            local ref="$1"
+            if [[ "$ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "${ref,,}"
+            elif git rev-parse --verify --quiet "origin/${ref#refs/heads/}^{commit}"; then
+              :
+            else
+              git rev-parse --verify --quiet "${ref}^{commit}"
+            fi
+          }
+
+          if ! actual=$(resolve_commit "$DRAFT_TARGET"); then
+            echo "::error::Draft '$TAG' target '$DRAFT_TARGET' resolves to no commit on origin; cannot compare it with $expected."
+            exit 1
+          fi
+
+          if [[ "$actual" != "$expected" ]]; then
+            echo "::error::Draft '$TAG' targets $actual, but the archive was built from $expected. Likely a merge landed on the target branch after the archive was built, or the draft target was changed. Nothing was published; rebuild the archive from the current draft target, then publish again."
+            exit 1
+          fi
+
+          echo "Draft '$TAG' target $actual matches the expected commit."
+          { echo; echo "- Draft target \`$actual\` matches the archived commit (expected-target-sha)."; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Detect project type and load version-bearing files
         id: vbf
@@ -799,14 +874,51 @@ jobs:
             exit 1
           fi
 
+      # With expected-target-sha set, the target is checked once more right
+      # before the flip -- the gates above take minutes, and a branch-named
+      # target follows every merge in that window -- and then pinned to the
+      # SHA in the same edit that flips the draft, so nothing between this
+      # check and the flip can move it (#456).
+      # Without the input this step is unchanged.
       - name: Publish (flip draft=false)
         if: ${{ inputs.dry_run != true }}
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
           TAG: ${{ steps.draft.outputs.tag }}
+          EXPECTED_TARGET_SHA: ${{ inputs.expected-target-sha }}
         run: |
           set -euo pipefail
-          gh release edit "$TAG" --draft=false
+          if [[ -n "$EXPECTED_TARGET_SHA" ]]; then
+            expected="${EXPECTED_TARGET_SHA,,}"
+            # Same resolution as the expected-commit check above.
+            resolve_commit() {
+              local ref="$1"
+              if [[ "$ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+                echo "${ref,,}"
+              elif git rev-parse --verify --quiet "origin/${ref#refs/heads/}^{commit}"; then
+                :
+              else
+                git rev-parse --verify --quiet "${ref}^{commit}"
+              fi
+            }
+
+            git fetch --quiet origin
+            target=$(gh release view "$TAG" --json targetCommitish --jq .targetCommitish)
+            if ! actual=$(resolve_commit "$target"); then
+              echo "::error::Draft '$TAG' target '$target' resolves to no commit on origin; not publishing."
+              exit 1
+            fi
+            if [[ "$actual" != "$expected" ]]; then
+              echo "::error::Draft '$TAG' now targets $actual (from '$target'), but the archive was built from $expected. The target moved while this run was checking it -- a merge on the target branch or an edited draft. Nothing was published; rebuild the archive from the current draft target, then publish again."
+              exit 1
+            fi
+            # One edit pins the target and flips the draft, so no second call
+            # leaves a window in which the target could change again.
+            gh release edit "$TAG" --target "$expected" --draft=false
+            echo "Pinned draft '$TAG' target to $expected and flipped it."
+          else
+            gh release edit "$TAG" --draft=false
+          fi
           published_at=$(date -Is)
           echo "Published $TAG at $published_at."
           echo "::notice::Published $TAG at $published_at."
