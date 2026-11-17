@@ -33,6 +33,12 @@
       "groupName": null,
       "groupSlug": null,
       "automerge": false
+    },
+    {
+      "description": "Keep every pre-commit pin in lockstep. A repository typically pins the pre-commit package twice: once in a requirements file, read by the pip_requirements manager, and once inline in a workflow run: line, read by the inline pip pin manager below. Two managers propose two pull requests, and merging one leaves the pins apart. One group puts both bumps on a single branch (nolte/gh-plumbing#467). matchDatasources keeps the hook repositories of the pre-commit manager out: those resolve through git tags, not PyPI.",
+      "matchDatasources": ["pypi"],
+      "matchPackageNames": ["pre-commit"],
+      "groupName": "pre-commit"
     }
   ],
   "customManagers": [
@@ -60,6 +66,18 @@
       "matchStrings": ["nolte/vale-style/releases/download/(?<currentValue>v[0-9.]+)/"],
       "depNameTemplate": "nolte/vale-style",
       "datasourceTemplate": "github-releases"
+    },
+    {
+      "customType": "regex",
+      "description": "Age the PyPI pins a workflow installs inline, for example pip install pytest==9.1.1 in a run: line or an input value. A reusable workflow runs in the consumer's checkout and can't read a requirements file of its own repository, so the pin has to stay inline, where no built-in manager reads it (nolte/gh-plumbing#467). The first expression takes one pip install command up to a shell separator, the second each name==version inside it. Only exact == pins match, so ranges, extras, and -r files stay out. Scoped to .github/workflows. The depType workflow-pip-pin lets a consumer opt out with a packageRules entry that matches it and sets enabled: false.",
+      "managerFilePatterns": ["/(^|/)\\.github/workflows/[^/]+\\.ya?ml$/"],
+      "matchStringsStrategy": "recursive",
+      "matchStrings": [
+        "pip3? install(?:[ \\t]+[^\\s;&|#]+)+",
+        "(?:^|[\\s'\"])(?<depName>[A-Za-z0-9][A-Za-z0-9._-]*)==(?<currentValue>[0-9][0-9A-Za-z.!+-]*)"
+      ],
+      "datasourceTemplate": "pypi",
+      "depTypeTemplate": "workflow-pip-pin"
     }
   ]
 }

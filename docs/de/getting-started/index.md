@@ -119,3 +119,27 @@ Einen anderen Wert setzt du über denselben Schlüssel in deiner eigenen `renova
     - Pull-Requests aus Vulnerability-Alerts ignorieren beide Limits, und Renovate gruppiert sie nie. Ein Security-Fix wartet also nicht.
     - Ein niedrigeres Limit schließt keine bereits offenen Pull-Requests. Es greift, sobald diese gemergt oder geschlossen werden.
     - Ein Consumer, der das Preset auf `#vX.Y.Z` pinnt, erhält die neuen Standardwerte erst mit dem nächsten Pin-Bump.
+
+### Inline-pip-Pins in Workflows
+
+Das Preset verfolgt auch Python-Pakete, die ein Workflow mit exaktem Pin installiert, etwa `pip install pytest==9.1.1` in einem `run:`-Step oder einem Input-Wert. Kein eingebauter Renovate-Manager liest diese Zeilen, und ein Reusable Workflow kann keine Requirements-Datei aus seinem eigenen Repository lesen. Der Pin bleibt deshalb inline ([#467](https://github.com/nolte/gh-plumbing/issues/467)).
+
+- Geltungsbereich: Dateien unter `.github/workflows/`. Nur exakte `==`-Pins passen. Bereiche, Extras und `-r`-Requirements-Dateien bleiben außen vor.
+- Versionen: Renovate liest sie aus PyPI und schlägt jeden Bump als eigenen Pull-Request vor, innerhalb der Pull-Request-Volumen-Limits.
+- `pre-commit` bildet eine Gruppe über Manager hinweg: Ein Pin in einer Requirements-Datei und ein Pin in einem Workflow bewegen sich gemeinsam auf dem Branch `renovate/pre-commit` und laufen so nie auseinander.
+
+Zum Abschalten den Dependency-Typ deaktivieren, den der Manager setzt:
+
+```json title="renovate.json"
+{
+  "extends": [
+    "github>nolte/gh-plumbing//renovate-configs/common"
+  ],
+  "packageRules": [
+    {
+      "matchDepTypes": ["workflow-pip-pin"],
+      "enabled": false
+    }
+  ]
+}
+```
