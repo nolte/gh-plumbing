@@ -49,8 +49,8 @@ a plain job whose `name:` (or id, when it has no name) equals it. A name part
 prefix up to the expression.
 
 Not covered: contexts that live only in a ruleset or were set through the
-branch-protection UI without being declared (the Probot Settings App doesn't
-sync them, #369), and contexts reported by external apps rather than
+branch-protection UI without being declared here, and contexts reported by
+external apps rather than
 workflows. Neither is in the settings files, so neither is in reach of a
 file-based check.
 
