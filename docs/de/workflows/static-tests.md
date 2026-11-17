@@ -38,7 +38,7 @@ Zwei optionale Parameter verschieben die Zählung auf ein Konto-Budget:
 | Parameter | Art | Default | Zweck |
 | --- | --- | --- | --- |
 | `dockerhub-username` | Input | `""` | Docker-Hub-Kontoname. Ein Benutzername ist nicht geheim, deshalb reist er als Input. Leer überspringt den Login-Schritt. |
-| `dockerhub-token` | Secret | nicht gesetzt | Docker-Hub-Access-Token zu diesem Konto. Ein Lese-Token genügt; hier wird nichts gepusht. |
+| `dockerhub-token` | Secret | nicht gesetzt | Docker-Hub-Personal-Access-Token zu diesem Konto. Es muss den Scope „Public Repo Read-only“ haben, weil pre-commit-Hooks im selben Job es lesen können. |
 
 ```yaml title=".github/workflows/build-static-tests.yaml"
 jobs:

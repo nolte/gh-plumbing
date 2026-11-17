@@ -38,7 +38,7 @@ Two optional parameters move the count to a per-account budget:
 | Parameter | Kind | Default | Purpose |
 | --- | --- | --- | --- |
 | `dockerhub-username` | input | `""` | Docker Hub account name. A username isn't secret, so it travels as an input. Empty skips the login step. |
-| `dockerhub-token` | secret | unset | Docker Hub access token for that account. A read-only token is enough; nothing here pushes. |
+| `dockerhub-token` | secret | unset | Docker Hub personal access token for that account. It must have the "Public Repo Read-only" scope, because pre-commit hooks in the same job can read it. |
 
 ```yaml title=".github/workflows/build-static-tests.yaml"
 jobs:

@@ -115,3 +115,4 @@ none
 
 2026-11-17 P3 handled by orchestrator — filed #471
 2026-11-17 P1 dispatched to nolte-engineering:fullstack-developer — persist-credentials: false + read-only PAT requirement; actionlint exit 0; orchestrator corrected "matching the other reusables" (5/26 set it, see #471)
+2026-11-17 P2 dispatched to nolte-shared:prose-vale-curator — EN/DE L41 require Public Repo Read-only PAT; vale on L41: 0 alerts; corpus grep: no other copies
