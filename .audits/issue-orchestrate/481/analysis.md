@@ -95,5 +95,16 @@ none
 
 | Finding | Source | Outcome | Reproduction | Issue |
 |---|---|---|---|---|
+| This analysis and ADR-006 said the commons `master` entry never applied and that `restrictions: null` would enforce it for the first time. False: the entry carried `restrictions: null` from 2020 until #355 (2026-05-20) and applied in that form | diff review @ 24d9991 (N1) | fixed directly (docs and comments corrected); the operator was told and confirmed the removal on 2026-11-18 | `git show 2279d2b^:.github/commons-settings.yml`; live protection of gh-plumbing and esphome-configs `master` | — |
+| A consumer `develop` entry that omits a required field inherited it from the commons `master` entry; without it that consumer's `develop` protection update is rejected (`kamerplanter`) | diff review @ 24d9991 (N2) | recorded in ADR-006 Consequences; issue to file in nolte/kamerplanter (operator-approved) | inferred from repository-settings/app `lib/plugins/branches.js`; not observed | to file |
+| The 422 on `master` stated as observed | diff review @ 24d9991 (N3) | fixed directly (qualified in ADR-006, comments, setup pages) | not observed in this run | — |
+| Terraform text and the user-mode setup note still say push restrictions work on a user account | specialist result / diff review (N4) | not fixed here: outside #481; to file | inferred from GitHub's documented limit | to file |
+| ADR-002 tense, setup heading "Branch-protection bypass (phase 2)" | diff review (N5) | dismissed: historical context, reconciled by the added closing line | — | — |
+| The class guard doesn't catch a commons entry with `restrictions: null` or a branch this repository doesn't declare | diff review @ 24d9991 | dismissed for this PR: the guard covers the defect class of #481 (a push-restricted commons entry); named in Risk / rollout notes | inferred | — |
+| no blocking findings | diff review @ 25333d53708571f828fe3f8e005e8803ca8820d6 (lane b, security-briefed; 19 files as in `--stat`; content identical to the fully reviewed 2e50cf0 by `git range-diff`) | — | — | — |
 
 ## Dispatch log
+
+- 2026-11-18 P1, P2 dispatched to `nolte-engineering:fullstack-developer` — four commits; pytest 107 in the required job, guard fails on origin/develop's commons file, pre-commit green, mkdocs --strict in a scratch venv, docs_freshness clean.
+- 2026-11-18 orchestrator: history and wording corrections after review (two commits); pytest 142, pre-commit green, Vale: no alert on ADR-006.
+
