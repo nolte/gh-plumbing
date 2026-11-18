@@ -15,8 +15,11 @@
 #                       empty), relative to the working directory or absolute
 # Runner environment: RUNNER_TEMP, GITHUB_OUTPUT, GITHUB_PATH.
 #
-# Outputs (GITHUB_OUTPUT), written on every exit so a caller that sets
-# `continue-on-error` can tell the failures apart:
+# Outputs (GITHUB_OUTPUT), written for every outcome this script decides
+# itself, so a caller that sets `continue-on-error` can tell the failures
+# apart. An unexpected error under `set -e` (a tool that fails, the final move
+# onto an existing path) leaves `result` empty; a caller treats an empty value
+# as a refusal:
 #   result        installed | invalid-pin | unsupported-platform |
 #                 download-failed | checksum-mismatch | run-failed
 #   vale-version  the installed version, on success only

@@ -76,7 +76,7 @@ steps:
 | `vale-version` | The installed version. Empty unless `result` is `installed`.                                              |
 | `result`       | `installed`, or the reason for a failure: `invalid-pin`, `unsupported-platform`, `download-failed`, `checksum-mismatch`, or `run-failed`. |
 
-The action sets `result` on failure too. A step with `continue-on-error: true` can then treat an unreachable download, which says nothing about the asset, differently from a refusal. `reusable-release-publish.yml` does exactly that: a download failure skips its release-notes check with a warning, and a checksum mismatch fails the run before it publishes.
+The action sets `result` for every failure it detects itself. An unexpected error leaves it empty, and a caller treats an empty value as a refusal. A step with `continue-on-error: true` can then treat an unreachable download, which says nothing about the asset, differently from a refusal. `reusable-release-publish.yml` does exactly that: a download failure skips its release-notes check with a warning, and a checksum mismatch fails the run before it publishes.
 
 #### The `.vale-version` file
 
