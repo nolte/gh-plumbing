@@ -5,7 +5,7 @@ issue: "484"
 classification: "bug"
 secondary-classes: []
 route: "direct"
-status: draft
+status: approved
 created: "2026-11-18"
 ---
 
@@ -81,5 +81,22 @@ none
 
 | Finding | Source | Outcome | Reproduction | Issue |
 |---|---|---|---|---|
+| Comment claimed a local ref is "never" read; the fallback reads local refs when origin has no such name | diff review @ ffb061d | fixed directly (ddef5b0: comment states the order and the reachability backstop) | targets `HEAD`, `heads/develop`, `refs/heads/localbr` resolved locally, then rejected as not reachable | — |
+| An origin branch wins over a tag of the same name | diff review @ ffb061d | fixed directly as documentation (ddef5b0); behaviour fails safe, unchanged | origin branch `v0.1` beat tag `v0.1` | — |
+| Editable draft target printed raw in `::error::` lines | diff review @ ffb061d | fixed directly (ddef5b0: control characters masked, Resolve draft and flip step) | target `nope\n::warning::injected` prints as one line `nope?::warning::injected`, rc=1, no `target_sha` | — |
+| A 40-hex SHA naming no commit passed resolution and was caught only by the reachability check | specialist result (P1) | fixed directly (ffb061d: `git cat-file -e`) | harness case "valid hex without commit": rc=1, no `target_sha` | — |
+| Other pre-existing `::error::` lines print caller- or draft-controlled text raw (`inputs.tag` at `:203`, `expected-target-sha` at `:282`, draft tag names) | diff review @ ddef5b0 | not fixed here: outside #484, inferred not reproduced; named in Risk / rollout notes as a follow-up to file | none run against a runner | to file |
+| no blocking findings | diff review @ ddef5b09dda61ffe3316e961146af680b88ecd88 (lane b, security-briefed; files: `.audits/issue-orchestrate/484/analysis.md`, `.github/workflows/reusable-release-publish.yml`) | — | — | — |
 
 ## Dispatch log
+
+- 2026-11-18 P1 dispatched to `nolte-engineering:fullstack-developer` — ffb061d; harness 29/29, actionlint 1.7.12 (CI flag) rc=0, pre-commit green; no refutation of the analysis.
+- 2026-11-18 review fixes by the orchestrator (comment wording, masked print) — ddef5b0; harness re-run 29/29 on the re-extracted scripts, actionlint rc=0, pre-commit green.
+
+## Class sweep
+
+- Predicate: `echo "<name>sha=…" >> "$GITHUB_OUTPUT"` in `.github/workflows/*.y{a}ml` whose value isn't derived from `git rev-parse`, the commits API, or checked against `^[0-9a-f]{40}$`
+- Hits: 1 (of 4 writers: `reusable-release-publish.yml` Resolve draft; the align step's two writers use `git rev-parse HEAD`, `reusable-release-archive.yml:136` uses the commits API)
+- Repaired: 1
+- Guard: the `^[0-9a-f]{40}$` check right before Resolve draft writes `target_sha`
+
