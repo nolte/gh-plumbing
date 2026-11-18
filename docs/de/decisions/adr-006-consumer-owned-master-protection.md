@@ -74,8 +74,10 @@ Derselbe Quellcode zeigt eine Nebenwirkung. Die App baut jede
 Branch-Aktualisierung auf der vorherigen auf, ein Eintrag ohne ein Pflichtfeld
 erbt es also vom Eintrag davor. Ein Consumer, dessen `develop`-Eintrag
 `required_pull_request_reviews` weglässt, bekam das Feld bisher vom
-`master`-Eintrag der Commons. Ohne ihn wird der nächste Settings-Sync dieses
-Consumers abgelehnt, bis sein Eintrag vollständig ist. `kamerplanter` ist der
+`master`-Eintrag der Commons. Ohne ihn lehnt GitHub im nächsten Settings-Sync
+dieses Consumers die Aktualisierung der `develop`-Protection ab, bis sein
+Eintrag vollständig ist. Repository-Einstellungen und Labels aus demselben Sync
+greifen weiterhin. `kamerplanter` ist der
 bekannte Fall; ADR-005 nennt das fehlende Feld bereits.
 
 Ein Consumer, der `master` schützen will, deklariert den ganzen Eintrag:

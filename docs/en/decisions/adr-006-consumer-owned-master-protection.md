@@ -66,8 +66,9 @@ The same source shows a side effect. The App builds each branch update on top
 of the previous one, so an entry that leaves out a required field inherits it
 from the entry before. A consumer whose `develop` entry omits
 `required_pull_request_reviews` got that field from the commons `master` entry
-until now. Without it, GitHub rejects that consumer's next settings sync until
-its entry is complete. `kamerplanter` is the known case; ADR-005 already names
+until now. Without it, GitHub rejects the `develop` protection update in that
+consumer's next settings sync until its entry is complete. Repository settings
+and labels in the same sync still apply. `kamerplanter` is the known case; ADR-005 already names
 the missing field.
 
 A consumer that wants `master` protected declares the whole entry:
