@@ -117,5 +117,20 @@ none
 
 | Finding | Source | Outcome | Reproduction | Issue |
 |---|---|---|---|---|
+| The fork guard's default protected paths didn't cover top-level `actions/`, while a required check runs `actions/setup-vale/setup-vale.sh` from the pull request's checkout (blocking) | diff review @ 5f2bcb9 (B1) | fixed directly (`actions/*` added to the default list, docs EN/DE) | the guard's own `[[ path == pattern ]]` loop: no match before, match after | — |
+| `version-file` reached an `::error::` line unescaped | diff review @ 5f2bcb9 (N2) | fixed directly (control characters masked) | input `nope\n::warning title=x::injected` prints one line | — |
+| `mv` without `-T` could move the verified binary into an existing directory | diff review @ 5f2bcb9 (N3) | fixed directly (`mv -T`) | reviewer's probes: existing non-empty directory, symlink, file all refuse | — |
+| `checkout_credentials.py` didn't scan top-level `actions/`; `vale_version.py` accepted non-ASCII digits | diff review @ 5f2bcb9 (N5, N6) | fixed directly | fixture `actions/x/action.yml` flagged; `٣.15.2` refused | — |
+| README said Renovate never merges a Vale bump; header said `result` is written on every exit | diff review @ 5f2bcb9 / e6fa75c | fixed directly (wording) | `mv -T` failure leaves `result` empty | — |
+| The cache guard from #476 didn't cover `actions/**/action.yml`; a hook name with ` #` was unquoted | orchestrator, at the rebase onto 7d3f383 | fixed directly (folded into the rebased hook commit) | pre-commit output | — |
+| Composite outputs on a failed step aren't promised by GitHub's docs, only by the runner source | diff review (N1) | dismissed for this PR: fails closed if it ever breaks; the self-test's negative jobs are the live proof | runner source read; live proof pending the PR run | — |
+| `download-failed` leaves an `::error` annotation on a publish that continues; install now runs before the empty-notes check | diff review (N4) | dismissed: cosmetic; named in Risk / rollout notes | inferred | — |
+| nolte/claude-shared already has an identical `.vale-version` manager | specialist result / diff review (N7) | goes into the P4 follow-up issue for claude-shared | read via the API | P4 |
+| No tests for masking, `mv -T` onto an existing path, top-level `actions/` in the checkout guard, non-ASCII digits | diff review @ e6fa75c | dismissed for this PR; named in Risk / rollout notes | — | — |
+| no blocking findings | diff review @ 24ebd60ca097dac2354769b6b5d93dc9c2037d5f (lane b, security-briefed; 21 files as in `--stat`) | — | — | — |
 
 ## Dispatch log
+
+- 2026-11-18 P1–P3 dispatched to `nolte-engineering:fullstack-developer` — five commits; pytest 210, actionlint rc=0, pre-commit green; checksum computed from the real asset equals upstream's checksum file.
+- 2026-11-18 orchestrator: conflict resolution at rebase, review fixes (two commits); pytest 212, actionlint rc=0, shellcheck rc=0, pre-commit green.
+
