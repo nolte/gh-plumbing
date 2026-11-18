@@ -8,7 +8,7 @@ Die geteilten Regeln umfassen:
 - Issue- und PR-Funktionen (Issues, Projects, Wiki, Pages, Downloads)
 - Merge-Strategien (`allow_squash_merge`, `allow_merge_commit`, `allow_rebase_merge`)
 - `delete_branch_on_merge`
-- Branch-Protection für `master` (`develop` deklariert jeder Consumer selbst, siehe unten)
+- Keine Branch-Protection: `develop` und `master` deklariert jeder Consumer selbst, siehe unten
 - Geteilte Label-Palette
 
 ---
@@ -32,7 +32,7 @@ repository:
     `name` zusammenzuführen
     ([#442](https://github.com/nolte/gh-plumbing/issues/442)).
 
-!!! warning "Einen vollständigen `develop`-Eintrag selbst deklarieren"
+!!! warning "Vollständige Branch-Einträge selbst deklarieren"
     Die Commons deklarieren keine `develop`-Protection. Sie gehört in die
     eigene `.github/settings.yml`, mit allen vier Feldern, die die
     Branch-Protection-API verlangt, und `restrictions: null`:
@@ -55,6 +55,12 @@ repository:
     geerbter `develop`-Eintrag könnte außerdem mit dem eigenen um die Wette
     schreiben, wenn die App Listeneinträge aneinanderhängt.
     [ADR-005](../decisions/adr-005-consumer-owned-develop-protection.md) enthält
+    die Begründung.
+
+    Auch eine `master`-Protection deklarieren die Commons nicht. Wer `master`
+    schützen will, deklariert ebenso einen vollständigen `master`-Eintrag, zum
+    Beispiel mit `required_status_checks: null` und `enforce_admins: true`.
+    [ADR-006](../decisions/adr-006-consumer-owned-master-protection.md) enthält
     die Begründung.
 
 !!! danger "`topics` erwartet einen kommagetrennten String, niemals eine YAML-Liste"
