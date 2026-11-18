@@ -23,7 +23,7 @@ jobs:
     # start the run with `startup_failure` and no logs (#422).
     permissions:
       contents: read
-      pull-requests: write # the called workflow adds the type label
+      pull-requests: write # the called workflow adds and removes type labels
     uses: ./.github/workflows/reusable-release-drafter-autolabel.yml
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}

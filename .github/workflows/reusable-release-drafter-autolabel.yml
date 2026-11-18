@@ -3,6 +3,10 @@ name: Release Drafter Autolabel
 # Runs the `autolabeler:` block of the release-drafter configuration -- and
 # nothing else -- so every pull request carries the type label its
 # Conventional-Commits title implies and lands under one changelog category.
+# A second step then removes the type labels the title no longer implies:
+# release-drafter's autolabeler only ever adds (v6.4.0 `index.js` calls
+# `issues.addLabels` and nothing else), so `feat: x` retitled to `fix: x`
+# otherwise kept both and was listed under two categories (#479).
 #
 # release-drafter evaluates `autolabeler:` only on `pull_request` and
 # `pull_request_target` events. `reusable-release-drafter.yml` runs on the
@@ -13,10 +17,12 @@ name: Release Drafter Autolabel
 # Call it from a `pull_request_target` workflow: under `pull_request` a fork
 # pull request gets a read-only token and the label write fails. That is safe
 # here because nothing from the pull request is executed -- there is no
-# checkout, and release-drafter reads only the title and head branch name from
-# the event payload, matching them against regexes from the base branch's
-# configuration. Keep it that way: never add a checkout of the pull request
-# head to this workflow.
+# checkout, and release-drafter reads only metadata -- the title, head branch
+# name and body from the event payload, and the changed file names through the
+# API -- matching them against rules from the base branch's configuration. The removal step reads the title through `env:` only and
+# matches it with bash regexes; it never evaluates it or passes it to a
+# command. Keep it that way: never add a checkout of the pull request head to
+# this workflow.
 #
 # Separate from `reusable-release-drafter.yml` on purpose. That workflow's job
 # needs `contents: write`, this one `pull-requests: write`, and a called
@@ -34,8 +40,12 @@ on:
 permissions:
   contents: read
 
-# One group per pull request. Labels are only ever added, so a superseded run
-# (an earlier title) has nothing left to contribute.
+# One group per pull request, so two runs never interleave. A run both adds
+# and removes, and two runs for different titles racing each other could end
+# with the older title's label. Cancelling the superseded run is still right:
+# each run recomputes the whole state from its own title and the labels the
+# API returns at that moment, so the newest run alone is enough, and a run
+# cancelled halfway leaves nothing the newest run doesn't correct.
 concurrency:
   group: release-drafter-autolabel-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -45,7 +55,10 @@ jobs:
     name: Autolabel
     permissions:
       contents: read # release-drafter reads its configuration through the API
-      pull-requests: write # adds the type label to the pull request
+      # Adds the type label and removes stale ones. Both label calls accept
+      # `pull-requests: write` for a pull request, so no `issues:` scope is
+      # needed -- a new scope would break every caller (#422).
+      pull-requests: write
     runs-on: ubuntu-latest
     steps:
       - name: Apply type label from the title
@@ -56,3 +69,82 @@ jobs:
           disable-releaser: true
         env:
           GITHUB_TOKEN: ${{ secrets.token }}
+
+      # Runs only after release-drafter succeeded, so the label the title
+      # implies is already on the pull request. The regexes mirror the
+      # `autolabeler:` title rules in .github/commons-release-drafter.yml; keep
+      # the two in step. Only those four labels are ever removed.
+      - name: Remove type labels the title no longer implies
+        env:
+          GH_TOKEN: ${{ secrets.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          # The title is untrusted data. It is only matched below, never
+          # printed, evaluated or passed to a command.
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+          # Bytes, not characters: the patterns are ASCII.
+          export LC_ALL=C
+
+          if [[ ! "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Pull request number is missing or not numeric."
+            exit 1
+          fi
+          if [[ ! "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::Repository name is missing or malformed."
+            exit 1
+          fi
+
+          # release-drafter compiles the rules as JavaScript regexes without
+          # flags: `^` is the start of the title and `.` stops at a line
+          # break. Matching the first line only gives bash the same result.
+          title=$PR_TITLE
+          for brk in $'\n' $'\r' $'\xe2\x80\xa8' $'\xe2\x80\xa9'; do
+            title=${title%%"$brk"*}
+          done
+
+          type_labels=(feat fix chore docs)
+          implied=""
+          for label in "${type_labels[@]}"; do
+            pattern="^${label}(\\(.+\\))?!?:"
+            if [[ "$title" =~ $pattern ]]; then
+              implied=$label
+              break
+            fi
+          done
+          if [[ -z "$implied" ]]; then
+            echo "The title implies no type label; nothing to remove."
+            exit 0
+          fi
+
+          # Read at run time: the event payload predates the label
+          # release-drafter just added.
+          current=$(gh api --paginate "repos/$REPO/issues/$PR_NUMBER/labels?per_page=100" --jq '.[].name')
+          declare -A present=()
+          while IFS= read -r name; do
+            if [[ -n "$name" ]]; then
+              present["$name"]=1
+            fi
+          done <<<"$current"
+
+          if [[ -z "${present[$implied]:-}" ]]; then
+            # Removing the others now could leave no type label at all.
+            echo "::warning::The title implies '$implied', but the pull request doesn't carry it. Check the autolabeler configuration; no label was removed."
+            exit 0
+          fi
+
+          for label in "${type_labels[@]}"; do
+            if [[ "$label" == "$implied" || -z "${present[$label]:-}" ]]; then
+              continue
+            fi
+            if err=$(gh api -X DELETE "repos/$REPO/issues/$PR_NUMBER/labels/$label" 2>&1 >/dev/null); then
+              echo "Removed '$label'; the title implies '$implied'."
+            elif [[ "$err" == *"(HTTP 404)"* ]]; then
+              echo "'$label' was already gone."
+            else
+              echo "::error::Could not remove '$label' from pull request #$PR_NUMBER."
+              printf '%s\n' "$err" >&2
+              exit 1
+            fi
+          done
