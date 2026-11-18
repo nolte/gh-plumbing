@@ -169,8 +169,9 @@ jobs:
             else
               echo "::error::Could not remove '$label' from pull request #$PR_NUMBER."
               # gh's error text is an API response; masked like the messages
-              # of the release workflows (#492).
-              printf '%s\n' "$(shown "$err")" >&2
+              # of the release workflows, behind a literal so the line never
+              # starts with it -- shown() leaves a leading '::' alone (#492).
+              printf 'gh: %s\n' "$(shown "$err")" >&2
               exit 1
             fi
           done

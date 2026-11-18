@@ -52,6 +52,17 @@ and interpolates a value. Each interpolated name must be one of:
   * numeric by construction: `${#name}`, `${#name[@]}`, `len(...)`;
   * on ALLOWED below, whose every entry states why the value is constrained.
 
+Two rules hold per line, whatever its names:
+
+  * a log line must not BEGIN with an interpolated value: the runner trims
+    leading whitespace before it looks for `::`, and no mask touches `::`. A
+    literal with a non-space character must come first (`echo "x $v"`,
+    `printf 'gh: %s'`, `print(f"  - {v}")`); the few lines that start with a
+    value are on ALLOWED under the name `<leading value>`, with the reason;
+  * `$(shown "...")` must not sit directly next to a literal `#` or `[` or
+    another `$(shown "...")`, quotes in between included -- `'#'` followed by
+    a masked `#[x` re-forms `##[` (`<mask seam>`).
+
 A name with no assignment in the body and no `env:` entry -- a runner
 variable, a positional parameter -- is a finding unless ALLOWED names it. An
 ALLOWED entry that no line needs is reported too, and an entry bound to a check
@@ -70,8 +81,27 @@ Not covered (each would need a parser this script doesn't have):
     from a file, the output of a `$(...)` substitution (its variables are
     checked, its output is not; #492 found `du` echoing a file name that way)
     -- and a print piped into another command;
-  * a printed value that STARTS a line with `::` (the masks don't touch `::`;
-    no message in these files begins with an interpolated value);
+  * a leading value the line-start rule can't see: an `echo` whose first word
+    is built by a command substitution or a variable holding the whole
+    message, and a call site of a helper such as fork-guard's or setup-vale's
+    `finish` (both on ALLOWED, read by hand);
+  * a refusal that isn't at body level: the canonical `if` inside a function
+    that is never called or only called through `$(...)`, inside `( ... )`,
+    or inside `if false; then` -- the guard reads it as if it always ran;
+    likewise a `break` (or `continue`, `return`) before its `exit`;
+  * `##[` re-forming across a seam the seam rule doesn't see: a value masked
+    into a variable first (`$shown_x`) and printed next to `#`, `[` or another
+    masked value, or a seam built across two `printf` arguments
+    (`printf '%s#' ...`);
+  * line ends produced after masking: `printf "$(shown "$V")\n"` or
+    `printf '%b'` with the masked value in the format, and `echo -e`, turn
+    backslash escapes in the value back into control characters;
+  * prints the selector doesn't see: `cat <<<"$V"`, `tee` to the log,
+    `echo ... > /dev/stderr` or `>/dev/stdout`, `set -x` tracing, an EXIT
+    trap or a function that prints and is called elsewhere, `logger`;
+  * `unset -f shown` or a later weak redefinition of `shown` after the
+    canonical one, and a canonical `shown` that is defined only after its
+    first use (the guard checks that the body defines it, not where);
   * `shell: python` steps and other non-bash `shell:` values;
   * Python string concatenation, `%` and `.format(...)`, and `+` in Node --
     only f-strings, template literals and bare arguments are read;
@@ -129,6 +159,12 @@ STATEMENT_END = re.compile(r";|&&|\|\||\bthen\b|\bdo\b")
 PY_PRINT = re.compile(r"\b(print|SystemExit|sys\.stdout\.write|sys\.stderr\.write)\(")
 JS_PRINT = re.compile(r"\b(console\.(?:log|info|warn|error|debug)|process\.stdout\.write|process\.stderr\.write)\(")
 CAP = 200
+LEADING = "<leading value>"
+SEAM_NAME = "<mask seam>"
+# A masked value next to a literal '#' or '[' -- or next to another masked
+# value -- can re-form '##[' across the seam: '#' + shown('#[x'), shown('##')
+# + '[', shown('x#') + shown('#[y').
+SEAM = re.compile(r"""#["']*\$\(shown "|\$\(shown "[^"]*"\)["']*(?:[#\[]|\$\(shown ")""")
 
 
 @dataclass(frozen=True)
@@ -268,6 +304,16 @@ ALLOWED: tuple[Allowed, ...] = (
     Allowed("actions/setup-vale/setup-vale.sh", "version", reason="refused unless it matches VERSION_RE, ^[0-9]+\\.[0-9]+\\.[0-9]+$"),
     Allowed("actions/setup-vale/setup-vale.sh", "install_dir",
             reason="RUNNER_TEMP plus the validated version plus a mktemp basename"),
+    # Log lines that begin with a value (the leading-value rule).
+    *(Allowed(PUBLISH, LEADING, step=step,
+              reason="resolve_commit's `echo \"${ref,,}\"`, only ever called inside $(...), never printed")
+      for step in ("Resolve draft", "Publish (flip draft=false)")),
+    Allowed(".github/workflows/reusable-fork-guard.yaml", LEADING, step="Refuse protected-path changes from a fork",
+            reason="finish()'s `echo \"$2\"`: every success description starts with a literal (read by hand, NOT "
+                   "checked by this guard)"),
+    Allowed("actions/setup-vale/setup-vale.sh", LEADING,
+            reason="finish()'s `echo \"$message\"`: the one exit-0 message starts with a literal (read by hand, "
+                   "NOT checked by this guard)"),
     # Set by the runner, the same for every caller.
     *(Allowed("*", name, reason="set by the runner") for name in (
         "GITHUB_REPOSITORY", "GITHUB_SHA", "GITHUB_RUN_ID", "GITHUB_SERVER_URL",
@@ -514,10 +560,10 @@ def is_comment(text: str) -> bool:
     return text.lstrip().startswith(("#", "//"))
 
 
-def sink_units(units: list[Logical]) -> set[int]:
-    """Indices of units that emit a command, write an env file or print to the log."""
-    sinks = set()
-    redirected: set[int] = set()  # lines inside a `{ ... } > file` group
+def redirected_groups(units: list[Logical]) -> tuple[set[int], set[int]]:
+    """Lines inside a `{ ... } > target` group: all of them, and those into an env file."""
+    redirected: set[int] = set()
+    envfile: set[int] = set()
     for k, unit in enumerate(units):
         if unit.lang == "sh" and re.match(r"^\s*\}", unit.text) and destination(unit.text) != "log":
             depth = 0
@@ -530,8 +576,14 @@ def sink_units(units: list[Logical]) -> set[int]:
                     if depth == 0:
                         redirected.update(range(j + 1, k))
                         if destination(unit.text) == "envfile":
-                            sinks.update(range(j + 1, k))
+                            envfile.update(range(j + 1, k))
                         break
+    return redirected, envfile
+
+
+def sink_units(units: list[Logical]) -> set[int]:
+    """Indices of units that emit a command, write an env file or print to the log."""
+    redirected, sinks = redirected_groups(units)
     for k, unit in enumerate(units):
         if unit.lang == "data" or is_comment(unit.text):
             continue
@@ -811,11 +863,74 @@ class Checker:
         return names
 
 
+def _literal_head(quoted: str) -> str | None:
+    """Text before the first expansion of a shell word, or None if it isn't quoted."""
+    if quoted.startswith("'"):
+        return quoted[1:quoted.find("'", 1)] if "'" in quoted[1:] else quoted[1:]
+    if quoted.startswith('"'):
+        head = re.split(r'(?<!\\)[$"]', quoted[1:], maxsplit=1)[0]
+        return head
+    return None
+
+
+def leading_value(unit: Logical) -> bool:
+    """A log line whose printed text begins with an interpolated value.
+
+    The runner trims leading whitespace before it looks for `::`, and no mask
+    touches `::`, so such a value can start a command of its own. A literal
+    with at least one non-space character must come first.
+    """
+    text = unit.text
+    if unit.lang == "sh":
+        if COMMAND.search(text) or destination(text) != "log":
+            return False
+        bare = unquoted(text)
+        m = SHELL_PRINT.search(bare)
+        if not m:
+            return False
+        rest = text[m.end():].lstrip()
+        if m.group(1) == "echo":
+            while re.match(r"-[neE]+\s", rest):
+                rest = rest.split(None, 1)[1] if " " in rest else ""
+            if not rest or rest[0] in ";&|>":
+                return False
+            head = _literal_head(rest)
+            return rest.startswith("$") or (head is not None and not head.strip() and "$" in rest.split(";")[0])
+        # printf FORMAT ARGS: the format is quoted text; a value leads when
+        # the format starts with a conversion.
+        head = _literal_head(rest)
+        if head is None:
+            return rest.startswith("$")
+        lead = head.split("%", 1)[0]
+        return "%" in head and not lead.strip()
+    if unit.lang in ("py", "js"):
+        m = (PY_PRINT if unit.lang == "py" else JS_PRINT).search(text)
+        if not m or COMMAND.search(text):
+            return False
+        args = call_args(text, m.end())
+        if not args:
+            return False
+        first = args[0]
+        lit = re.match(r"""^([rRbBfF]{0,2})(['"`])(.*)""", first)
+        if not lit:
+            return True
+        prefix, quote, body = lit.groups()
+        if quote == "`":
+            head = body.split("${", 1)[0]
+            return "${" in body and not head.strip()
+        if "f" in prefix.lower():
+            head = re.split(r"(?<!\{)\{(?!\{)", body, maxsplit=1)[0]
+            return head != body and not head.strip()
+        return False
+    return False
+
+
 def audit_body(body: Body, siblings: list[Body] | None = None, entries: tuple[Allowed, ...] = ALLOWED,
                used: set[Allowed] | None = None) -> list[dict]:
     checker = Checker(body, siblings if siblings is not None else [body], entries,
                       used if used is not None else set())
     findings = []
+    redirected, _ = redirected_groups(checker.units)
     for k in sorted(sink_units(checker.units)):
         line = body.first_line + checker.units[k].index
         for name in dict.fromkeys(checker.names_on(k)):
@@ -824,6 +939,17 @@ def audit_body(body: Body, siblings: list[Body] | None = None, entries: tuple[Al
                 f"`{capped(name)}` reaches a log line or env-file write unmasked. Print it through the canonical "
                 "shown() helper, refuse a control character and '##[' before it, or add it to ALLOWED with "
                 "the reason it is constrained."))
+        if checker.units[k].lang in ("sh", "sh-heredoc") and SEAM.search(checker.units[k].text):
+            findings.append(finding(
+                body.path, line, body.step,
+                f"`{SEAM_NAME}`: a masked value sits next to a literal '#' or '[' or another masked value, so "
+                "'##[' can re-form across the seam. Put a space or another character between them."))
+        if k not in redirected and leading_value(checker.units[k]) \
+                and not checker.allowed(LEADING, k, shell=checker.units[k].lang == "sh"):
+            findings.append(finding(
+                body.path, line, body.step,
+                f"`{LEADING}`: this log line begins with an interpolated value. No mask touches a "
+                "leading '::', so put a literal in front of it."))
     return findings
 
 

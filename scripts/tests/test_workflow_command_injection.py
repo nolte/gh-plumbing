@@ -711,3 +711,32 @@ def test_docs_freshness_report_is_neutralised_and_its_status_kept(run, tmp_path)
                               "would ship them, because the site and the notes freeze with the tag. Fix them on "
                               "develop and re-run."]
     assert "- docs/x#?[warning]z.md?::warning::cr" in proc.stdout
+
+
+# --- last round: keys in vbf.json, the publish draft listings ---------------
+
+
+def test_detect_neutralises_v1_commands_in_vbf_json_keys(run, tmp_path):
+    # On the override path an entry is a whole mapping from the repository,
+    # keys included; the logged JSON neutralises keys as well as values.
+    work = tmp_path / "detect"
+    (work / ".github").mkdir(parents=True)
+    entry = {"path": "pkg.json", "selector": "version", "##[error]from-a-key": 1, "k\x07##[x": 2}
+    (work / ".github" / "release-automation.yml").write_text(
+        yaml.safe_dump({"version_bearing_files": [entry]}), encoding="utf-8")
+    proc, output, _ = run(PUBLISH, "Detect project type and load version-bearing files", {"TAG": "v1.2.3"}, cwd=work)
+    assert proc.returncode == 0, proc.stderr
+    assert commands(proc) == []
+    assert '"#?[error]from-a-key": 1,' in proc.stdout
+    assert '"k\\u0007#?[x": 2' in proc.stdout, "JSON escapes the control character, the filter the '##['"
+    assert output == "source=override\ncount=1\n"
+
+
+@pytest.mark.parametrize("given", ["", "v9.9.9"])
+def test_publish_lists_draft_tag_names_with_v1_commands_masked(run, given):
+    proc, output, _ = run(PUBLISH, "Resolve draft", {
+        "REQUESTED_TAG": given, "STUB_LIST": drafts("v1.0.0", "v3" + HOSTILE_WARN, "v4###[x")})
+    assert proc.returncode == 1
+    assert len(commands(proc)) == 1 and commands(proc)[0].startswith("::error::")
+    assert "  - v1.0.0\n  - v3#?[warning]z\n  - v4##?[x\n" in proc.stderr
+    assert output == ""

@@ -216,14 +216,16 @@ jobs:
           #
           # Git refuses ASCII control characters, DEL and '[' in a ref name, so
           # the '##[' rule costs no tag git accepts. The control-character rule
-          # is deliberately wider: in a UTF-8 locale (the hosted Ubuntu images'
-          # default; a self-hosted runner may differ) [[:cntrl:]] also matches
-          # C1 (U+0080-U+009F) and U+2028/U+2029, which git allows. Read from
-          # actions/runner, not measured on a runner: step output is split into
-          # lines by StreamReader.ReadLine, at LF, CR and CRLF only
+          # is deliberately wider in a UTF-8 locale, where [[:cntrl:]] also
+          # matches C1 (U+0080-U+009F) and U+2028/U+2029, which git allows; in
+          # the C locale it matches neither. Which locale the runner gives this
+          # step was not verified. LF and CR -- what the runner's line
+          # splitting needs -- match in every locale, as do ESC and DEL. Read
+          # from actions/runner, not measured on a runner: step output is split
+          # into lines by StreamReader.ReadLine, at LF, CR and CRLF only
           # (ProcessInvoker.cs), and $GITHUB_OUTPUT at LF (FileCommandManager.cs),
-          # so none of those ends a line there. A tag carrying one is refused
-          # all the same, although git would accept it. Locale behaviour
+          # so neither C1 nor U+2028/U+2029 ends a line there. A tag carrying
+          # one is refused all the same, although git would accept it. Locale behaviour
           # measured with (prints "cntrl"; the same with \u2028, nothing under
           # LC_ALL=C):
           #   LC_ALL=C.UTF-8 bash -c 'x=$(printf "a\u0085b"); [[ $x == *[[:cntrl:]]* ]] && echo cntrl'
@@ -434,9 +436,12 @@ jobs:
           echo "source=$source" >> "$GITHUB_OUTPUT"
           echo "count=$count" >> "$GITHUB_OUTPUT"
           echo "Detected project type: $source ($count version-bearing file(s))"
-          # vbf.json holds paths and selectors from the repository. JSON escapes
-          # control characters already; '##[' is neutralised as in shown() (#492).
-          jq '(.. | strings) |= gsub("##\\["; "#?[")' vbf.json
+          # vbf.json holds paths, selectors and, on the override path, whole
+          # entries -- keys included -- from the repository. JSON escapes control
+          # characters already; '##[' is neutralised in every key and string
+          # value as in shown() (#492).
+          jq 'walk(if type == "object" then with_entries(.key |= gsub("##\\["; "#?["))
+                   elif type == "string" then gsub("##\\["; "#?[") else . end)' vbf.json
 
       # Shared version-bearing selector grammar, written once and imported by
       # BOTH the align (write) and verify (read) steps so the dot-path + array-
@@ -673,19 +678,21 @@ jobs:
                   # Every selector match (incl. array wildcards) MUST equal the tag.
                   values = [str(c[k]) for c, k in refs(data, e["selector"])]
               except subprocess.CalledProcessError:
-                  errors.append(f"  - {e['path']}: file missing at {sha[:8]}")
+                  errors.append(f"{e['path']}: file missing at {sha[:8]}")
                   continue
               except (KeyError, TypeError, IndexError) as exc:
-                  errors.append(f"  - {e['path']}: selector '{e['selector']}' not found ({exc})")
+                  errors.append(f"{e['path']}: selector '{e['selector']}' not found ({exc})")
                   continue
               for actual in values:
                   if not aligned(actual, tag):
-                      errors.append(f"  - {e['path']}: {e['selector']} is '{actual}', expected '{tag}' (or '{tag.lstrip('v')}')")
+                      errors.append(f"{e['path']}: {e['selector']} is '{actual}', expected '{tag}' (or '{tag.lstrip('v')}')")
 
           if errors:
               print("::error::Version-bearing files not aligned to target tag:")
               for line in errors:
-                  print(shown(line))
+                  # The list marker is a literal, so no line starts with
+                  # repository text: a leading '::' survives shown() (#492).
+                  print(f"  - {shown(line)}")
               print(f"::error::Open a 'chore(release): {tag}' PR aligning every file, or wait for the workflow-driven primary path (when the portfolio App/PAT lands).")
               sys.exit(1)
 
