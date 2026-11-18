@@ -47,6 +47,66 @@ Centralised reusable [GitHub Actions workflows](https://docs.github.com/en/actio
 
 <!--td-workflows-end-->
 
+## Actions
+
+### `actions/setup-vale`
+
+Installs a pinned [Vale](https://vale.sh/) binary on a Linux x86-64 runner. The action downloads the release asset to `RUNNER_TEMP` and compares it with a committed checksum through `sha256sum -c` before it unpacks anything. It extracts only the `vale` binary, runs it once, and then adds its directory to `PATH`. On a checksum mismatch the action fails and leaves nothing unpacked, run, or on `PATH`. Other runner platforms fail with a message that names the limit.
+
+Pin the action to a full-length commit hash, like every third-party action:
+
+```yaml
+steps:
+  - uses: actions/checkout@<full-commit-sha> # <release-tag>
+    with:
+      persist-credentials: false
+  - id: vale
+    uses: nolte/gh-plumbing/actions/setup-vale@<full-commit-sha> # <release-tag>
+  - run: vale --version
+```
+
+| Input          | Default         | Description                                                                                                   |
+|----------------|-----------------|---------------------------------------------------------------------------------------------------------------|
+| `version-file` | `.vale-version` | Path of the version file, relative to the workspace. The action reads it only when `version` and `sha256` are both empty. |
+| `version`      | empty           | Vale version as `x.y.z`, without the `v`. Set it together with `sha256`.                                      |
+| `sha256`       | empty           | Checksum of `vale_<version>_Linux_64-bit.tar.gz`, 64 hexadecimal digits. Set it together with `version`.      |
+
+| Output         | Description                                                                                               |
+|----------------|-----------------------------------------------------------------------------------------------------------|
+| `vale-version` | The installed version. Empty unless `result` is `installed`.                                              |
+| `result`       | `installed`, or the reason for a failure: `invalid-pin`, `unsupported-platform`, `download-failed`, `checksum-mismatch`, or `run-failed`. |
+
+The action sets `result` on failure too. A step with `continue-on-error: true` can then treat an unreachable download, which says nothing about the asset, differently from a refusal. `reusable-release-publish.yml` does exactly that: a download failure skips its release-notes check with a warning, and a checksum mismatch fails the run before it publishes.
+
+#### The `.vale-version` file
+
+The file holds two keys and comment lines. The format matches the one in [`nolte/claude-shared`](https://github.com/nolte/claude-shared/issues/768), so one file works with both.
+
+```text
+# Comment lines start with a hash.
+VALE_VERSION=3.15.2
+VALE_SHA256=fc72e64454d6bd7af91905d4faebbf411bae3eec17bb572f4101311212bc0d9e  vale_3.15.2_Linux_64-bit.tar.gz
+```
+
+The `VALE_SHA256` value is the `Linux_64-bit` line of `vale_<version>_checksums.txt` from the [Vale release](https://github.com/vale-cli/vale/releases), copied verbatim with its two spaces. The action refuses a line that names another version than `VALE_VERSION`. Read the checksum from the release itself, then compare it with the hash of the downloaded asset:
+
+```sh
+v=3.15.2
+curl -fsSLO "https://github.com/vale-cli/vale/releases/download/v${v}/vale_${v}_checksums.txt"
+grep Linux_64-bit "vale_${v}_checksums.txt"
+curl -fsSLO "https://github.com/vale-cli/vale/releases/download/v${v}/vale_${v}_Linux_64-bit.tar.gz"
+sha256sum "vale_${v}_Linux_64-bit.tar.gz"
+```
+
+#### Renovate
+
+The shared preset `renovate-configs/common.json` carries a regex manager for `VALE_VERSION` in `.vale-version`, using the `github-releases` datasource for `vale-cli/vale`. Renovate can't recompute the checksum, so it never merges a Vale bump on its own. A bump pull request needs one manual step:
+
+1. Replace the `VALE_SHA256` line with the `Linux_64-bit` line of the new release's checksum file, as the previous section shows.
+2. Where `.tool-versions` pins `vale`, set it to the same version. Renovate doesn't bump that line.
+
+Until the first step is done, the action refuses the file. Add a check that runs the action or compares the two versions on pull requests that change `.vale-version`. In this repository, `scripts/vale_version.py` runs as a pre-commit hook and fails while either line disagrees, and `test-setup-vale.yml` runs the action.
+
 
 ## Probot configuration
 
