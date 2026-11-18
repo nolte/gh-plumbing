@@ -2,11 +2,9 @@
 # terraform_data.owner_check. The mocked provider needs no GitHub
 # credentials and makes no API calls.
 #
-# `mock_provider` needs Terraform >= 1.7, and Terraform loads this file
-# for every command run in this directory, so init, validate and test
-# here need >= 1.7. The >= 1.6 floor in versions.tf still holds when
-# the module is consumed as a child module (`source = ...`), because
-# Terraform doesn't load a child module's tests directory.
+# Because of `mock_provider`, init, validate and test in this directory
+# need Terraform >= 1.7. The >= 1.6 floor in versions.tf holds when the
+# module is consumed through `source`.
 #
 # Run from terraform/portfolio-app:
 #   terraform init -backend=false
@@ -54,9 +52,11 @@ run "organization_mode_allows_branch_bypass" {
   }
 }
 
-# Both owners set: only the owner precondition is meant to fire. The
-# bypass precondition is narrowed to pure user mode, so it doesn't
-# point at `organization` when that is already set.
+# Both owners set: the plan fails on terraform_data.owner_check.
+# `expect_failures` can't tell which of its preconditions fired, so this
+# run doesn't show that the bypass message stays silent here. That was
+# checked by hand, by running this case without `expect_failures`: the
+# output showed only "Set exactly one of `organization` or `user`".
 run "both_owners_with_branch_bypass" {
   command = plan
 
