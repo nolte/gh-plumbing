@@ -216,14 +216,40 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
           target=$(gh release view "$TAG" --json targetCommitish --jq .targetCommitish)
-          if [[ "$target" == refs/heads/* ]]; then
-            sha=$(git rev-parse "origin/${target#refs/heads/}")
-          else
-            sha="$target"
+          # Every later step treats target_sha as a pinned commit, so every
+          # target form resolves to one here: refs/heads/<branch> (what
+          # release-drafter sets), a bare branch name or a SHA in any case (what
+          # a draft edited by hand can carry). A branch is read from origin,
+          # never from a local branch of the same name -- the checkout above
+          # creates a local 'develop' that a bare 'develop' would otherwise hit
+          # (#484). The flip step resolves the live target the same way.
+          resolve_commit() {
+            local ref="$1"
+            if [[ "$ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "${ref,,}"
+            elif git rev-parse --verify --quiet "origin/${ref#refs/heads/}^{commit}"; then
+              :
+            else
+              git rev-parse --verify --quiet "${ref}^{commit}"
+            fi
+          }
+
+          # A full SHA passes resolve_commit unchecked; cat-file confirms it
+          # names a commit this clone has.
+          if ! sha=$(resolve_commit "$target") || ! git cat-file -e "${sha}^{commit}" 2>/dev/null; then
+            echo "::error::Draft tag '$TAG' target '$target' resolves to no commit on origin. Re-run release-drafter to refresh draft target."
+            exit 1
           fi
 
           if ! git merge-base --is-ancestor "$sha" origin/develop; then
             echo "::error::Draft tag '$TAG' target SHA $sha is not reachable from origin/develop. Re-run release-drafter to refresh draft target."
+            exit 1
+          fi
+
+          # Class guard: whatever the resolution above becomes, nothing but a
+          # full lowercase commit SHA leaves this step as target_sha.
+          if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Draft tag '$TAG' target '$target' resolved to '$sha', not a full 40-character commit SHA. Refusing to continue."
             exit 1
           fi
 
@@ -256,26 +282,10 @@ jobs:
             exit 1
           fi
 
-          # Resolve draft turns only refs/heads/* (what release-drafter sets)
-          # into a commit and passes a bare branch name, as a draft edited by
-          # hand can carry, through as-is. Normalise it the same way the flip
-          # step does, so both compare commit to commit. A branch is read from
-          # origin, never from a local branch of the same name.
-          resolve_commit() {
-            local ref="$1"
-            if [[ "$ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
-              echo "${ref,,}"
-            elif git rev-parse --verify --quiet "origin/${ref#refs/heads/}^{commit}"; then
-              :
-            else
-              git rev-parse --verify --quiet "${ref}^{commit}"
-            fi
-          }
-
-          if ! actual=$(resolve_commit "$DRAFT_TARGET"); then
-            echo "::error::Draft '$TAG' target '$DRAFT_TARGET' resolves to no commit on origin; cannot compare it with $expected."
-            exit 1
-          fi
+          # Resolve draft has already turned every target form into a full
+          # lowercase commit SHA read from origin, so this compares commit to
+          # commit without resolving again.
+          actual="$DRAFT_TARGET"
 
           if [[ "$actual" != "$expected" ]]; then
             echo "::error::Draft '$TAG' targets $actual, but the archive was built from $expected. Likely a merge landed on the target branch after the archive was built, or the draft target was changed. Nothing was published; rebuild the archive from the current draft target, then publish again."
@@ -890,7 +900,7 @@ jobs:
           set -euo pipefail
           if [[ -n "$EXPECTED_TARGET_SHA" ]]; then
             expected="${EXPECTED_TARGET_SHA,,}"
-            # Same resolution as the expected-commit check above.
+            # Same resolution as the Resolve draft step above.
             resolve_commit() {
               local ref="$1"
               if [[ "$ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
