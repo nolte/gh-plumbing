@@ -106,6 +106,10 @@ jobs:
           REQUESTED_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
+          # Masks $1 for a log line (#492): control characters become '?' and
+          # '##[' becomes '#?[', so the value can neither end the line nor open
+          # the runner's older '##[command]' syntax in the middle of one.
+          shown() { local v="${1//[[:cntrl:]]/?}"; printf '%s' "${v//\#\#\[/#?[}"; }
           releases=$(gh release list --limit 100 --json isDraft,tagName)
           if [[ -n "$REQUESTED_TAG" ]]; then
             TAG="$REQUESTED_TAG"
@@ -116,30 +120,38 @@ jobs:
               echo "::error::No tag given and $total drafts are open. Pass 'tag' explicitly. Open drafts:"
               # Draft tag names are editable text, listed with control
               # characters masked (#492).
-              jq -r '.[] | "  - \(.tagName | gsub("[[:cntrl:]]"; "?"))"' <<<"$drafts" >&2
+              jq -r '.[] | "  - \(.tagName | gsub("[[:cntrl:]]"; "?") | gsub("##\\["; "#?["))"' <<<"$drafts" >&2
               exit 1
             fi
             TAG=$(jq -r '.[0].tagName' <<<"$drafts")
           fi
 
           # The tag is the caller's input or a draft's tag name, and the later
-          # jobs read it from this step's output. A control character in it
-          # could start a workflow command in any message that prints the tag,
-          # or add an entry to $GITHUB_OUTPUT. Refused here, before the first
-          # message that prints it and before the output write, so every later
-          # '$TAG' is clean by construction (#492, as in
-          # reusable-release-publish.yml). Only this message shows it, masked.
+          # jobs read it from this step's output. A line end in it could start a
+          # workflow command in any message that prints the tag or add an entry
+          # to $GITHUB_OUTPUT, and '##[' opens the runner's older command syntax
+          # anywhere in a log line (ActionCommand.TryParse in actions/runner,
+          # read from source, not measured on a runner). Both are refused here,
+          # before the first message that prints the tag and before the output
+          # write, so no later '$TAG' carries either (#492, as in
+          # reusable-release-publish.yml). Only this message
+          # shows it, masked.
           #
-          # Git refuses ASCII control characters and DEL in a ref name. This
-          # check is deliberately wider: in the runner's UTF-8 locale
-          # [[:cntrl:]] also matches C1 (U+0080-U+009F) and U+2028/U+2029,
-          # which git allows, because whether the runner treats one of those
-          # as a line end wasn't measured. A tag carrying one is refused here
-          # although git would accept it. Measured with (prints "cntrl"; the
-          # same with \u2028, nothing under LC_ALL=C):
+          # Git refuses ASCII control characters, DEL and '[' in a ref name, so
+          # the '##[' rule costs no tag git accepts. The control-character rule
+          # is deliberately wider: in a UTF-8 locale (the hosted Ubuntu images'
+          # default; a self-hosted runner may differ) [[:cntrl:]] also matches
+          # C1 (U+0080-U+009F) and U+2028/U+2029, which git allows. Read from
+          # actions/runner, not measured on a runner: step output is split into
+          # lines by StreamReader.ReadLine, at LF, CR and CRLF only
+          # (ProcessInvoker.cs), and $GITHUB_OUTPUT at LF (FileCommandManager.cs),
+          # so none of those ends a line there. A tag carrying one is refused
+          # all the same, although git would accept it. Locale behaviour
+          # measured with (prints "cntrl"; the same with \u2028, nothing under
+          # LC_ALL=C):
           #   LC_ALL=C.UTF-8 bash -c 'x=$(printf "a\u0085b"); [[ $x == *[[:cntrl:]]* ]] && echo cntrl'
-          if [[ "$TAG" == *[[:cntrl:]]* ]]; then
-            echo "::error::Tag '${TAG//[[:cntrl:]]/?}' contains a control character (shown as '?'); refusing to continue."
+          if [[ "$TAG" == *[[:cntrl:]]* || "$TAG" == *'##['* ]]; then
+            echo "::error::Tag '$(shown "$TAG")' contains a control character or '##[' (shown as '?' and '#?['); refusing to continue."
             exit 1
           fi
 
@@ -164,7 +176,7 @@ jobs:
           if [[ "$sha" != "$GITHUB_SHA" ]]; then
             # An API response, printed exactly when it isn't the expected SHA:
             # masked (#492).
-            echo "::error::Draft '$TAG' targets ${sha//[[:cntrl:]]/?}, but this run is for $GITHUB_SHA. The provenance record names the run's commit, so the archive must be built from it. Start a new run (not a re-run) on the branch the draft targets, or re-run release-drafter so the draft follows the branch head."
+            echo "::error::Draft '$TAG' targets $(shown "$sha"), but this run is for $GITHUB_SHA. The provenance record names the run's commit, so the archive must be built from it. Start a new run (not a re-run) on the branch the draft targets, or re-run release-drafter so the draft follows the branch head."
             exit 1
           fi
           # Unique per call: a run that calls this workflow several times
@@ -215,6 +227,10 @@ jobs:
           TASK_TARGET: ${{ inputs.task-target }}
         run: |
           set -euo pipefail
+          # Masks $1 for a log line (#492): control characters become '?' and
+          # '##[' becomes '#?[', so the value can neither end the line nor open
+          # the runner's older '##[command]' syntax in the middle of one.
+          shown() { local v="${1//[[:cntrl:]]/?}"; printf '%s' "${v//\#\#\[/#?[}"; }
           shopt -s nullglob globstar
           files=()
           while IFS= read -r pattern; do
@@ -235,7 +251,7 @@ jobs:
             if (( found == 0 )); then
               # Both are caller inputs; masked so neither can start a workflow
               # command on a new line (#492).
-              echo "::error::Asset pattern '${pattern//[[:cntrl:]]/?}' matched no file after 'task ${TASK_TARGET//[[:cntrl:]]/?}'."
+              echo "::error::Asset pattern '$(shown "$pattern")' matched no file after 'task $(shown "$TASK_TARGET")'."
               exit 1
             fi
           done <<<"$ASSETS"
@@ -254,7 +270,7 @@ jobs:
             # so a carriage return or other control character in a name can't
             # start a workflow command (#492).
             bad=$(tr '\n' ' ' <<<"$bad")
-            echo "::error::Asset names may use only letters, digits, '.', '_', '+', and '-', and must not start with '.': ${bad//[[:cntrl:]]/?}"
+            echo "::error::Asset names may use only letters, digits, '.', '_', '+', and '-', and must not start with '.': $(shown "$bad")"
             exit 1
           fi
           dupes=$(printf '%s\n' "${files[@]##*/}" | sort | uniq -d)
@@ -267,7 +283,7 @@ jobs:
           cp -- "${files[@]}" "$RUNNER_TEMP/release-archive/"
           # The base names passed the check above; a directory part did not
           # and is build-tree text, so control characters are masked (#492).
-          printf 'Matched: %s\n' "${files[@]//[[:cntrl:]]/?}"
+          for f in "${files[@]}"; do printf 'Matched: %s\n' "$(shown "$f")"; done
 
       - name: Hand the assets to the attesting job
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -321,6 +337,10 @@ jobs:
           DRY_RUN: ${{ inputs.dry-run }}
         run: |
           set -euo pipefail
+          # Masks $1 for a log line (#492): control characters become '?' and
+          # '##[' becomes '#?[', so the value can neither end the line nor open
+          # the runner's older '##[command]' syntax in the middle of one.
+          shown() { local v="${1//[[:cntrl:]]/?}"; printf '%s' "${v//\#\#\[/#?[}"; }
           mapfile -t files < <(find release-archive -maxdepth 1 -type f | sort)
           delimiter="EOF_$(cat /proc/sys/kernel/random/uuid)"
           if [[ "$DRY_RUN" == "true" ]]; then
@@ -342,7 +362,7 @@ jobs:
           if [[ "$now" != "$BUILT_SHA" ]]; then
             # An API response, printed exactly when it isn't the built SHA:
             # masked (#492).
-            echo "::error::Draft '$TAG' now targets ${now//[[:cntrl:]]/?}, but the archive was built from $BUILT_SHA; nothing was uploaded. Start a new release run."
+            echo "::error::Draft '$TAG' now targets $(shown "$now"), but the archive was built from $BUILT_SHA; nothing was uploaded. Start a new release run."
             exit 1
           fi
 
@@ -356,7 +376,7 @@ jobs:
             # Asset names of the draft, an API response: one per line, then
             # masked (#492).
             others=$(tr '\n' ' ' <<<"$others")
-            echo "::warning::Draft '$TAG' also carries assets this run didn't build: ${others//[[:cntrl:]]/?}"
+            echo "::warning::Draft '$TAG' also carries assets this run didn't build: $(shown "$others")"
           fi
 
           {

@@ -174,6 +174,10 @@ jobs:
           REQUESTED_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
+          # Masks $1 for a log line (#492): control characters become '?' and
+          # '##[' becomes '#?[', so the value can neither end the line nor open
+          # the runner's older '##[command]' syntax in the middle of one.
+          shown() { local v="${1//[[:cntrl:]]/?}"; printf '%s' "${v//\#\#\[/#?[}"; }
           # gh release list on the runner CLI does not expose targetCommitish;
           # resolve the target via gh release view per matching tag.
           drafts=$(gh release list --json isDraft,tagName --jq '[.[] | select(.isDraft == true)]')
@@ -192,7 +196,7 @@ jobs:
               echo "::error::No tag given and $total drafts are open. Pass 'tag' explicitly. Open drafts:"
               # Draft tag names are editable text, listed with control
               # characters masked as in the target messages below (#492).
-              echo "$drafts" | jq -r '.[] | "  - \(.tagName | gsub("[[:cntrl:]]"; "?"))"' >&2
+              echo "$drafts" | jq -r '.[] | "  - \(.tagName | gsub("[[:cntrl:]]"; "?") | gsub("##\\["; "#?["))"' >&2
               exit 1
             fi
             TAG=$(echo "$drafts" | jq -r '.[0].tagName')
@@ -201,23 +205,30 @@ jobs:
           fi
 
           # The tag is the caller's input or a draft's tag name, and every later
-          # step reads it from this step's output. A control character in it
-          # could start a workflow command in any message that prints the tag,
-          # or add an entry to $GITHUB_OUTPUT. Refused here, before the first
-          # message that prints it and before the output write, so every later
-          # '$TAG' is clean by construction (#492). Only this message shows it,
-          # masked.
+          # step reads it from this step's output. A line end in it could start a
+          # workflow command in any message that prints the tag or add an entry
+          # to $GITHUB_OUTPUT, and '##[' opens the runner's older command syntax
+          # anywhere in a log line (ActionCommand.TryParse in actions/runner,
+          # read from source, not measured on a runner). Both are refused here,
+          # before the first message that prints the tag and before the output
+          # write, so no later '$TAG' carries either (#492). Only this message
+          # shows it, masked.
           #
-          # Git refuses ASCII control characters and DEL in a ref name. This
-          # check is deliberately wider: in the runner's UTF-8 locale
-          # [[:cntrl:]] also matches C1 (U+0080-U+009F) and U+2028/U+2029,
-          # which git allows, because whether the runner treats one of those
-          # as a line end wasn't measured. A tag carrying one is refused here
-          # although git would accept it. Measured with (prints "cntrl"; the
-          # same with \u2028, nothing under LC_ALL=C):
+          # Git refuses ASCII control characters, DEL and '[' in a ref name, so
+          # the '##[' rule costs no tag git accepts. The control-character rule
+          # is deliberately wider: in a UTF-8 locale (the hosted Ubuntu images'
+          # default; a self-hosted runner may differ) [[:cntrl:]] also matches
+          # C1 (U+0080-U+009F) and U+2028/U+2029, which git allows. Read from
+          # actions/runner, not measured on a runner: step output is split into
+          # lines by StreamReader.ReadLine, at LF, CR and CRLF only
+          # (ProcessInvoker.cs), and $GITHUB_OUTPUT at LF (FileCommandManager.cs),
+          # so none of those ends a line there. A tag carrying one is refused
+          # all the same, although git would accept it. Locale behaviour
+          # measured with (prints "cntrl"; the same with \u2028, nothing under
+          # LC_ALL=C):
           #   LC_ALL=C.UTF-8 bash -c 'x=$(printf "a\u0085b"); [[ $x == *[[:cntrl:]]* ]] && echo cntrl'
-          if [[ "$TAG" == *[[:cntrl:]]* ]]; then
-            echo "::error::Tag '${TAG//[[:cntrl:]]/?}' contains a control character (shown as '?'); refusing to continue."
+          if [[ "$TAG" == *[[:cntrl:]]* || "$TAG" == *'##['* ]]; then
+            echo "::error::Tag '$(shown "$TAG")' contains a control character or '##[' (shown as '?' and '#?['); refusing to continue."
             exit 1
           fi
 
@@ -228,7 +239,7 @@ jobs:
 
             if [[ "$match_count" == "0" ]]; then
               echo "::error::No draft release with tag '$TAG'. Open drafts:"
-              echo "$drafts" | jq -r '.[] | "  - \(.tagName | gsub("[[:cntrl:]]"; "?"))"' >&2
+              echo "$drafts" | jq -r '.[] | "  - \(.tagName | gsub("[[:cntrl:]]"; "?") | gsub("##\\["; "#?["))"' >&2
               exit 1
             fi
 
@@ -268,9 +279,9 @@ jobs:
           # names a commit this clone has.
           # The target is editable text. Control characters are masked before
           # it is printed, so it cannot start a workflow command on a new line.
-          shown="${target//[[:cntrl:]]/?}"
+          shown_target=$(shown "$target")
           if ! sha=$(resolve_commit "$target") || ! git cat-file -e "${sha}^{commit}" 2>/dev/null; then
-            echo "::error::Draft tag '$TAG' target '$shown' resolves to no commit on origin. Re-run release-drafter to refresh draft target."
+            echo "::error::Draft tag '$TAG' target '$shown_target' resolves to no commit on origin. Re-run release-drafter to refresh draft target."
             exit 1
           fi
 
@@ -282,7 +293,7 @@ jobs:
           # Class guard: whatever the resolution above becomes, nothing but a
           # full lowercase commit SHA leaves this step as target_sha.
           if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::Draft tag '$TAG' target '$shown' resolved to '${sha//[[:cntrl:]]/?}', not a full 40-character commit SHA. Refusing to continue."
+            echo "::error::Draft tag '$TAG' target '$shown_target' resolved to '$(shown "$sha")', not a full 40-character commit SHA. Refusing to continue."
             exit 1
           fi
 
@@ -304,11 +315,15 @@ jobs:
           DRAFT_TARGET: ${{ steps.draft.outputs.target_sha }}
         run: |
           set -euo pipefail
+          # Masks $1 for a log line (#492): control characters become '?' and
+          # '##[' becomes '#?[', so the value can neither end the line nor open
+          # the runner's older '##[command]' syntax in the middle of one.
+          shown() { local v="${1//[[:cntrl:]]/?}"; printf '%s' "${v//\#\#\[/#?[}"; }
           expected="${EXPECTED_TARGET_SHA,,}"
           if [[ ! "$expected" =~ ^[0-9a-f]{40}$ ]]; then
             # Printed exactly when it failed the check, so it is the caller's
             # text as given: control characters masked (#492).
-            echo "::error::expected-target-sha '${EXPECTED_TARGET_SHA//[[:cntrl:]]/?}' is not a full 40-character commit SHA. Pass needs.<archive-job>.outputs.target-sha from reusable-release-archive.yml unchanged."
+            echo "::error::expected-target-sha '$(shown "$EXPECTED_TARGET_SHA")' is not a full 40-character commit SHA. Pass needs.<archive-job>.outputs.target-sha from reusable-release-archive.yml unchanged."
             exit 1
           fi
 
@@ -343,9 +358,10 @@ jobs:
 
           def shown(value):
               # Paths come from .github/release-automation.yml, repository
-              # content. Control characters are masked before a message prints
-              # one, so it can't start a workflow command on a new line (#492).
-              return re.sub(r"[\x00-\x1f\x7f-\x9f]", "?", str(value))
+              # content. Before a message prints one, control characters become
+              # '?' and '##[' becomes '#?[', so neither a line end nor the
+              # runner's older '##[command]' syntax can start a command (#492).
+              return re.sub(r"[\x00-\x1f\x7f-\x9f]", "?", str(value)).replace("##[", "#?[")
 
           override_path = pathlib.Path(".github/release-automation.yml")
           if override_path.exists():
@@ -418,7 +434,9 @@ jobs:
           echo "source=$source" >> "$GITHUB_OUTPUT"
           echo "count=$count" >> "$GITHUB_OUTPUT"
           echo "Detected project type: $source ($count version-bearing file(s))"
-          jq . vbf.json
+          # vbf.json holds paths and selectors from the repository. JSON escapes
+          # control characters already; '##[' is neutralised as in shown() (#492).
+          jq '(.. | strings) |= gsub("##\\["; "#?[")' vbf.json
 
       # Shared version-bearing selector grammar, written once and imported by
       # BOTH the align (write) and verify (read) steps so the dot-path + array-
@@ -500,7 +518,7 @@ jobs:
           def shown(value):
               # Paths, selector keys and formats are repository content; masked
               # before a message prints them, as in the detect step (#492).
-              return re.sub(r"[\x00-\x1f\x7f-\x9f]", "?", str(value))
+              return re.sub(r"[\x00-\x1f\x7f-\x9f]", "?", str(value)).replace("##[", "#?[")
 
           def target_value(existing, tag):
               # strip-leading-v: keep the file's existing convention — write the
@@ -630,7 +648,7 @@ jobs:
               # Paths, selectors, file values and commit subjects are
               # repository content; masked before a message prints them, as in
               # the detect step (#492).
-              return re.sub(r"[\x00-\x1f\x7f-\x9f]", "?", str(value))
+              return re.sub(r"[\x00-\x1f\x7f-\x9f]", "?", str(value)).replace("##[", "#?[")
 
           def data_at_sha(path, sha, fmt):
               raw = subprocess.run(
@@ -748,6 +766,10 @@ jobs:
           ASSET_FILENAME: ${{ inputs.asset-filename }}
         run: |
           set -euo pipefail
+          # Masks $1 for a log line (#492): control characters become '?' and
+          # '##[' becomes '#?[', so the value can neither end the line nor open
+          # the runner's older '##[command]' syntax in the middle of one.
+          shown() { local v="${1//[[:cntrl:]]/?}"; printf '%s' "${v//\#\#\[/#?[}"; }
 
           # Domain from the first detected manifest path: custom_components/<domain>/manifest.json
           domain=$(jq -r '.entries[0].path' vbf.json \
@@ -761,7 +783,7 @@ jobs:
           # Messages print these masked copies, so a control character can't
           # start a workflow command on a new line (#492). The build itself
           # uses the values unchanged.
-          shown_domain="${domain//[[:cntrl:]]/?}"
+          shown_domain=$(shown "$domain")
 
           # Asset filename resolution (precedence per spec/ha/hacs-release
           # §ZIP release distribution): explicit inputs.asset-filename wins;
@@ -773,20 +795,20 @@ jobs:
             echo "::warning::No hacs.json at $TARGET_SHA — a HACS integration MUST ship one (spec/ha/hacs-release)."
           fi
           [[ "$hacs_filename" == "null" ]] && hacs_filename=""
-          shown_hacs_filename="${hacs_filename//[[:cntrl:]]/?}"
+          shown_hacs_filename=$(shown "$hacs_filename")
 
           if [[ -n "$ASSET_FILENAME" ]]; then
             filename="$ASSET_FILENAME"
             # The build name and HACS's own hacs.json contract MUST agree, or
             # HACS downloads an asset this run never built. Warn on divergence.
             if [[ -n "$hacs_filename" && "$hacs_filename" != "$filename" ]]; then
-              echo "::warning::asset-filename '${filename//[[:cntrl:]]/?}' disagrees with hacs.json filename '$shown_hacs_filename' — HACS reads hacs.json to pick the asset, so the two MUST match (spec/ha/hacs-release §ZIP release distribution)."
+              echo "::warning::asset-filename '$(shown "$filename")' disagrees with hacs.json filename '$shown_hacs_filename' — HACS reads hacs.json to pick the asset, so the two MUST match (spec/ha/hacs-release §ZIP release distribution)."
             fi
           else
             filename="$hacs_filename"
           fi
           [[ -z "$filename" ]] && filename="${domain}.zip"
-          shown_filename="${filename//[[:cntrl:]]/?}"
+          shown_filename=$(shown "$filename")
           echo "Building HACS asset '$shown_filename' from custom_components/$shown_domain at ${TARGET_SHA:0:8}."
 
           # Extract the integration directory from the target tree (independent of
@@ -840,13 +862,17 @@ jobs:
           CASCADE: release-cd-refresh-master.yml
         run: |
           set -euo pipefail
+          # Masks $1 for a log line (#492): control characters become '?' and
+          # '##[' becomes '#?[', so the value can neither end the line nor open
+          # the runner's older '##[command]' syntax in the middle of one.
+          shown() { local v="${1//[[:cntrl:]]/?}"; printf '%s' "${v//\#\#\[/#?[}"; }
           if ! state=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${CASCADE}" --jq .state 2>/dev/null); then
             echo "::error::${CASCADE} does not exist in this repository. Publishing would leave the presentation branch stale behind a green release (see #414). Add the workflow, or set 'require-cascade: false' if this repository deliberately has no presentation branch."
             exit 1
           fi
           if [[ "$state" != "active" ]]; then
             # An API response; masked like every other printed response (#492).
-            echo "::error::${CASCADE} exists but reports state '${state//[[:cntrl:]]/?}'. GitHub disables a scheduled workflow after 60 days of repository inactivity ('disabled_inactivity'), and it can be switched off by hand ('disabled_manually'). Re-enable it before publishing: gh workflow enable ${CASCADE}"
+            echo "::error::${CASCADE} exists but reports state '$(shown "$state")'. GitHub disables a scheduled workflow after 60 days of repository inactivity ('disabled_inactivity'), and it can be switched off by hand ('disabled_manually'). Re-enable it before publishing: gh workflow enable ${CASCADE}"
             exit 1
           fi
           echo "Cascade workflow ${CASCADE} is active."
@@ -909,6 +935,12 @@ jobs:
           VALE_RESULT: ${{ steps.vale.outputs.result }}
         run: |
           set -euo pipefail
+          # Vale prints the release notes' own text and the consumer's style
+          # setup back. Its output passes this filter, which neutralises what the
+          # runner reads as a command: a CR (a line end to it) becomes '?', and
+          # '##[' becomes '#?[' as in shown() (#492). pipefail keeps Vale's
+          # exit status.
+          neutralise() { sed -e 's/\r/?/g' -e 's/##\[/#?[/g'; }
           # A download failure warns, it does not block. An unreachable release
           # asset says nothing about the notes, and a release refused for that
           # reason is a worse outcome than one published without a prose check.
@@ -936,7 +968,7 @@ jobs:
           # A style server that can't be reached says nothing about the notes
           # either, so it warns like a download failure. A Vale *finding* is a
           # different matter and does block, below.
-          if ! vale sync; then
+          if ! vale sync 2>&1 | neutralise; then
             echo "::warning::'vale sync' could not fetch the style packages. Skipping the release-notes check; the notes were NOT verified."
             exit 0
           fi
@@ -947,7 +979,7 @@ jobs:
           trap 'rm -f "$notes"' EXIT
           printf '%s\n' "$body" > "$notes"
 
-          if ! vale --minAlertLevel=error "$notes"; then
+          if ! vale --minAlertLevel=error "$notes" 2>&1 | neutralise; then
             echo "::error::The release notes for '$TAG' carry Vale errors. Edit the draft body (gh release edit '$TAG' --notes-file ...) and re-run -- publishing freezes this text."
             exit 1
           fi
@@ -970,6 +1002,11 @@ jobs:
           TAG: ${{ steps.draft.outputs.tag }}
         run: |
           set -euo pipefail
+          # The checker's report names the consumer's documentation files.
+          # It passes this filter: a CR becomes '?' and '##[' becomes '#?[',
+          # as in shown(), so a file name can't start a workflow command
+          # (#492). pipefail keeps the checker's exit status.
+          neutralise() { sed -e 's/\r/?/g' -e 's/##\[/#?[/g'; }
           # A consumer's checkout never carries this script -- it lives in the
           # repository that ships this workflow, and arrives through the pinned
           # checkout of gh-plumbing. Reading it from the caller would make the
@@ -980,7 +1017,7 @@ jobs:
             echo "::notice::No 'docs/' directory; nothing to audit for freshness."
             exit 0
           fi
-          if ! python3 .gh-plumbing/scripts/docs_freshness.py --root .; then
+          if ! python3 .gh-plumbing/scripts/docs_freshness.py --root . 2>&1 | neutralise; then
             echo "::error::The documentation carries critical freshness findings. Publishing '$TAG' would ship them, because the site and the notes freeze with the tag. Fix them on develop and re-run."
             exit 1
           fi
@@ -999,6 +1036,10 @@ jobs:
           EXPECTED_TARGET_SHA: ${{ inputs.expected-target-sha }}
         run: |
           set -euo pipefail
+          # Masks $1 for a log line (#492): control characters become '?' and
+          # '##[' becomes '#?[', so the value can neither end the line nor open
+          # the runner's older '##[command]' syntax in the middle of one.
+          shown() { local v="${1//[[:cntrl:]]/?}"; printf '%s' "${v//\#\#\[/#?[}"; }
           if [[ -n "$EXPECTED_TARGET_SHA" ]]; then
             expected="${EXPECTED_TARGET_SHA,,}"
             # Same resolution as the Resolve draft step above.
@@ -1016,13 +1057,13 @@ jobs:
             git fetch --quiet origin
             target=$(gh release view "$TAG" --json targetCommitish --jq .targetCommitish)
             # Masked for printing only, as in Resolve draft.
-            shown="${target//[[:cntrl:]]/?}"
+            shown_target=$(shown "$target")
             if ! actual=$(resolve_commit "$target"); then
-              echo "::error::Draft '$TAG' target '$shown' resolves to no commit on origin; not publishing."
+              echo "::error::Draft '$TAG' target '$shown_target' resolves to no commit on origin; not publishing."
               exit 1
             fi
             if [[ "$actual" != "$expected" ]]; then
-              echo "::error::Draft '$TAG' now targets $actual (from '$shown'), but the archive was built from $expected. The target moved while this run was checking it -- a merge on the target branch or an edited draft. Nothing was published; rebuild the archive from the current draft target, then publish again."
+              echo "::error::Draft '$TAG' now targets $actual (from '$shown_target'), but the archive was built from $expected. The target moved while this run was checking it -- a merge on the target branch or an edited draft. Nothing was published; rebuild the archive from the current draft target, then publish again."
               exit 1
             fi
             # One edit pins the target and flips the draft, so no second call
@@ -1104,6 +1145,10 @@ jobs:
           TARGET_SHA: ${{ steps.align.outputs.target_sha || steps.draft.outputs.target_sha }}
         run: |
           set -euo pipefail
+          # Masks $1 for a log line (#492): control characters become '?' and
+          # '##[' becomes '#?[', so the value can neither end the line nor open
+          # the runner's older '##[command]' syntax in the middle of one.
+          shown() { local v="${1//[[:cntrl:]]/?}"; printf '%s' "${v//\#\#\[/#?[}"; }
           # The cascade run may not have registered yet; this is a best-effort
           # probe, never an error (spec/project/workflow-health/ §Known platform constraints).
           sleep 30
@@ -1111,5 +1156,6 @@ jobs:
           if [[ -z "$refresh_run" || "$refresh_run" == "null" ]]; then
             echo "::notice::No recent release-cd-refresh-master.yml run observed yet for $TARGET_SHA. The App-authored release:published event should cascade shortly; if main does not refresh, dispatch release-cd-refresh-master.yml manually."
           else
-            echo "release-cd-refresh-master.yml run detected: $refresh_run"
+            # An API response, one line of JSON; masked like the others (#492).
+            echo "release-cd-refresh-master.yml run detected: $(shown "$refresh_run")"
           fi

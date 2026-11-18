@@ -90,7 +90,7 @@ def audit_steps(path: Path, lines: list[str], job: str, steps: yaml.Node) -> lis
         if pair is None:
             findings.append(finding(
                 path, line, job,
-                f"`{uses.split('@')[0]}` without an explicit `with.{KEY}`; the default "
+                f"`{capped(uses.split('@')[0])}` without an explicit `with.{KEY}`; the default "
                 "persists the job token for every later step. Set `false`, or `true` "
                 "with a comment naming the step that needs it."))
             continue
@@ -149,8 +149,39 @@ def candidate_files(root: Path) -> list[Path]:
 def audit(root: Path) -> list[dict]:
     findings = []
     for path in candidate_files(root):
-        findings += audit_file(path)
+        try:
+            findings += audit_file(path)
+        except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+            # Fail closed, without echoing the file: a parser's message can
+            # quote a line of it (#492).
+            findings.append(finding(path, 0, "-", f"could not be read or parsed ({type(exc).__name__}); "
+                                                  "nothing in it was checked."))
     return findings
+
+
+# Output in the runner's command format (#492). Job keys, `uses:` values and
+# paths are repository text: in an annotation they are escaped the way the
+# runner unescapes them, so a line break can't end the annotation and start a
+# command of its own; in a plain log line control characters become '?' and
+# '##[' -- the runner's older command syntax, read anywhere in a line --
+# becomes '#?['. Echoed values are capped.
+CAP = 200
+
+
+def capped(value: str) -> str:
+    return value if len(value) <= CAP else value[:CAP] + "..."
+
+
+def escape_data(value: str) -> str:
+    return value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def escape_property(value: str) -> str:
+    return escape_data(capped(value)).replace(":", "%3A").replace(",", "%2C")
+
+
+def shown(value: str) -> str:
+    return re.sub(r"[\x00-\x1f\x7f-\x9f]", "?", capped(value)).replace("##[", "#?[")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -160,10 +191,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     findings = audit(args.root)
     for f in findings:
-        rel = Path(f["path"]).relative_to(args.root)
-        print(f"::error file={rel},line={f['line']}::job {f['job']}: {f['message']}")
+        rel = Path(f["path"]).relative_to(args.root).as_posix()
+        location = f"file={escape_property(rel)}" + (f",line={f['line']}" if f["line"] else "")
+        message = "job " + capped(f["job"]) + ": " + f["message"]
+        print(f"::error {location}::{escape_data(message)}")
     if not findings:
-        print(f"Every actions/checkout step in {args.root} decides {KEY} explicitly.")
+        print(f"Every actions/checkout step in {shown(str(args.root))} decides {KEY} explicitly.")
     return 1 if findings else 0
 
 

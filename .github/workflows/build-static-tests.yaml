@@ -141,8 +141,8 @@ jobs:
   # cache would save in its post step.
   #
   # The guard behind #492 rides along for the same reason as #471's: every
-  # workflow command and env-file write in a reusable workflow or composite
-  # action must print only masked or constrained values, with its own
+  # workflow command, log line and env-file write in a reusable workflow or
+  # composite action must print only masked or constrained values, with its own
   # coverage line. tests/test_workflow_command_injection.py runs the repaired
   # steps against hostile values; like the Vale steps it drives shell, so it
   # adds no coverage line.

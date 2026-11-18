@@ -1,17 +1,22 @@
 """Behavioural tests for #492: printed values can't start a workflow command.
 
-The runner reads every line a step prints as a possible workflow command. A
-value with a line break followed by `::warning::...` -- a caller input, a draft
-tag name, repository content -- would start one, and written as
-`name=$value` to `$GITHUB_OUTPUT` it would add an output entry. Nothing fails
-when that happens, so the load-bearing cases are the hostile values themselves.
+The runner reads every line a step prints as a possible workflow command, in
+two syntaxes: a line that starts (after leading whitespace) with
+`::<command>::`, and `##[<command>]` ANYWHERE in a line. That is read from the
+runner's source (actions/runner, ActionCommand.cs TryParseV2/TryParse,
+OutputManager.cs), not measured on a runner. A value with a line break
+followed by `::warning::...`, or with `##[warning]...` and no line break at
+all -- a caller input, a draft tag name, repository content -- would start
+one, and written as `name=$value` to `$GITHUB_OUTPUT` a line break adds an
+output entry. Nothing fails when that happens, so the load-bearing cases are
+the hostile values themselves.
 
 Each test reads a step's real `run:` body from the workflow file and runs it
-under bash (or the heredoc's interpreter, through bash) against stubs for `gh`,
-in a throwaway git repository where the step needs one. A test asserts on
-every line of stdout AND stderr -- split the way the runner would, on any line
-break -- that only the intended command lines start with `::`, and on the
-exact `$GITHUB_OUTPUT` content. Clean-value cases pin today's behaviour.
+under bash (or the heredoc's interpreter, through bash) against stubs for `gh`
+and, where a step needs them, `git`, `vale` or `sleep`, in a throwaway git
+repository where the step needs one. A test asserts on every line of stdout
+AND stderr, through `commands()`, which models both syntaxes, and on the exact
+`$GITHUB_OUTPUT` content. Clean-value cases pin today's behaviour.
 
 The class itself -- every command line in every reusable workflow -- is held
 by scripts/workflow_command_masking.py and its tests.
@@ -32,6 +37,9 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 HOSTILE = "v1\n::warning::injected"
 
+HOSTILE_V1 = "v1##[set-output name=x]y"
+HOSTILE_WARN = "##[warning]z"
+
 GH_STUB = """#!/usr/bin/env bash
 echo "gh $*" >> "$STUB_LOG"
 case "$1 $2" in
@@ -41,7 +49,13 @@ case "$1 $2" in
       *targetCommitish*) printf '%s\\n' "$STUB_TARGET" ;;
       *body*) printf '%s\\n' "$STUB_BODY" ;;
     esac ;;
-  "api "*) printf '%s\\n' "$STUB_SHA" ;;
+  "run list") printf '%s\\n' "$STUB_RUNS" ;;
+  "api "*)
+    case "$2" in
+      */protection) [[ -n "${STUB_PROTECTION:-}" ]] || exit 1; printf '%s\\n' "$STUB_PROTECTION" ;;
+      */rules/branches/*) printf '%s\\n' "${STUB_RULES:-[]}" ;;
+      *) printf '%s\\n' "$STUB_SHA" ;;
+    esac ;;
 esac
 """
 
@@ -65,7 +79,12 @@ def run(tmp_path):
     output = tmp_path / "github_output"
     summary = tmp_path / "step_summary"
 
-    def _run(workflow: str, name: str, env: dict[str, str] | None = None, cwd: pathlib.Path = work):
+    def _run(workflow: str, name: str, env: dict[str, str] | None = None, cwd: pathlib.Path = work,
+             stubs_extra: dict[str, str] | None = None):
+        for stub, body in (stubs_extra or {}).items():
+            path = stubs / stub
+            path.write_text(body, encoding="utf-8")
+            path.chmod(0o755)
         output.write_text("", encoding="utf-8")
         summary.write_text("", encoding="utf-8")
         script = tmp_path / "step.sh"
@@ -86,6 +105,7 @@ def run(tmp_path):
             "STUB_TARGET": "",
             "STUB_BODY": "",
             "STUB_SHA": "",
+            "STUB_RUNS": "",
             **(env or {}),
         }
         proc = subprocess.run(["bash", "-e", str(script)], cwd=cwd, env=full,
@@ -98,11 +118,15 @@ def run(tmp_path):
 def commands(proc: subprocess.CompletedProcess) -> list[str]:
     """Every line of stdout and stderr the runner could read as a command.
 
-    `splitlines()` breaks on CR, NEL and U+2028 as well as LF -- wider than the
-    runner, so a value that survives this survives the runner too.
+    Models the two syntaxes read from the runner source: a line that starts,
+    after leading whitespace, with `::`, or one that contains `##[` anywhere.
+    The runner splits its output at LF, CR and CRLF (StreamReader.ReadLine in
+    ProcessInvoker.cs); `splitlines()` also splits at NEL, U+2028 and a few
+    more, so it finds every line the runner would see and possibly more. A
+    model of the source, not a measurement on a runner.
     """
     lines = (proc.stdout + "\n" + proc.stderr).splitlines()
-    return [line.lstrip() for line in lines if line.lstrip().startswith("::")]
+    return [line.lstrip() for line in lines if line.lstrip().startswith("::") or "##[" in line]
 
 
 def git(repo: pathlib.Path, *args: str) -> str:
@@ -133,8 +157,12 @@ def drafts(*tags: str) -> str:
 # --- reusable-release-publish.yml: Resolve draft ---------------------------
 
 PUBLISH = "reusable-release-publish.yml"
-REFUSED = "::error::Tag 'v1?::warning::injected' contains a control character (shown as '?'); " \
-          "refusing to continue."
+def refused(shown: str) -> str:
+    return (f"::error::Tag '{shown}' contains a control character or '##[' (shown as '?' and '#?['); "
+            "refusing to continue.")
+
+
+REFUSED = refused("v1?::warning::injected")
 
 
 @pytest.mark.parametrize("given, listed", [
@@ -166,7 +194,7 @@ def test_tag_refusal_is_wider_than_git_in_a_utf8_locale(run, workflow):
     proc, output, _ = run(workflow, "Resolve draft", {
         "LC_ALL": "C.UTF-8", "REQUESTED_TAG": "v1\u0085x", "STUB_LIST": drafts("v1.0.0"), "GH_REPO": "owner/repo"})
     assert proc.returncode == 1
-    assert commands(proc) == ["::error::Tag 'v1?x' contains a control character (shown as '?'); refusing to continue."]
+    assert commands(proc) == [refused("v1?x")]
     assert output == ""
 
 
@@ -367,7 +395,7 @@ def test_drafter_capture_skips_a_tag_with_a_control_character(run):
         "REPO": "owner/repo", "STUB_LIST": json.dumps({"isDraft": True, "tagName": HOSTILE})})
     assert proc.returncode == 0
     assert commands(proc) == ["::warning::Draft tag 'v1?::warning::injected' contains a control character "
-                              "(shown as '?'); not capturing its project-context block."]
+                              "or '##[' (shown as '?' and '#?['); not capturing its project-context block."]
     assert output == "had_markers=false\n"
 
 
@@ -395,7 +423,8 @@ def test_docker_image_reference_with_a_control_character_is_refused(run):
                           {"RAW": "ghcr.io/Owner/app\nother=1"})
     assert proc.returncode == 1
     assert commands(proc) == ["::error::Image reference 'ghcr.io/Owner/app?other=1' contains a control "
-                              "character (shown as '?'); check the registry and image_name inputs."]
+                              "character or '##[' (shown as '?' and '#?['); check the registry and image_name "
+                              "inputs."]
     assert output == ""
 
 
@@ -437,3 +466,248 @@ def test_nodejs_coverage_masks_the_missing_path(run):
                      {"SUMMARY_PATH": "missing\n::warning::injected"})
     assert proc.returncode == 1
     assert commands(proc) == ["::error::Coverage summary not found at missing?::warning::injected"]
+
+
+# --- '##[' mid-line, no control character (#492 F1) -----------------------
+#
+# The older command syntax is read anywhere in a line, so these values need no
+# line break. Each test shows the value reaches no line that `commands()`
+# would hand the runner, except the one intended `::` line.
+
+
+def no_v1_commands(proc: subprocess.CompletedProcess) -> None:
+    lines = (proc.stdout + "\n" + proc.stderr).splitlines()
+    assert not [line for line in lines if "##[" in line and not line.lstrip().startswith("::")]
+
+
+@pytest.mark.parametrize("workflow", [PUBLISH, "reusable-release-archive.yml"])
+@pytest.mark.parametrize("given, listed, shown", [
+    (HOSTILE_V1, drafts("v1.0.0"), "v1#?[set-output name=x]y"),
+    ("", drafts("v2" + HOSTILE_WARN), "v2#?[warning]z"),
+])
+def test_tag_with_v1_command_is_refused(run, workflow, given, listed, shown):
+    proc, output, _ = run(workflow, "Resolve draft",
+                          {"REQUESTED_TAG": given, "STUB_LIST": listed, "GH_REPO": "owner/repo"})
+    assert proc.returncode == 1
+    assert commands(proc) == [refused(shown)]
+    assert output == ""
+
+
+def test_archive_lists_draft_tag_names_masked(run):
+    proc, output, _ = run("reusable-release-archive.yml", "Resolve draft", {
+        "REQUESTED_TAG": "", "STUB_LIST": drafts("v1.0.0", HOSTILE, "v3" + HOSTILE_WARN), "GH_REPO": "owner/repo"})
+    assert proc.returncode == 1
+    assert len(commands(proc)) == 1 and commands(proc)[0].startswith("::error::No tag given and 3 drafts")
+    assert "  - v1.0.0\n  - v1?::warning::injected\n  - v3#?[warning]z\n" in proc.stderr
+    assert output == ""
+
+
+def test_drafter_capture_skips_a_tag_with_a_v1_command(run):
+    proc, output, _ = run("reusable-release-drafter.yml", "Capture project-context block", {
+        "REPO": "owner/repo", "STUB_LIST": json.dumps({"isDraft": True, "tagName": HOSTILE_V1})})
+    assert proc.returncode == 0
+    [line] = commands(proc)
+    assert line.startswith("::warning::Draft tag 'v1#?[set-output name=x]y' contains")
+    assert output == "had_markers=false\n"
+
+
+def test_expected_target_sha_with_a_v1_command_is_masked(run):
+    proc, _, _ = run(PUBLISH, "Check the draft target against the expected commit",
+                     {"EXPECTED_TARGET_SHA": "abc" + HOSTILE_WARN, "AUTO_ALIGN": "false",
+                      "TAG": "v1.2.3", "DRAFT_TARGET": "b" * 40})
+    assert proc.returncode == 1
+    [line] = commands(proc)
+    assert line.startswith("::error::expected-target-sha 'abc#?[warning]z' is not a full")
+
+
+def test_hacs_asset_filename_with_a_v1_command_is_masked(run, tmp_path):
+    repo, sha = hacs_repo(tmp_path, "demo.zip")
+    proc, _, summary = run(PUBLISH, HACS_STEP, {
+        "TAG": "v1.2.3", "TARGET_SHA": sha, "DRY_RUN": "true", "ASSET_FILENAME": "demo" + HOSTILE_WARN + ".zip"},
+        cwd=repo)
+    assert proc.returncode == 0, proc.stderr
+    no_v1_commands(proc)
+    assert "Building HACS asset 'demo#?[warning]z.zip' from custom_components/demo" in proc.stdout
+    assert "asset: demo#?[warning]z.zip" in proc.stdout
+    assert "- Built `demo#?[warning]z.zip` (dry run, not uploaded)." in summary
+
+
+@pytest.mark.parametrize("version", ["0.55.0##[set-output name=key]attacker", "0.55.0" + HOSTILE_WARN])
+def test_tflint_version_with_a_v1_command_is_refused(run, version):
+    proc, output, _ = run("reusable-tf-lint.yaml", "Compute the plugin cache key",
+                          {"TFLINT_VERSION": version, "CONFIG_HASH": "f" * 64, "ImageOS": "ubuntu24"})
+    assert proc.returncode == 1
+    [line] = commands(proc)
+    assert line.startswith("::error::Cache key '") and "0.55.0#?[" in line
+    assert "Cache key: " not in proc.stdout
+    assert output == ""
+
+
+def test_docker_image_reference_with_a_v1_command_is_refused(run):
+    proc, output, _ = run("reusable-docker-publish.yaml", "Resolve the image reference",
+                          {"RAW": "ghcr.io/owner/app" + HOSTILE_WARN})
+    assert proc.returncode == 1
+    [line] = commands(proc)
+    assert line.startswith("::error::Image reference 'ghcr.io/owner/app#?[warning]z' contains")
+    assert output == ""
+
+
+def test_docker_image_reference_with_a_trailing_line_break_is_unchanged(run):
+    # An image_name written as a YAML block scalar ends in a line break. The
+    # runner ignored the blank line it left in $GITHUB_OUTPUT; the refusal
+    # must not turn that into a failure.
+    proc, output, _ = run("reusable-docker-publish.yaml", "Resolve the image reference",
+                          {"RAW": "ghcr.io/Owner/App\n\n"})
+    assert proc.returncode == 0, proc.stdout
+    assert output == "name=ghcr.io/owner/app\n"
+    proc, output, _ = run("reusable-docker-publish.yaml", "Resolve the image reference",
+                          {"RAW": "ghcr.io/Owner/App\nother=1\n"})
+    assert proc.returncode == 1 and output == ""
+
+
+def test_verify_masks_a_v1_command_in_the_confirmed_subject(run, tmp_path):
+    repo, sha = verify_repo(tmp_path, "1.2.3", "chore(release): v1.2.3 " + HOSTILE_WARN)
+    proc, _, _ = run_verify(run, repo, sha)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert commands(proc) == []
+    assert "Alignment commit confirmed: 'chore(release): v1.2.3 #?[warning]z'" in proc.stdout
+
+
+def test_verify_masks_a_v1_command_in_a_file_value(run, tmp_path):
+    repo, sha = verify_repo(tmp_path, "1.0.0" + HOSTILE_WARN, "chore(release): v1.2.3")
+    proc, _, _ = run_verify(run, repo, sha)
+    assert proc.returncode == 1
+    no_v1_commands(proc)
+    assert "version is '1.0.0#?[warning]z'" in proc.stdout
+
+
+def test_detect_neutralises_v1_commands_in_the_printed_vbf_json(run, tmp_path):
+    work = tmp_path / "detect"
+    (work / ".github").mkdir(parents=True)
+    (work / ".github" / "release-automation.yml").write_text(
+        yaml.safe_dump({"version_bearing_files": [{"path": "pkg" + HOSTILE_WARN + ".json", "selector": "version"}]}),
+        encoding="utf-8")
+    proc, output, _ = run(PUBLISH, "Detect project type and load version-bearing files", {"TAG": "v1.2.3"}, cwd=work)
+    assert proc.returncode == 0, proc.stderr
+    no_v1_commands(proc)
+    assert '"path": "pkg#?[warning]z.json"' in proc.stdout
+    assert json.loads((work / "vbf.json").read_text())["entries"][0]["path"] == "pkg" + HOSTILE_WARN + ".json", \
+        "the file itself keeps the value; only the log line is neutralised"
+    assert output == "source=override\ncount=1\n"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_nodejs_coverage_masks_a_v1_command_in_the_percentage(run, tmp_path):
+    summary = tmp_path / "coverage-summary.json"
+    summary.write_text(json.dumps({"total": {"lines": {"pct": "100" + HOSTILE_WARN}}}), encoding="utf-8")
+    proc, _, _ = run("reusable-nodejs-coverage.yaml", "Enforce coverage threshold",
+                     {"SUMMARY_PATH": str(summary), "FAIL_UNDER": "80"})
+    assert commands(proc) == []
+    assert "Line coverage 100#?[warning]z% meets the required 80%." in proc.stdout
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+@pytest.mark.parametrize("step", ["Enforce coverage threshold", "Render coverage into the job summary"])
+@pytest.mark.parametrize("content", [None, '{"total": "' + HOSTILE_WARN + '\n::warning::injected'])
+def test_nodejs_coverage_masks_an_unreadable_summary(run, tmp_path, step, content):
+    path = tmp_path / ("cov" + HOSTILE_WARN + ".json")
+    if content is not None:
+        path.write_text(content, encoding="utf-8")
+    proc, _, _ = run("reusable-nodejs-coverage.yaml", step, {"SUMMARY_PATH": str(path), "FAIL_UNDER": "80"})
+    assert proc.returncode == 1
+    [line] = commands(proc)
+    assert line.startswith("::error::") and "cov#?[warning]z.json" in line
+    assert "at Object" not in proc.stderr, "no Node stack trace"
+
+
+# --- plain log lines the first round left without a test --------------------
+
+
+def test_archive_matched_line_masks_the_directory(run, tmp_path):
+    work = tmp_path / "build"
+    for d in ("d" + HOSTILE_WARN, "e\r::warning::x"):
+        (work / d).mkdir(parents=True)
+        (work / d / "a.zip" if d.startswith("d") else work / d / "b.zip").write_text("x", encoding="utf-8")
+    temp = tmp_path / "runner-temp"
+    temp.mkdir()
+    proc, _, _ = run("reusable-release-archive.yml", "Match assets",
+                     {"ASSETS": "d*/a.zip\ne*/b.zip\n", "TASK_TARGET": "build", "RUNNER_TEMP": str(temp)}, cwd=work)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert commands(proc) == []
+    assert proc.stdout.splitlines() == ["Matched: d#?[warning]z/a.zip", "Matched: e?::warning::x/b.zip"]
+
+
+@pytest.mark.parametrize("target, shown", [("main" + HOSTILE_WARN, "main#?[warning]z"),
+                                           ("main\r::warning::x", "main?::warning::x")])
+def test_refresh_strategy_line_masks_the_target(run, target, shown):
+    proc, output, _ = run("reusable-release-cd-refresh-master.yml",
+                          "Determine the write strategy from the target's protection", {"TARGET": target})
+    assert proc.returncode == 0, proc.stderr
+    assert commands(proc) == []
+    assert proc.stdout.splitlines()[0] == f"Strategy for '{shown}': merge -- merge commits are permitted"
+    assert output == "mode=merge\nreason=merge commits are permitted\n"
+
+
+GIT_STUB = """#!/usr/bin/env bash
+case "$1" in
+  fetch|push) exit 0 ;;
+  rev-parse) echo "$STUB_SOURCE_SHA" ;;
+  ls-remote) [[ -z "$STUB_EXPECTED" ]] || printf '%s\\trefs/heads/x\\n' "$STUB_EXPECTED" ;;
+esac
+"""
+
+
+@pytest.mark.parametrize("expected, says", [("", "does not exist yet; creating it."),
+                                            ("c" * 40, f"already points at {'c' * 40}; nothing to do.")])
+def test_refresh_branch_lines_mask_the_target(run, expected, says):
+    proc, _, _ = run("reusable-release-cd-refresh-master.yml", "Refresh the presentation branch", {
+        "FROM_REF": "v1.2.3", "TARGET": "pres" + HOSTILE_WARN, "MODE": "merge",
+        "STUB_SOURCE_SHA": "c" * 40, "STUB_EXPECTED": expected}, stubs_extra={"git": GIT_STUB})
+    assert proc.returncode == 0, proc.stderr
+    assert commands(proc) == []
+    assert proc.stdout.splitlines() == [f"Target branch 'pres#?[warning]z' {says}"]
+
+
+def test_probe_masks_the_run_json(run):
+    proc, _, _ = run(PUBLISH, "Probe cascade run (App token path)",
+                     {"TARGET_SHA": "a" * 40, "STUB_RUNS": '{"status":"' + HOSTILE_WARN + '"}'},
+                     stubs_extra={"sleep": "#!/usr/bin/env bash\nexit 0\n"})
+    assert proc.returncode == 0
+    assert commands(proc) == []
+    assert 'run detected: {"status":"#?[warning]z"}' in proc.stdout
+
+
+VALE_STUB = """#!/usr/bin/env bash
+if [[ "$1" == "sync" ]]; then echo "Downloading pkg##[warning]sync"; exit 0; fi
+echo " release-notes.vale.md"
+printf ' 1:1  error  Did you really mean %s?  Vale.Spelling\\r::warning::cr\\n' "'x##[warning]z'"
+exit 1
+"""
+
+
+def test_vale_output_is_neutralised_and_its_status_kept(run):
+    proc, _, _ = run(PUBLISH, "Check the release notes with Vale", {
+        "TAG": "v1.2.3", "VALE_OUTCOME": "success", "VALE_RESULT": "installed", "STUB_BODY": "Some notes."},
+        stubs_extra={"vale": VALE_STUB})
+    assert proc.returncode == 1, "a Vale error still blocks through the filter"
+    assert commands(proc) == ["::error::The release notes for 'v1.2.3' carry Vale errors. Edit the draft body "
+                              "(gh release edit 'v1.2.3' --notes-file ...) and re-run -- publishing freezes this text."]
+    assert "Downloading pkg#?[warning]sync" in proc.stdout
+    assert "'x#?[warning]z'?  Vale.Spelling?::warning::cr" in proc.stdout
+
+
+def test_docs_freshness_report_is_neutralised_and_its_status_kept(run, tmp_path):
+    work = tmp_path / "consumer"
+    (work / "docs").mkdir(parents=True)
+    checker = work / ".gh-plumbing" / "scripts" / "docs_freshness.py"
+    checker.parent.mkdir(parents=True)
+    checker.write_text("import sys\nprint('- docs/x##[warning]z.md\\r::warning::cr')\n"
+                       "print('::error::1 blocking documentation-freshness finding(s)', file=sys.stderr)\n"
+                       "sys.exit(1)\n", encoding="utf-8")
+    proc, _, _ = run(PUBLISH, "Check documentation freshness", {"TAG": "v1.2.3"}, cwd=work)
+    assert proc.returncode == 1
+    assert commands(proc) == ["::error::1 blocking documentation-freshness finding(s)",
+                              "::error::The documentation carries critical freshness findings. Publishing 'v1.2.3' "
+                              "would ship them, because the site and the notes freeze with the tag. Fix them on "
+                              "develop and re-run."]
+    assert "- docs/x#?[warning]z.md?::warning::cr" in proc.stdout

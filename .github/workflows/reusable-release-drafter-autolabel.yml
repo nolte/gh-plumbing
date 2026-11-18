@@ -104,6 +104,10 @@ jobs:
           set -euo pipefail
           # Bytes, not characters: the patterns are ASCII.
           export LC_ALL=C
+          # Masks $1 for a log line (#492): control characters become '?' and
+          # '##[' becomes '#?[', so the value can neither end the line nor open
+          # the runner's older '##[command]' syntax in the middle of one.
+          shown() { local v="${1//[[:cntrl:]]/?}"; printf '%s' "${v//\#\#\[/#?[}"; }
 
           if [[ ! "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
             echo "::error::Pull request number is missing or not numeric."
@@ -164,7 +168,9 @@ jobs:
               echo "'$label' was already gone."
             else
               echo "::error::Could not remove '$label' from pull request #$PR_NUMBER."
-              printf '%s\n' "$err" >&2
+              # gh's error text is an API response; masked like the messages
+              # of the release workflows (#492).
+              printf '%s\n' "$(shown "$err")" >&2
               exit 1
             fi
           done
