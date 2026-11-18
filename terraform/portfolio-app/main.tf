@@ -8,15 +8,28 @@ locals {
   user_repo_set = local.is_user ? toset(var.consumer_repositories) : toset([])
 }
 
-# Hard-fail at plan time when both or neither owner inputs are set. A
-# null_resource with a precondition keeps the error message close to
-# the actual misconfiguration and avoids confusing Terraform with two
+# Hard-fail at plan time when both or neither owner inputs are set, and
+# when user mode asks for the branch-protection bypass. A terraform_data
+# resource with preconditions keeps the error message close to the
+# actual misconfiguration and avoids confusing Terraform with two
 # branches that both look valid.
+#
+# The second precondition follows GitHub's documented limit, not an
+# apply this repository ran: push restrictions naming users, teams or
+# apps are available only on organisation-owned repositories (REST
+# "Update branch protection", `restrictions`). A variable validation
+# referencing another variable would need Terraform >= 1.9; this form
+# keeps the module's >= 1.6 floor.
 resource "terraform_data" "owner_check" {
   lifecycle {
     precondition {
       condition     = (var.organization != "") != (var.user != "")
       error_message = "Set exactly one of `organization` or `user`. The current configuration sets ${var.organization != "" ? "organization" : "neither"}${var.user != "" ? " and user" : ""}."
+    }
+
+    precondition {
+      condition     = !(var.user != "" && var.enable_branch_bypass)
+      error_message = "`enable_branch_bypass = true` needs organisation mode. GitHub documents push restrictions for users, teams and apps as available only on organisation-owned repositories, so the branch-protection bypass can't apply to repositories owned by the user account `${var.user}`. Leave `enable_branch_bypass = false` in user mode, or set `organization` for repositories an organisation owns."
     }
   }
 }
@@ -93,12 +106,14 @@ resource "github_actions_secret" "portfolio_app_private_key" {
   plaintext_value = var.app_private_key
 }
 
-# --- Phase 2 (opt-in): branch-protection bypass -----------------------
+# --- Phase 2 (opt-in, organisation mode only): branch-protection bypass -
 #
 # Declares the App as a push-restriction (bypass) actor on each
-# protected branch of each consumer repository. Identical shape in
-# organisation and user mode — the resource keys off repo node IDs,
-# which the data lookup above already provides for both modes.
+# protected branch of each consumer repository. Organisation mode only:
+# GitHub documents push restrictions for users, teams and apps as
+# available only on organisation-owned repositories, and
+# terraform_data.owner_check above refuses `enable_branch_bypass` in
+# user mode at plan time.
 #
 # Caveat: this only works for branches that have a protection rule. The
 # resource will create one if missing; consumers that manage branch

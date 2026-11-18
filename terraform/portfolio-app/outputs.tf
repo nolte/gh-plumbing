@@ -29,6 +29,6 @@ output "branch_bypass_enabled" {
 }
 
 output "branch_bypass_pairs" {
-  description = "Repository::branch pairs that received the App as a push-restriction actor. Empty when enable_branch_bypass is false."
+  description = "Repository::branch pairs that received the App as a push-restriction actor (organisation mode only). Empty when enable_branch_bypass is false."
   value       = keys(github_branch_protection.bypass)
 }

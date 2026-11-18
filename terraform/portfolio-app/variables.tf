@@ -32,7 +32,7 @@ variable "app_private_key" {
 }
 
 variable "app_slug" {
-  description = "Slug of the portfolio GitHub App (the part of the App URL after /apps/, e.g. 'nolte-portfolio-bot'). Used to declare the App as a branch-protection bypass actor when enable_branch_bypass is true."
+  description = "Slug of the portfolio GitHub App (the part of the App URL after /apps/, e.g. 'nolte-portfolio-bot'). Used to declare the App as a branch-protection bypass actor when enable_branch_bypass is true (organisation mode only)."
   type        = string
 
   validation {
@@ -42,7 +42,7 @@ variable "app_slug" {
 }
 
 variable "consumer_repositories" {
-  description = "Names of repositories under the owner (organisation or user) that should consume the portfolio App. Org mode sets visibility=selected on the org-level variable + secret to this list; user mode creates one variable + secret per repository here. When enable_branch_bypass is true, every listed repo also gets the App declared as a push-restriction actor."
+  description = "Names of repositories under the owner (organisation or user) that should consume the portfolio App. Org mode sets visibility=selected on the org-level variable + secret to this list; user mode creates one variable + secret per repository here. When enable_branch_bypass is true (organisation mode only), every listed repo also gets the App declared as a push-restriction actor."
   type        = list(string)
 
   validation {
@@ -52,13 +52,13 @@ variable "consumer_repositories" {
 }
 
 variable "enable_branch_bypass" {
-  description = "When true, configure branch protection on var.protected_branches for every consumer repository with var.app_slug declared as a push-restriction (bypass) actor. This is Phase 2 of issue #330. Default off so Phase 0 (credentials + selection) can land independently. Works identically in organisation and user mode."
+  description = "When true, configure branch protection on var.protected_branches for every consumer repository with var.app_slug declared as a push-restriction (bypass) actor. This is Phase 2 of issue #330. Default off so Phase 0 (credentials + selection) can land independently. Organisation mode only: GitHub documents push restrictions for users, teams and apps as available only on organisation-owned repositories, so the module fails at plan time when var.user is set and this is true."
   type        = bool
   default     = false
 }
 
 variable "protected_branches" {
-  description = "Branches per consumer repository that receive the bypass entry when enable_branch_bypass is true. Order does not matter."
+  description = "Branches per consumer repository that receive the bypass entry when enable_branch_bypass is true (organisation mode only). Order does not matter."
   type        = list(string)
   default     = ["develop", "master"]
 }
