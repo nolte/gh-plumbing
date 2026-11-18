@@ -19,10 +19,11 @@ name: Release Drafter Autolabel
 # here because nothing from the pull request is executed -- there is no
 # checkout, and release-drafter reads only metadata -- the title, head branch
 # name and body from the event payload, and the changed file names through the
-# API -- matching them against rules from the base branch's configuration. The removal step reads the title through `env:` only and
-# matches it with bash regexes; it never evaluates it or passes it to a
-# command. Keep it that way: never add a checkout of the pull request head to
-# this workflow.
+# API -- matching them against rules from the configuration on the
+# repository's default branch. The removal step reads the title through `env:`
+# only and matches it with bash regexes; it never evaluates it or passes it to
+# a command. Keep it that way: never add a checkout of the pull request head
+# to this workflow.
 #
 # Separate from `reusable-release-drafter.yml` on purpose. That workflow's job
 # needs `contents: write`, this one `pull-requests: write`, and a called
@@ -42,13 +43,21 @@ permissions:
 
 # One group per pull request, so two runs never interleave. A run both adds
 # and removes, and two runs for different titles racing each other could end
-# with the older title's label. Cancelling the superseded run is still right:
-# each run recomputes the whole state from its own title and the labels the
-# API returns at that moment, so the newest run alone is enough, and a run
-# cancelled halfway leaves nothing the newest run doesn't correct.
+# with the older title's label.
+#
+# A running run is not cancelled. Cancelled between its two steps, it would
+# have added the new label without removing the old one; if the next title
+# then implies no type (`fix:` retitled to `refactor:`), that next run removes
+# nothing and the pull request keeps two type labels. Letting each started run
+# finish costs a few seconds and closes that window. A run still waiting to
+# start is replaced by a newer one, which loses nothing: it had done nothing.
+#
+# Each run works from the title in its own event, not a fresh read. Runs start
+# in the order GitHub queued them, so the last title normally wins; events
+# delivered out of order could still leave the older title's single label.
 concurrency:
   group: release-drafter-autolabel-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   autolabel:
@@ -70,10 +79,14 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.token }}
 
-      # Runs only after release-drafter succeeded, so the label the title
-      # implies is already on the pull request. The regexes mirror the
-      # `autolabeler:` title rules in .github/commons-release-drafter.yml; keep
-      # the two in step. Only those four labels are ever removed.
+      # Runs only after release-drafter succeeded. With the shared
+      # configuration the label the title implies is then on the pull request;
+      # a consumer whose own configuration names its labels differently never
+      # gets it, and the step below then removes nothing. The regexes mirror
+      # the `autolabeler:` title rules in .github/commons-release-drafter.yml;
+      # keep the two in step. Only those four labels are ever removed -- also
+      # when a consumer's own rule assigned one of them by file path or branch
+      # and the title implies another.
       - name: Remove type labels the title no longer implies
         env:
           GH_TOKEN: ${{ secrets.token }}
@@ -130,7 +143,9 @@ jobs:
 
           if [[ -z "${present[$implied]:-}" ]]; then
             # Removing the others now could leave no type label at all.
-            echo "::warning::The title implies '$implied', but the pull request doesn't carry it. Check the autolabeler configuration; no label was removed."
+            # A plain log line, not an annotation: for a consumer with other
+            # label names this is the normal case on every event.
+            echo "The title implies '$implied', but the pull request doesn't carry it; no label was removed."
             exit 0
           fi
 
