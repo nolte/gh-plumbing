@@ -34,4 +34,10 @@ repos:
             name: 'No combined actions/cache step, split into restore + save (#472, #476)'
             language: pygrep
             entry: '^[^#]*\buses:\s*["'']?actions/cache@'
-            files: '^\.github/(workflows/[^/]+|actions/.+/action)\.ya?ml$'
+            files: '^(\.github/(workflows/[^/]+|actions/.+/action)|actions/.+/action)\.ya?ml$'
+          - id: vale-version
+            name: '.vale-version is self-consistent and agrees with .tool-versions (see #488)'
+            entry: scripts/vale_version.py
+            language: python
+            files: '^(\.vale-version|\.tool-versions)$'
+            pass_filenames: false
