@@ -22,9 +22,11 @@ on:
         required: true
 
 permissions:
-  # The job checks out, restores a cache and runs `tflint --init` / `tflint
-  # -f compact`. None of that writes, so the previous `contents: write` plus
-  # `pull-requests: write` were two privileges nothing needed.
+  # The job checks out, restores a cache (and saves one on pull requests) and
+  # runs `tflint --init` / `tflint -f compact`. The cache goes through the
+  # runner's own cache token, not GITHUB_TOKEN, so nothing needs a write
+  # scope; the previous `contents: write` plus `pull-requests: write` were two
+  # privileges nothing needed.
   contents: read
 
 jobs:
@@ -41,29 +43,116 @@ jobs:
         persist-credentials: false
       name: Checkout source code
 
-    - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-      name: Cache plugin dir
+    - name: Compute the plugin cache key
+      id: cache-key
+      # The plugin binaries are native executables for one OS and CPU, so the
+      # key carries the runner's OS, architecture and OS release (#476). The
+      # matrix value it used before is the runner label -- `ubuntu-latest`
+      # keeps its name when it moves to a new Ubuntu release, so binaries
+      # cached on the old release were restored onto the new one.
+      #
+      # The release comes from `ImageOS`, which the GitHub-hosted runner images
+      # set on Linux, macOS and Windows (`ubuntu24`, `macos15`, `win25`). It
+      # changes when a label moves to a new OS release, not on the weekly image
+      # rebuild; `ImageVersion` would, and would turn every week into a cold
+      # cache. Where `ImageOS` is absent -- a self-hosted runner -- the step
+      # falls back to `/etc/os-release` (ID and VERSION_ID), then to the macOS
+      # major version, then to `uname -s`, which under Git Bash on Windows
+      # carries the NT build (`MINGW64_NT-10.0-26100`). Each source tags its
+      # value, so a fallback key never equals an `ImageOS` key.
+      #
+      # The tflint version is in the key because the cached plugin binaries
+      # are built against it. Without it, bumping tflint_version silently
+      # reused the previous version's plugins -- and a cache hit writes no
+      # new entry, so the stale set would have persisted indefinitely.
+      #
+      # The `tflint-plugins|` prefix differs from the old
+      # `<runner label>-tflint-...` shape, so no entry the earlier combined
+      # cache step saved is ever restored again; consumers take one cold
+      # cache, once. `shell: bash` because the default shell on Windows is
+      # PowerShell; bash is on all three GitHub-hosted runner systems.
+      shell: bash
+      env:
+        TFLINT_VERSION: ${{ inputs.tflint_version }}
+        CONFIG_HASH: ${{ hashFiles(inputs.config_path) }}
+      run: |
+        set -euo pipefail
+        if [ -n "${ImageOS:-}" ]; then
+          release="image:${ImageOS}"
+        elif [ -r /etc/os-release ]; then
+          release="os-release:$(. /etc/os-release && printf '%s-%s' "${ID:-unknown}" "${VERSION_ID:-unknown}")"
+        elif command -v sw_vers > /dev/null 2>&1; then
+          release="macos:$(sw_vers -productVersion | cut -d. -f1)"
+        else
+          release="uname:$(uname -s)"
+        fi
+        key="tflint-plugins|${RUNNER_OS}|${RUNNER_ARCH}|${release}|${TFLINT_VERSION}|${CONFIG_HASH}"
+        echo "Cache key: ${key}"
+        echo "key=${key}" >> "${GITHUB_OUTPUT}"
+
+    # Restore and save are separate steps rather than one `actions/cache` step
+    # whose post step saves at the end of the job (#476, the class #472 fixed
+    # in reusable-pre-commit.yaml). tflint runs each plugin as a child process
+    # (go-plugin), and a plugin binary runs with the runner user's rights, so
+    # it can rewrite `~/.tflint.d/plugins` -- its own binary included. A
+    # combined step would then save the modified directory. Run on the default
+    # branch, that save lands in the default-branch cache scope, which every
+    # branch of the consumer restores from. Hence:
+    #
+    # - the save runs only for `pull_request` events, whose cache scope is
+    #   `refs/pull/N/merge` and is readable by that pull request alone. A
+    #   default-branch run, a push to any other branch, a merge-queue run and
+    #   `pull_request_target` (which runs in the base branch's scope) restore
+    #   at most and never save;
+    # - the save runs right after `tflint --init` and before any tflint call
+    #   that starts a plugin. `--init` only downloads, verifies and unpacks the
+    #   plugin releases (tflint `plugin/install.go`); it starts none of them.
+    #   `tflint --version` does: it prints each ruleset's version by asking the
+    #   running plugin (`cmd/version.go` -> `plugin.Discovery`, which
+    #   `exec.Command`s every installed plugin). That is why `Show version`
+    #   sits after the save, no longer before `--init`.
+    #
+    # Cost: nothing is saved into the default-branch scope any more, so
+    # default-branch runs and the first run of each pull request download the
+    # plugins cold (one GitHub release download per plugin, made with the
+    # `token` secret); the second run of a pull request restores. A consumer
+    # that calls this workflow only on `push` never caches.
+    #
+    # Accepted residual risk: a plugin can read `ACTIONS_RUNTIME_TOKEN` from
+    # runner memory (the runner user has administrator rights on the hosted
+    # images) and write any cache key in the run's own scope, the default
+    # branch's on a default-branch run. Splitting the steps cannot close that
+    # path; only running tflint isolated from the runner context can.
+    - name: Restore plugin dir
+      id: cache-restore
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: ~/.tflint.d/plugins
-        # The tflint version is in the key because the cached plugin binaries
-        # are built against it. Without it, bumping tflint_version silently
-        # reused the previous version's plugins -- and a cache hit writes no
-        # new entry, so the stale set would have persisted indefinitely.
-        key: ${{ matrix.os }}-tflint-${{ inputs.tflint_version }}-${{ hashFiles(inputs.config_path) }}
+        key: ${{ steps.cache-key.outputs.key }}
 
     - uses: terraform-linters/setup-tflint@6e1e0642c0289bd619021bf6b34e3c08ed1e005a # v6.3.0
       name: Setup TFLint
       with:
         tflint_version: ${{ inputs.tflint_version }}
 
-    - name: Show version
-      run: tflint --version
-
     - name: Init TFLint
       run: tflint --init
       env:
         # https://github.com/terraform-linters/tflint/blob/master/docs/user-guide/plugins.md#avoiding-rate-limiting
         GITHUB_TOKEN: ${{ secrets.token  }}
+
+    - name: Save plugin dir
+      # See the comment above `Restore plugin dir`. Only on a miss: a cache
+      # entry is immutable, so saving over a hit would only emit a "cache
+      # already exists" warning.
+      if: ${{ github.event_name == 'pull_request' && steps.cache-restore.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: ~/.tflint.d/plugins
+        key: ${{ steps.cache-key.outputs.key }}
+
+    - name: Show version
+      run: tflint --version
 
     - name: Run TFLint
       run: tflint -f compact
