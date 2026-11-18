@@ -116,12 +116,12 @@ Reuse this shared set of Probot configurations across your GitHub projects. For 
 <!--probot-intro-end-->
 
 <!--td-probot-apps-start-->
-| probot                                                            | git                                                                         | description                                                                                                         |
+| Probot                                                            | git                                                                         | description                                                                                                         |
 |-------------------------------------------------------------------|-----------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------|
 | [boring-cyborg](https://probot.github.io/apps/boring-cyborg/)     | [kaxil/boring-cyborg](https://github.com/kaxil/boring-cyborg)               | Automates pull-request labelling and other repository housekeeping tasks.                                            |
 | [release-drafter](https://probot.github.io/apps/release-drafter/) | [release-drafter/release-drafter](https://github.com/release-drafter/release-drafter) | Creates a human-readable release changelog (**deprecated** as a Probot app—prefer the workflow implementation).     |
-| [renovate](https://github.com/apps/renovate)                      |                                                                             | Keeps dependencies in sync with [Renovate](https://www.whitesourcesoftware.com/free-developer-tools/renovate/), an automated dependency-update bot. |
-| [settings](https://probot.github.io/apps/settings/)               | [probot/settings](https://github.com/probot/settings)                       | Configure GitHub Projects by Source.                                                                                |
+| [Renovate](https://github.com/apps/renovate)                      |                                                                             | Keeps dependencies in sync with [Renovate](https://www.whitesourcesoftware.com/free-developer-tools/renovate/), an automated dependency-update bot. |
+| [settings](https://probot.github.io/apps/settings/)               | [`probot/settings`](https://github.com/probot/settings)                     | Configure GitHub Projects by Source.                                                                                |
 <!--td-probot-apps-end-->
 
 For more information, see the [gh-plumbing GitHub Pages site](http://nolte.github.io/gh-plumbing).
