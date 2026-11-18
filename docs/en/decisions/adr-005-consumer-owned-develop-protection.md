@@ -100,3 +100,4 @@ surfaces both consumers. After a consumer changes its entry, verify the result
 through the API, not the settings page.
 
 This record changes nothing for `master`.
+[ADR-006](adr-006-consumer-owned-master-protection.md) covers `master`.

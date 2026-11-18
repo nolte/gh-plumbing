@@ -164,5 +164,6 @@ nav:
       - ADR-003 Workflow validation: decisions/adr-003-workflow-validation-gate.md
       - ADR-004 Spec-drift routing: decisions/adr-004-spec-drift-routing.md
       - ADR-005 Develop protection: decisions/adr-005-consumer-owned-develop-protection.md
+      - ADR-006 Master protection: decisions/adr-006-consumer-owned-master-protection.md
   - Development:
       - development/index.md

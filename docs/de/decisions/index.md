@@ -19,6 +19,7 @@ landet, was verändert, was Consumer erben.
 | [ADR-003](adr-003-workflow-validation-gate.md) | Workflow-Gültigkeit über einen Required Check absichern | Angenommen |
 | [ADR-004](adr-004-spec-drift-routing.md) | Den Q2-Spec-Drift-Cluster über die Roadmap führen | Angenommen |
 | [ADR-005](adr-005-consumer-owned-develop-protection.md) | Consumer deklarieren ihre vollständige develop-Protection selbst | Angenommen |
+| [ADR-006](adr-006-consumer-owned-master-protection.md) | Consumer deklarieren ihre master-Protection selbst | Angenommen |
 
 ## Format
 
