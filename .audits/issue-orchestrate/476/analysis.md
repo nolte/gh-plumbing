@@ -97,5 +97,17 @@ none
 
 | Finding | Source | Outcome | Reproduction | Issue |
 |---|---|---|---|---|
+| `tflint --version` starts every installed plugin, so it must not run before the save | specialist result (P1) | fixed directly (2c5be29: `Show version` moved after the save) | tflint v0.44.1 `cmd/version.go` → `plugin.Discovery` → `exec.Command(pluginPath)`; confirmed by the reviewer against the source | — |
+| Two existing pre-commit hook names were cut at ` #` (YAML comment) | specialist result (P2) | fixed directly (00a4f3c: names quoted; parsed config differs only in the two `name` values) | hook output showed "…(GitHub API limit, see" | — |
+| macOS `ImageOS` stated as fact; "built against" the tflint version; "one download per plugin" | diff review @ 00a4f3c (N2, N3) | fixed directly (3c490e4: comments state only what is established) | runner-images `configure-preimagedata.sh:44` exports it from `~/.bashrc` only | — |
+| Guard misses exotic spellings (flow mapping with `#` in a quoted value, `Actions/Cache`, folded scalar) and flags a `run:` line that echoes the pattern | diff review @ 00a4f3c (N1) | dismissed: none of these forms exists in the repository; a line-level guard is the chosen size | reproduced by the reviewer on sample lines | — |
+| `tflint_version: latest` yields a key that never changes; `uname:` fallback is coarse | diff review @ 00a4f3c (N4, N5) | dismissed: both predate the change or need a runner the matrix doesn't use | inferred | — |
+| "set for every process" is slightly stronger than the evidence for Ubuntu (`/etc/environment`) | diff review @ 3c490e4 | dismissed: true in practice, non-blocking; named in Risk / rollout notes | inferred | — |
+| Caching built into `actions/setup-node` (`reusable-nodejs-coverage.yaml`) may be the same class | diff review @ 00a4f3c | not fixed here: outside #476, inferred not reproduced; to file | none | to file |
+| no blocking findings | diff review @ 3c490e49a63cdc6f88f788cd3de07361aabaa600 (lane b, security-briefed; files: `.audits/issue-orchestrate/476/analysis.md`, `.github/workflows/reusable-tf-lint.yaml`, `.pre-commit-config.yaml`) | — | — | — |
 
 ## Dispatch log
+
+- 2026-11-18 P1, P2 dispatched to `nolte-engineering:fullstack-developer` — 2c5be29, 8b248e0 (after rebase onto 078116b); actionlint rc=0, pre-commit green, guard fails on origin/develop's file.
+- 2026-11-18 orchestrator: hook names quoted (00a4f3c), comment wording (3c490e4); actionlint rc=0, pre-commit green.
+
