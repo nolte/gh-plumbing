@@ -265,11 +265,11 @@ Wenn ein Cascade immer noch nicht triggert, prüfen:
 ## Branch-Protection-Bypass (Phase 2)
 
 Phase 2 hat die App in `commons-settings.yml` als Push-Restriction-Actor
-auf `master` deklariert. Dieser Eintrag hat nie gegriffen. GitHub
+auf `master` deklariert. In dieser Form konnte der Eintrag nicht greifen. GitHub
 beschränkt `restrictions.users`, `.teams` und `.apps` auf
 Organisations-Repositories, und die Probot Settings App reicht das Feld
-unverändert durch. GitHub hat die gesamte `master`-Aktualisierung daher
-bei jedem Konsumenten mit 422 abgelehnt, denn jeder gehört einem
+unverändert durch. GitHub lehnt die gesamte `master`-Aktualisierung daher
+bei jedem Konsumenten ab, denn jeder gehört einem
 persönlichen Account.
 
 Die Commons deklarieren jetzt überhaupt keinen Branch-Eintrag mehr,

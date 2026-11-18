@@ -9,8 +9,9 @@
 #
 # Last propagation: 2026-11-18 — commons-settings.yml no longer declares a
 # `master` entry (#481, ADR-006): its `restrictions.apps` can't work on a
-# user-owned repository, so the master update failed with 422 and applied
-# nothing. This file now declares `master` itself, with the values that are
+# user-owned repository, so GitHub rejects the master update and it applies
+# nothing (documented limit; not re-observed for master). This file now
+# declares `master` itself, with the values that are
 # live today, so the sync changes nothing there. Verify through the API
 # afterwards that `master` still reads enforce_admins true, no required
 # checks, no required reviews, no restrictions.
@@ -132,13 +133,14 @@ branches:
       restrictions: null
 
   # The complete `master` protection payload. The commons declare no `master`
-  # entry any more (#481, ADR-006): their `restrictions.apps` made the whole
-  # master update fail with 422 on this user-owned repository, so that entry
-  # never applied here. The values below mirror the live protection as read
+  # entry any more (#481, ADR-006): since #355 their `restrictions.apps` can't
+  # be accepted on this user-owned repository, so that entry stopped applying
+  # here. The values below mirror the live protection as read
   # through the API on 2026-11-18, so applying this entry changes nothing:
   # admins included, no required checks, no required reviews, no push
   # restriction. The fields not listed here (force pushes, deletions, linear
-  # history and the rest) take the API's default `false` on the full PUT,
+  # history and the other booleans of that endpoint) take the API's default
+  # `false` on the full PUT,
   # which is also what is live. The release workflow keeps `master` current;
   # reusable-release-cd-refresh-master.yml reads this protection to choose
   # its write strategy. Verify through the API after the sync

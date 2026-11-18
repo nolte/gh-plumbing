@@ -5,24 +5,27 @@
 ## Context
 
 `commons-settings.yml` used to declare a `master` entry: `enforce_admins: true`,
-no required checks, no required reviews, and `restrictions.apps` naming
-`nolte-portfolio-app`. Phase 2 of
-[#330](https://github.com/nolte/gh-plumbing/issues/330) added the restriction
-so that only the portfolio App could push to `master`.
+no required checks, no required reviews. From 2020 until May 2026 the entry
+carried `restrictions: null`. In that form it could apply, and the two
+consumers that have a `master` branch, this repository and `esphome-configs`,
+carry exactly that protection today.
 
-The entry never worked on any consumer of this portfolio. GitHub accepts push
-restrictions only on organisation-owned repositories, and every consumer
-belongs to the user account `nolte`. The Settings App passes a branch entry to
-the update endpoint as it stands, so GitHub rejects the whole `master` update
-with 422. That's the failure
-[ADR-005](adr-005-consumer-owned-develop-protection.md) describes for
-`develop`. ADR-005 left `master` for a follow-up, and this record is that
-follow-up.
+Phase 2 of [#330](https://github.com/nolte/gh-plumbing/issues/330) replaced
+`restrictions: null` with `restrictions.apps` naming `nolte-portfolio-app`
+([#355](https://github.com/nolte/gh-plumbing/pull/355)), so that only the
+portfolio App could push to `master`. GitHub accepts push restrictions only on
+organisation-owned repositories, and every consumer belongs to the user
+account `nolte`. The Settings App passes a branch entry to the update endpoint
+as it stands. In that form GitHub rejects the whole `master` update, as it did
+for `develop` ([#416](https://github.com/nolte/gh-plumbing/issues/416),
+[ADR-005](adr-005-consumer-owned-develop-protection.md)). Nobody recorded the
+rejection for `master` itself. This record rests on GitHub's documented limit
+and on the `develop` case. ADR-005 left `master` for a follow-up, and this
+record is that follow-up.
 
 The documentation said `master` was push-restricted after phase 2. It wasn't.
-This repository's own `master` has protection that includes admins and
-blocks force pushes and deletions, but no configuration that applies declared
-that state.
+This repository's own `master` still carries the protection from before phase
+2, but since phase 2 no configuration that applies has declared it.
 
 ## Decision
 
@@ -36,13 +39,14 @@ today, so applying it changes nothing.
 
 ## Alternatives considered
 
-**Keep the entry and set `restrictions: null`.** Rejected. The entry would
-then apply for the first time, on every consumer at once. It would enforce
-`enforce_admins` on each consumer's `master` and replace whatever protection a
-consumer has there with the commons' values, because the update replaces the
-whole protection of a branch. Nobody asked for that change. A commons entry
-also races a consumer's own `master` entry when the App concatenates arrays,
-as ADR-005 explains for `develop`.
+**Keep the entry and set `restrictions: null`.** Rejected, although it would
+work: it restores the form the entry had until May 2026 and changes nothing
+live on the two consumers that have a `master` branch. Three reasons outweigh
+that. A commons entry races a consumer's own `master` entry when the App
+concatenates arrays, as ADR-005 explains for `develop`. Most consumers have no
+`master` branch, so the commons would send them an update for a branch that
+doesn't exist. And one rule is easier to hold than two: since ADR-005 a
+consumer owns its `develop` protection, and now it owns every branch.
 
 **Keep the entry for organisation-owned consumers.** Rejected. The portfolio
 has none, and a shared file can't make a field depend on who owns the
@@ -53,10 +57,18 @@ repository that extends it. The entry would keep failing everywhere it lands.
 
 ## Consequences
 
-No live protection changes on any consumer. The removed entry applied nothing,
-and the Settings App updates only the branches a configuration lists. It
-doesn't remove protection from a branch that the configuration no longer
-lists.
+No live protection changes on any consumer. The Settings App updates only the
+branches a configuration lists. It doesn't remove protection from a branch
+that the configuration no longer lists. That follows from the App's source,
+`lib/plugins/branches.js`. Nobody observed the hosted App doing it.
+
+The same source shows a side effect. The App builds each branch update on top
+of the previous one, so an entry that leaves out a required field inherits it
+from the entry before. A consumer whose `develop` entry omits
+`required_pull_request_reviews` got that field from the commons `master` entry
+until now. Without it, GitHub rejects that consumer's next settings sync until
+its entry is complete. `kamerplanter` is the known case; ADR-005 already names
+the missing field.
 
 A consumer that wants `master` protected declares the whole entry:
 

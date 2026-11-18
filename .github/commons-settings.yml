@@ -176,12 +176,12 @@ labels:
 # - `restrictions.apps` (push restrictions) exists only on
 #   organisation-owned repositories. On a user-owned repository, which is
 #   every consumer in this portfolio, GitHub rejects the whole update for
-#   that branch with 422 and the entry applies nothing. The `master` entry
-#   that used to carry `nolte-portfolio-app` here applied nothing on any
-#   current consumer.
-# - `restrictions: null` instead would start enforcing the entry's other
-#   fields, such as `enforce_admins`, on every consumer's branch -- a change
-#   no consumer asked for.
+#   that branch and the entry applies nothing (GitHub's documented limit;
+#   observed for `develop` in #416). The `master` entry carried
+#   `nolte-portfolio-app` here from #355 (2026-05-20) until #481.
+# - `restrictions: null`, the form the `master` entry had before #355, does
+#   apply -- but to a branch most consumers don't have, and alongside any
+#   entry a consumer declares for the same branch (next point).
 # - The current Settings App source merges `_extends` with
 #   @fastify/deepmerge, which ignores the app's `arrayMerge` option and
 #   concatenates arrays. A commons entry would then be PUT alongside a

@@ -260,11 +260,11 @@ If a cascade still fails to fire, check:
 ## Branch-protection bypass (phase 2)
 
 Phase 2 declared the App as a push-restriction actor on `master` in
-`commons-settings.yml`. That entry never applied. GitHub limits
+`commons-settings.yml`. In that form the entry couldn't apply. GitHub limits
 `restrictions.users`, `.teams` and `.apps` to organisation-owned
 repositories, and the Probot Settings App passes the field through
-unchanged. GitHub therefore rejected the whole `master` update with 422
-on every consumer, because a personal account owns each of them.
+unchanged. GitHub therefore rejects the whole `master` update on every
+consumer, because a personal account owns each of them.
 
 The commons now declare no branch entry at all, neither `master`
 ([ADR-006](../decisions/adr-006-consumer-owned-master-protection.md))

@@ -5,24 +5,30 @@
 ## Kontext
 
 `commons-settings.yml` deklarierte bisher einen `master`-Eintrag:
-`enforce_admins: true`, keine Required Checks, keine Required Reviews und
-`restrictions.apps` mit `nolte-portfolio-app`. Phase 2 von
-[#330](https://github.com/nolte/gh-plumbing/issues/330) hat die Restriktion
-eingeführt, damit nur die Portfolio-App auf `master` pushen kann.
+`enforce_admins: true`, keine Required Checks, keine Required Reviews. Von
+2020 bis Mai 2026 trug der Eintrag `restrictions: null`. In dieser Form konnte
+er greifen, und die zwei Consumer, die einen `master`-Branch haben, dieses
+Repository und `esphome-configs`, tragen heute genau diese Protection.
 
-Der Eintrag hat bei keinem Consumer dieses Portfolios je funktioniert. GitHub
-akzeptiert Push-Restriktionen nur bei organisationseigenen Repositories, und
-jeder Consumer gehört dem Nutzerkonto `nolte`. Die Settings-App reicht einen
-Branch-Eintrag unverändert an den Update-Endpunkt weiter, daher lehnt GitHub
-die gesamte `master`-Aktualisierung mit 422 ab. Das ist derselbe Fehler, den
-[ADR-005](adr-005-consumer-owned-develop-protection.md) für `develop`
-beschreibt. ADR-005 hat `master` einem Folge-Issue überlassen; diese
-Aufzeichnung ist dieses Folge-Issue.
+Phase 2 von [#330](https://github.com/nolte/gh-plumbing/issues/330) hat
+`restrictions: null` durch `restrictions.apps` mit `nolte-portfolio-app`
+ersetzt ([#355](https://github.com/nolte/gh-plumbing/pull/355)), damit nur die
+Portfolio-App auf `master` pushen kann. GitHub akzeptiert Push-Restriktionen
+nur bei organisationseigenen Repositories, und jeder Consumer gehört dem
+Nutzerkonto `nolte`. Die Settings-App reicht einen Branch-Eintrag unverändert
+an den Update-Endpunkt weiter. In dieser Form lehnt GitHub die gesamte
+`master`-Aktualisierung ab, wie zuvor bei `develop`
+([#416](https://github.com/nolte/gh-plumbing/issues/416),
+[ADR-005](adr-005-consumer-owned-develop-protection.md)). Für `master` selbst
+hat niemand die Ablehnung festgehalten; diese Aufzeichnung stützt sich auf die
+von GitHub dokumentierte Grenze und auf den Fall `develop`. ADR-005 hat
+`master` einem Folge-Issue überlassen; diese Aufzeichnung ist dieses
+Folge-Issue.
 
 Die Dokumentation behauptete, `master` sei nach Phase 2 push-restricted. Das
-stimmte nicht. Der `master` dieses Repositorys ist geschützt, Admins
-eingeschlossen, Force-Pushes und Löschen blockiert, aber keine Konfiguration,
-die tatsächlich greift, hat diesen Zustand deklariert.
+stimmte nicht. Der `master` dieses Repositorys trägt weiterhin die Protection
+aus der Zeit vor Phase 2, aber seit Phase 2 hat keine Konfiguration, die
+tatsächlich greift, sie deklariert.
 
 ## Entscheidung
 
@@ -37,14 +43,16 @@ die heute live sind. Ihn anzuwenden ändert daher nichts.
 
 ## Erwogene Alternativen
 
-**Den Eintrag behalten und `restrictions: null` setzen.** Verworfen. Der
-Eintrag würde dann zum ersten Mal greifen, bei allen Consumern gleichzeitig. Er
-würde `enforce_admins` auf dem `master` jedes Consumers erzwingen und dessen
-bestehende Protection durch die Werte der Commons ersetzen, denn die
-Aktualisierung ersetzt die gesamte Protection eines Branches. Diese Änderung
-hat niemand verlangt. Außerdem schreibt ein Commons-Eintrag mit dem eigenen
+**Den Eintrag behalten und `restrictions: null` setzen.** Verworfen, obwohl es
+funktionieren würde: Es stellt die Form wieder her, die der Eintrag bis Mai
+2026 hatte, und ändert bei den zwei Consumern mit `master`-Branch live nichts.
+Drei Gründe sprechen dagegen. Ein Commons-Eintrag schreibt mit dem eigenen
 `master`-Eintrag eines Consumers um die Wette, wenn die App Arrays
-aneinanderhängt, wie ADR-005 für `develop` erklärt.
+aneinanderhängt, wie ADR-005 für `develop` erklärt. Die meisten Consumer haben
+keinen `master`-Branch, die Commons würden ihnen also eine Aktualisierung für
+einen Branch schicken, den es nicht gibt. Und eine Regel hält sich leichter
+als zwei: Seit ADR-005 gehört einem Consumer seine `develop`-Protection, jetzt
+gehört ihm jeder Branch.
 
 **Den Eintrag für organisationseigene Consumer behalten.** Verworfen. Das
 Portfolio hat keine, und eine geteilte Datei kann ein Feld nicht davon abhängig
@@ -56,10 +64,19 @@ ankommt, weiter scheitern.
 
 ## Folgen
 
-Bei keinem Consumer ändert sich die Live-Protection. Der entfernte Eintrag hat
-nichts angewendet, und die Settings-App aktualisiert nur die Branches, die eine
-Konfiguration aufführt. Sie entfernt keine Protection von einem Branch, den die
-Konfiguration nicht mehr aufführt.
+Bei keinem Consumer ändert sich die Live-Protection. Die Settings-App
+aktualisiert nur die Branches, die eine Konfiguration aufführt. Sie entfernt
+keine Protection von einem Branch, den die Konfiguration nicht mehr aufführt.
+Das folgt aus dem Quellcode der App, `lib/plugins/branches.js`; an der
+gehosteten App wurde es nicht beobachtet.
+
+Derselbe Quellcode zeigt eine Nebenwirkung. Die App baut jede
+Branch-Aktualisierung auf der vorherigen auf, ein Eintrag ohne ein Pflichtfeld
+erbt es also vom Eintrag davor. Ein Consumer, dessen `develop`-Eintrag
+`required_pull_request_reviews` weglässt, bekam das Feld bisher vom
+`master`-Eintrag der Commons. Ohne ihn wird der nächste Settings-Sync dieses
+Consumers abgelehnt, bis sein Eintrag vollständig ist. `kamerplanter` ist der
+bekannte Fall; ADR-005 nennt das fehlende Feld bereits.
 
 Ein Consumer, der `master` schützen will, deklariert den ganzen Eintrag:
 
