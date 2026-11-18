@@ -37,7 +37,7 @@ jobs:
       fail-under: 80
 ```
 
-The workflow turns off the built-in npm cache of `actions/setup-node` (`package-manager-cache: false`). The action saves that cache after the install and test commands ran, so those commands could change what later runs restore, on the default branch included. Each run installs the dependencies without a restored npm cache.
+The workflow turns off the built-in npm cache of `actions/setup-node` (`package-manager-cache: false`). Left on, the action uses that cache when the caller's `package.json` names npm as its package manager. It then saves the cache after the install and test commands ran, so those commands could change what later runs restore, on the default branch included. Each run installs the dependencies without a restored npm cache.
 
 !!! tip "json-summary report"
     The `test-command` (default `npm test`) must write an Istanbul `json-summary` report to `coverage-summary-path` (default `coverage/coverage-summary.json`). Both `Vitest` (`--coverage.reporter=json-summary`) and Jest (`--coverageReporters=json-summary`) emit this format.

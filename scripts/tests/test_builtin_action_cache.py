@@ -146,6 +146,87 @@ def test_setup_tflint_cache_on_is_a_finding(tmp_path, value):
     assert len(messages(tmp_path)) == 1
 
 
+# --- shapes the YAML node tree hides ----------------------------------------
+
+def test_duplicate_key_with_a_later_true_is_a_finding(tmp_path):
+    write(tmp_path, "w.yaml", workflow(
+        NODE, "        with:\n          package-manager-cache: false\n"
+              "          package-manager-cache: true\n"))
+    findings = guard.audit(tmp_path)
+    assert [f["line"] for f in findings] == [11]
+
+
+def test_duplicate_with_block_is_checked_too(tmp_path):
+    write(tmp_path, "w.yaml", workflow(
+        PYTHON, "        with:\n          python-version: '3.14'\n"
+                "        with:\n          cache: pip\n"))
+    assert len(messages(tmp_path)) == 1
+
+
+def test_duplicate_uses_key_cannot_hide_the_action(tmp_path):
+    write(tmp_path, "w.yaml", workflow(f"{NODE}\n        uses: actions/checkout@v6"))
+    assert len(messages(tmp_path)) == 1
+
+
+def test_merge_key_in_with_is_a_finding(tmp_path):
+    text = (
+        "x-cache: &c\n  cache: pip\n"
+        "on: push\njobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n"
+        f"      - uses: {PYTHON}\n        with:\n          <<: *c\n"
+    )
+    write(tmp_path, "w.yaml", text)
+    found = messages(tmp_path)
+    assert len(found) == 1
+    assert "merge key" in found[0] and "`with:`" in found[0]
+
+
+def test_merge_key_on_the_step_is_a_finding(tmp_path):
+    text = (
+        "x-step: &s\n  with:\n    cache: pip\n"
+        "on: push\njobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n"
+        f"      - uses: {PYTHON}\n        <<: *s\n"
+    )
+    write(tmp_path, "w.yaml", text)
+    found = messages(tmp_path)
+    assert len(found) == 1
+    assert "merge key" in found[0] and "the step" in found[0]
+
+
+# --- output -------------------------------------------------------------------
+
+def test_hostile_job_key_and_value_cannot_inject_workflow_commands(tmp_path, capsys):
+    text = (
+        "on: push\njobs:\n"
+        '  "x\\n::warning::injected-from-job-name\\r\\n::add-mask::foo %0A":\n'
+        "    runs-on: ubuntu-latest\n    steps:\n"
+        f"      - uses: {PYTHON}\n        with:\n"
+        "          cache: |\n            pip\n"
+        "            ::error file=README.md,line=1::injected-from-value\n"
+        "            ::add-mask::foo\n"
+    )
+    write(tmp_path, "w.yaml", text)
+    findings = guard.audit(tmp_path)
+    assert len(findings) == 1
+    assert guard.main(["--root", str(tmp_path)]) == 1
+    lines = capsys.readouterr().out.splitlines()
+    assert [line for line in lines if line.startswith("::")] == lines
+    assert len(lines) == len(findings)
+    assert all(line.startswith("::error file=") for line in lines)
+    assert "%0A::warning::" in lines[0]
+    assert "%250A" in lines[0]  # a literal `%` is escaped, not passed through
+
+
+def test_escape_property_covers_separators():
+    assert guard.escape_property("a:b,c%d\ne") == "a%3Ab%2Cc%25d%0Ae"
+
+
+def test_long_values_are_shortened(tmp_path):
+    write(tmp_path, "w.yaml", workflow(PYTHON, "        with:\n          cache: " + "p" * 500 + "\n"))
+    found = messages(tmp_path)
+    assert "p" * guard.ECHO_LIMIT + "..." in found[0]
+    assert "p" * (guard.ECHO_LIMIT + 1) not in found[0]
+
+
 # --- selector and file discovery ---------------------------------------------
 
 def test_findings_are_printed_as_annotations(tmp_path, capsys):
@@ -167,6 +248,18 @@ def test_non_matching_actions_and_reusable_calls_are_ignored(tmp_path):
     )
     write(tmp_path, "w.yaml", text)
     assert messages(tmp_path) == []
+
+
+@pytest.mark.parametrize("uses, with_block", [
+    ("actions/setup-node/@v6", ""),
+    ("actions//setup-python@v6", "        with:\n          cache: pip\n"),
+    ("'actions\\setup-node@v6'", ""),
+])
+def test_selector_resolves_uses_like_the_runner(tmp_path, uses, with_block):
+    # The runner splits the repository part on `/` and `\` and drops empty
+    # segments, so each of these names the guarded action.
+    write(tmp_path, "w.yaml", workflow(uses, with_block))
+    assert len(messages(tmp_path)) == 1
 
 
 def test_selector_is_case_insensitive(tmp_path):
@@ -201,6 +294,7 @@ def test_composite_action_is_checked(tmp_path, directory):
 def test_malformed_and_non_workflow_files_are_ignored(tmp_path):
     write(tmp_path, "steps.yaml", "on: push\njobs:\n  j:\n    steps: none\n")
     write(tmp_path, "empty.yaml", "")
+    write(tmp_path, "scalar-step.yaml", "on: push\njobs:\n  j:\n    steps:\n      - just text\n")
     (tmp_path / ".github" / "workflows" / "README.md").write_text(f"uses: {NODE}\n")
     assert guard.audit(tmp_path) == []
 
