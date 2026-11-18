@@ -51,18 +51,21 @@ jobs:
       # keeps its name when it moves to a new Ubuntu release, so binaries
       # cached on the old release were restored onto the new one.
       #
-      # The release comes from `ImageOS`, which the GitHub-hosted runner images
-      # set on Linux, macOS and Windows (`ubuntu24`, `macos15`, `win25`). It
-      # changes when a label moves to a new OS release, not on the weekly image
+      # The release comes from `ImageOS`, which the GitHub-hosted Linux and
+      # Windows images set for every process (`ubuntu24`, `win25`). The macOS
+      # image only exports it from `~/.bashrc`, which a `bash --noprofile
+      # --norc` step doesn't read, so macOS may take the `sw_vers` fallback
+      # below instead; either way the value names the OS release. It changes
+      # when a label moves to a new OS release, not on the weekly image
       # rebuild; `ImageVersion` would, and would turn every week into a cold
-      # cache. Where `ImageOS` is absent -- a self-hosted runner -- the step
-      # falls back to `/etc/os-release` (ID and VERSION_ID), then to the macOS
+      # cache. Where `ImageOS` is absent -- macOS as above, or a self-hosted
+      # runner -- the step falls back to `/etc/os-release` (ID and VERSION_ID), then to the macOS
       # major version, then to `uname -s`, which under Git Bash on Windows
       # carries the NT build (`MINGW64_NT-10.0-26100`). Each source tags its
       # value, so a fallback key never equals an `ImageOS` key.
       #
-      # The tflint version is in the key because the cached plugin binaries
-      # are built against it. Without it, bumping tflint_version silently
+      # The tflint version is in the key so that a tflint bump starts from a
+      # fresh plugin directory. Without it, bumping tflint_version silently
       # reused the previous version's plugins -- and a cache hit writes no
       # new entry, so the stale set would have persisted indefinitely.
       #
@@ -114,7 +117,7 @@ jobs:
     #
     # Cost: nothing is saved into the default-branch scope any more, so
     # default-branch runs and the first run of each pull request download the
-    # plugins cold (one GitHub release download per plugin, made with the
+    # plugins cold (a few GitHub release requests per plugin, made with the
     # `token` secret); the second run of a pull request restores. A consumer
     # that calls this workflow only on `push` never caches.
     #
