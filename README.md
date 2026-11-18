@@ -100,7 +100,7 @@ sha256sum "vale_${v}_Linux_64-bit.tar.gz"
 
 #### Renovate
 
-The shared preset `renovate-configs/common.json` carries a regex manager for `VALE_VERSION` in `.vale-version`, using the `github-releases` datasource for `vale-cli/vale`. Renovate can't recompute the checksum, so it never merges a Vale bump on its own. A bump pull request needs one manual step:
+The shared preset `renovate-configs/common.json` carries a regex manager for `VALE_VERSION` in `.vale-version`, using the `github-releases` datasource for `vale-cli/vale`. Renovate can't recompute the checksum, so the preset turns automerge off for this bump. A repository's own rules can turn it back on. A bump pull request needs one manual step:
 
 1. Replace the `VALE_SHA256` line with the `Linux_64-bit` line of the new release's checksum file, as the previous section shows.
 2. Where `.tool-versions` pins `vale`, set it to the same version. Renovate doesn't bump that line.

@@ -41,6 +41,9 @@ trap '[[ -z "$work" ]] || rm -rf "$work"' EXIT
 # finish RESULT EXIT_CODE MESSAGE: record the result, report, and stop.
 finish() {
   local result="$1" code="$2" message="$3"
+  # The message can quote an input (the version-file path). Control characters
+  # are masked so it stays one line and can't start a second workflow command.
+  message="${message//[[:cntrl:]]/?}"
   echo "result=${result}" >> "$GITHUB_OUTPUT"
   if [[ "$code" -eq 0 ]]; then
     echo "$message"
@@ -140,8 +143,9 @@ if [[ "$printed" != *"$version"* ]]; then
 fi
 
 # Installed: keep the directory beyond this script and publish it.
+# -T: never move into a directory that already exists under that name.
 install_dir="${RUNNER_TEMP}/setup-vale-${version}-$(basename "$work")"
-mv "$bin" "$install_dir"
+mv -T "$bin" "$install_dir"
 echo "$install_dir" >> "$GITHUB_PATH"
 echo "vale-version=${version}" >> "$GITHUB_OUTPUT"
 finish installed 0 "Installed ${printed} (SHA-256 verified) into ${install_dir}."

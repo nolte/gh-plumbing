@@ -28,9 +28,10 @@ import re
 import sys
 from pathlib import Path
 
-VERSION_LINE = re.compile(r"^VALE_VERSION=(?P<version>\d+\.\d+\.\d+)$")
+# [0-9], not \d: \d also matches non-ASCII digits, which the action refuses.
+VERSION_LINE = re.compile(r"^VALE_VERSION=(?P<version>[0-9]+\.[0-9]+\.[0-9]+)$")
 SHA_LINE = re.compile(
-    r"^VALE_SHA256=(?P<sha>[0-9a-f]{64})  vale_(?P<version>\d+\.\d+\.\d+)_Linux_64-bit\.tar\.gz$"
+    r"^VALE_SHA256=(?P<sha>[0-9a-f]{64})  vale_(?P<version>[0-9]+\.[0-9]+\.[0-9]+)_Linux_64-bit\.tar\.gz$"
 )
 TOOL_LINE = re.compile(r"^vale\s+(?P<version>\S+)")
 
