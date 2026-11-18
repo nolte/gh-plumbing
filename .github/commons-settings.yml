@@ -166,45 +166,32 @@ labels:
 
 # <!--td-commons-settings-labels-end-->
 
-branches:
-  - name: master
-    protection:
-      required_pull_request_reviews: null
-      required_status_checks: null
-      enforce_admins: true
-      # nolte-portfolio-app is the portfolio GitHub App that the cascade
-      # remediation in #330 (Phase 1) wires through every cascade-emitting
-      # reusable workflow. Declaring it as a push restriction actor here
-      # enables the workflow-driven primary path of
-      # spec/project/release-automation/ §Version-bearing file alignment:
-      # `reusable-release-cd-refresh-master.yml` fast-forwards master with
-      # the App token, and the push event cascades to other workflows.
-      #
-      # Consumers that own a personal account (not an organisation) cannot
-      # honour `restrictions.apps`: GitHub limits push restrictions to
-      # organisation-owned repositories. The Settings App passes the field
-      # through unchanged, so the whole PUT for this branch fails with 422
-      # there and this entry applies nothing (#387, #442). Such consumers
-      # declare their own complete `master` entry with `restrictions: null`
-      # if they want master protected.
-      restrictions:
-        users: []
-        teams: []
-        apps:
-          - nolte-portfolio-app
-  # No `develop` entry, on purpose (#442, ADR-005). Each consumer declares
-  # its own complete `develop` entry in its per-repo .github/settings.yml:
-  # `required_pull_request_reviews`, `required_status_checks` (with the
-  # consumer's own contexts), `enforce_admins` and `restrictions: null`.
-  #
-  # A commons entry here can't be right for every consumer:
-  # - `restrictions.apps` fails the whole PUT with 422 on user-owned
-  #   repositories, which is every consumer in this portfolio.
-  # - The current Settings App source merges `_extends` with
-  #   @fastify/deepmerge, which ignores the app's `arrayMerge` option and
-  #   concatenates arrays. A commons `develop` entry would then be PUT
-  #   alongside the consumer's own, in parallel, and the last write wins --
-  #   with `contexts: []` that can wipe the consumer's required checks.
-  #   The hosted App behaves as if it merged by `name` today (#442), which
-  #   hides this; without a commons entry both behaviours give the same
-  #   result, provided the consumer entry is a complete payload.
+# No `branches:` key, on purpose: the commons declare no branch protection
+# at all (#442 and ADR-005 for `develop`, #481 and ADR-006 for `master`).
+# Each consumer declares every protected branch as a complete entry in its
+# own .github/settings.yml -- `required_pull_request_reviews`,
+# `required_status_checks`, `enforce_admins` and `restrictions: null`.
+#
+# A commons branch entry can't be right for every consumer:
+# - `restrictions.apps` (push restrictions) exists only on
+#   organisation-owned repositories. On a user-owned repository, which is
+#   every consumer in this portfolio, GitHub rejects the whole update for
+#   that branch with 422 and the entry applies nothing. The `master` entry
+#   that used to carry `nolte-portfolio-app` here applied nothing on any
+#   current consumer.
+# - `restrictions: null` instead would start enforcing the entry's other
+#   fields, such as `enforce_admins`, on every consumer's branch -- a change
+#   no consumer asked for.
+# - The current Settings App source merges `_extends` with
+#   @fastify/deepmerge, which ignores the app's `arrayMerge` option and
+#   concatenates arrays. A commons entry would then be PUT alongside a
+#   consumer's entry of the same name, in parallel, and the last write wins
+#   -- with `contexts: []` that can wipe the consumer's required checks.
+#   The hosted App behaves as if it merged by `name` today (#442), which
+#   hides this; without a commons entry both behaviours give the same
+#   result, provided the consumer entry is a complete payload.
+#
+# The Settings App only updates the branches a configuration lists
+# (lib/plugins/branches.js); it never removes protection from a branch that
+# is no longer listed. Dropping an entry here therefore removes no live
+# protection from any consumer.

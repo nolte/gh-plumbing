@@ -463,6 +463,47 @@ def test_this_repository_branch_entries_apply_and_do_not_race():
         assert guard.branch_protection_audit.entry_findings(settings, commons, name) == []
 
 
+def push_restricted_commons_entries(commons) -> list[str]:
+    """Names of commons branch entries that carry a push restriction.
+
+    GitHub accepts `restrictions` only on organisation-owned repositories, and
+    every consumer is user-owned, so such an entry fails its whole update with
+    422 and applies nothing -- the `develop` entry until #442, the `master`
+    entry until #481.
+    """
+    if not isinstance(commons, dict):
+        return []
+    return [
+        entry.get("name")
+        for entry in commons.get("branches") or []
+        if isinstance(entry, dict)
+        and (entry.get("protection") or {}).get("restrictions") is not None
+    ]
+
+
+def test_push_restricted_commons_entry_is_detected():
+    commons = {"branches": [
+        {"name": "master", "protection": {
+            "required_pull_request_reviews": None,
+            "required_status_checks": None,
+            "enforce_admins": True,
+            "restrictions": {"users": [], "teams": [], "apps": ["nolte-portfolio-app"]},
+        }},
+        {"name": "develop", "protection": {"restrictions": None}},
+    ]}
+    assert push_restricted_commons_entries(commons) == ["master"]
+    assert push_restricted_commons_entries({}) == []
+    assert push_restricted_commons_entries({"branches": []}) == []
+
+
+def test_commons_carry_no_push_restricted_branch_entry():
+    """#481: a commons branch entry with `restrictions` applies nothing on a
+    user-owned consumer, and every consumer is user-owned (ADR-006)."""
+    path = REPO_ROOT / ".github" / "commons-settings.yml"
+    assert path.is_file()  # not vacuous: a moved file would pass silently
+    assert push_restricted_commons_entries(guard.load_yaml(path)) == []
+
+
 # --- Status producers (#465) ---------------------------------------------
 #
 # A guard that must not be rewritable by a fork runs under
