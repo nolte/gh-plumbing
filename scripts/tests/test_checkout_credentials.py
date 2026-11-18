@@ -185,3 +185,41 @@ def test_this_repository_decides_every_checkout():
     # Guard against a vacuous pass: a moved workflow directory would scan nothing.
     assert any("checkout" in p.read_text(encoding="utf-8") for p in files)
     assert guard.audit(REPO_ROOT) == []
+
+
+# --- its own output (#492) ---------------------------------------------------
+#
+# Job keys, `uses:` values and paths are repository text. Printed raw, a line
+# break in one ends the annotation and starts a command of its own; a parser's
+# traceback quotes the file. Both are escaped or withheld.
+
+
+def test_a_hostile_job_key_stays_inside_its_annotation(tmp_path, capsys):
+    text = workflow().replace("  lint:\n", '  "lint\\n::warning::injected ##[warning]x":\n')
+    write(tmp_path, "w.yaml", text)
+    assert guard.main(["--root", str(tmp_path)]) == 1
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 1
+    assert lines[0].startswith("::error file=.github/workflows/w.yaml,line=8::job lint%0A::warning::injected")
+
+
+def test_an_unparseable_file_is_one_finding_without_its_text(tmp_path, capsys):
+    write(tmp_path, "w.yaml", "jobs: [\n  secret-line ::warning::from-yaml\n")
+    (tmp_path / ".github" / "workflows" / "b.yaml").write_bytes(b"\xff\xfe broken")
+    assert guard.main(["--root", str(tmp_path)]) == 1
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 2
+    assert all(line.startswith("::error file=.github/workflows/") and "could not be read or parsed" in line
+               for line in lines)
+    assert not any("secret-line" in line or "Traceback" in line for line in lines)
+
+
+def test_a_hostile_path_is_escaped_and_the_success_line_neutralised(tmp_path, capsys):
+    write(tmp_path, "x,line=1::y.yaml", workflow())
+    assert guard.main(["--root", str(tmp_path)]) == 1
+    assert capsys.readouterr().out.startswith("::error file=.github/workflows/x%2Cline=1%3A%3Ay.yaml,line=8::")
+    root = tmp_path / "r##[warning]x"
+    root.mkdir()
+    assert guard.main(["--root", str(root)]) == 0
+    out = capsys.readouterr().out
+    assert "##[" not in out and "r#?[warning]x" in out

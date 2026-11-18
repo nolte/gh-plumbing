@@ -80,6 +80,10 @@ jobs:
         CONFIG_HASH: ${{ hashFiles(inputs.config_path) }}
       run: |
         set -euo pipefail
+        # Masks $1 for a log line (#492): control characters become '?' and
+        # '##[' becomes '#?[', so the value can neither end the line nor open
+        # the runner's older '##[command]' syntax in the middle of one.
+        shown() { local v="${1//[[:cntrl:]]/?}"; printf '%s' "${v//\#\#\[/#?[}"; }
         if [ -n "${ImageOS:-}" ]; then
           release="image:${ImageOS}"
         elif [ -r /etc/os-release ]; then
@@ -90,6 +94,15 @@ jobs:
           release="uname:$(uname -s)"
         fi
         key="tflint-plugins|${RUNNER_OS}|${RUNNER_ARCH}|${release}|${TFLINT_VERSION}|${CONFIG_HASH}"
+        # tflint_version is a caller input. A line break in the key would add
+        # an entry to $GITHUB_OUTPUT, and '##[' would open the runner's older
+        # command syntax in the 'Cache key:' log line. No version or cache key
+        # carries either, so they are refused before the key is printed or
+        # written (#492).
+        if [[ "$key" == *[[:cntrl:]]* || "$key" == *'##['* ]]; then
+          echo "::error::Cache key '$(shown "$key")' contains a control character or '##[' (shown as '?' and '#?['); check the tflint_version input."
+          exit 1
+        fi
         echo "Cache key: ${key}"
         echo "key=${key}" >> "${GITHUB_OUTPUT}"
 

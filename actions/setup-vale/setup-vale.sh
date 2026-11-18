@@ -41,12 +41,17 @@ readonly PLATFORM='Linux_64-bit'
 work=""
 trap '[[ -z "$work" ]] || rm -rf "$work"' EXIT
 
+# Masks $1 for a log line (#492): control characters become '?' and '##['
+# becomes '#?[', so the value can neither end the line nor open the runner's
+# older '##[command]' syntax in the middle of one.
+shown() { local v="${1//[[:cntrl:]]/?}"; printf '%s' "${v//\#\#\[/#?[}"; }
+
 # finish RESULT EXIT_CODE MESSAGE: record the result, report, and stop.
 finish() {
   local result="$1" code="$2" message="$3"
-  # The message can quote an input (the version-file path). Control characters
-  # are masked so it stays one line and can't start a second workflow command.
-  message="${message//[[:cntrl:]]/?}"
+  # The message can quote an input (the version-file path). It is masked so
+  # it stays one line and can't start a second workflow command.
+  message=$(shown "$message")
   echo "result=${result}" >> "$GITHUB_OUTPUT"
   if [[ "$code" -eq 0 ]]; then
     echo "$message"

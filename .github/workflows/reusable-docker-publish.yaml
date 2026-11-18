@@ -111,6 +111,22 @@ jobs:
           RAW: ${{ inputs.registry }}/${{ github.repository_owner }}/${{ inputs.image_name }}
         run: |
           set -euo pipefail
+          # Masks $1 for a log line (#492): control characters become '?' and
+          # '##[' becomes '#?[', so the value can neither end the line nor open
+          # the runner's older '##[command]' syntax in the middle of one.
+          shown() { local v="${1//[[:cntrl:]]/?}"; printf '%s' "${v//\#\#\[/#?[}"; }
+          # registry and image_name are caller inputs. A line break in either
+          # would add an entry to $GITHUB_OUTPUT, and '##[' would open the
+          # runner's older command syntax in a log line. No image reference
+          # carries either, so they are refused before the write (#492).
+          # Trailing line breaks are dropped first: an image_name written as a
+          # YAML block scalar ends in one, and the runner always ignored the
+          # blank line it left in $GITHUB_OUTPUT.
+          while [[ "$RAW" == *$'\n' ]]; do RAW="${RAW%$'\n'}"; done
+          if [[ "$RAW" == *[[:cntrl:]]* || "$RAW" == *'##['* ]]; then
+            echo "::error::Image reference '$(shown "$RAW")' contains a control character or '##[' (shown as '?' and '#?['); check the registry and image_name inputs."
+            exit 1
+          fi
           printf 'name=%s\n' "${RAW,,}" >> "$GITHUB_OUTPUT"
 
       - name: Extract metadata

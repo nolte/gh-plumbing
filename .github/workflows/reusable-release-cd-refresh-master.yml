@@ -119,6 +119,10 @@ jobs:
           TARGET: ${{ inputs.target_branch }}
         run: |
           set -euo pipefail
+          # Masks $1 for a log line (#492): control characters become '?' and
+          # '##[' becomes '#?[', so the value can neither end the line nor open
+          # the runner's older '##[command]' syntax in the middle of one.
+          shown() { local v="${1//[[:cntrl:]]/?}"; printf '%s' "${v//\#\#\[/#?[}"; }
 
           # An unreadable endpoint must not read as "unrestricted": that is the
           # mistake the branch-protection audit made (#421). Unknown means the
@@ -165,7 +169,10 @@ jobs:
             echo "mode=$mode"
             echo "reason=$reason"
           } >> "$GITHUB_OUTPUT"
-          echo "Strategy for '${TARGET}': ${mode} -- ${reason}"
+          # target_branch and from_branch are caller input. This job's own log
+          # messages print them through shown() (#492); the step summaries
+          # below and git's own output print them as they are.
+          echo "Strategy for '$(shown "$TARGET")': ${mode} -- ${reason}"
           echo "  classic protection readable: $([ -n "$classic" ] && echo yes || echo 'no (absent or unreadable)')"
           echo "  ruleset rules: ${rule_types:-(none)}"
 
@@ -179,6 +186,10 @@ jobs:
           MODE: ${{ steps.strategy.outputs.mode }}
         run: |
           set -euo pipefail
+          # Masks $1 for a log line (#492): control characters become '?' and
+          # '##[' becomes '#?[', so the value can neither end the line nor open
+          # the runner's older '##[command]' syntax in the middle of one.
+          shown() { local v="${1//[[:cntrl:]]/?}"; printf '%s' "${v//\#\#\[/#?[}"; }
 
           # Fail loudly rather than defaulting. An empty ref is what made the
           # old behaviour wrong-but-green for every release so far.
@@ -197,18 +208,20 @@ jobs:
             git rev-parse --verify --quiet "refs/remotes/origin/${FROM_REF}^{commit}" ||
             git rev-parse --verify --quiet "${FROM_REF}^{commit}"
           )" || {
-            echo "::error::Could not resolve '${FROM_REF}' to a commit." >&2
+            # from_branch is caller input or a release tag name; masked like
+            # the target (#492).
+            echo "::error::Could not resolve '$(shown "$FROM_REF")' to a commit." >&2
             exit 1
           }
 
           EXPECTED="$(git ls-remote origin "refs/heads/${TARGET}" | awk '{print $1}')"
 
           if [ -z "${EXPECTED}" ]; then
-            echo "Target branch '${TARGET}' does not exist yet; creating it."
+            echo "Target branch '$(shown "$TARGET")' does not exist yet; creating it."
             git push origin "${SOURCE_SHA}:refs/heads/${TARGET}"
             action="created"
           elif [ "${EXPECTED}" = "${SOURCE_SHA}" ]; then
-            echo "Target branch '${TARGET}' already points at ${SOURCE_SHA}; nothing to do."
+            echo "Target branch '$(shown "$TARGET")' already points at ${SOURCE_SHA}; nothing to do."
             action="already current"
           elif [ "${MODE}" = "merge" ]; then
             # The /merges API, the mechanism that worked before #404 and still
@@ -217,7 +230,9 @@ jobs:
             if ! out=$(gh api "repos/${GITHUB_REPOSITORY}/merges" \
                          -f base="${TARGET}" -f head="${SOURCE_SHA}" \
                          -f commit_message="chore(release): refresh ${TARGET} to ${FROM_REF}" 2>&1); then
-              echo "::error::Merging ${FROM_REF} into '${TARGET}' failed even though the target reports that merge commits are permitted. The protection may have changed since the check, or the token may lack write access. Response: ${out}" >&2
+              # The response is API text and the refs are caller input; all
+              # three are masked (#492).
+              echo "::error::Merging $(shown "$FROM_REF") into '$(shown "$TARGET")' failed even though the target reports that merge commits are permitted. The protection may have changed since the check, or the token may lack write access. Response: $(shown "$out")" >&2
               exit 1
             fi
             action="merged"
@@ -256,8 +271,14 @@ jobs:
           REASON: ${{ steps.strategy.outputs.reason }}
         run: |
           set -euo pipefail
+          # Masks $1 for a log line (#492): control characters become '?' and
+          # '##[' becomes '#?[', so the value can neither end the line nor open
+          # the runner's older '##[command]' syntax in the middle of one.
+          shown() { local v="${1//[[:cntrl:]]/?}"; printf '%s' "${v//\#\#\[/#?[}"; }
           msg="Cannot refresh '${TARGET}' to ${FROM_REF}: ${REASON}. Grant the release App a bypass actor on the target's ruleset, relax the rule, or stop refreshing this branch and point consumers at the release tag instead (issue #414, ADR-001)."
-          echo "::error::${msg}" >&2
+          # msg quotes the caller's target_branch and from_branch; masked so
+          # neither can start a workflow command on a new line (#492).
+          echo "::error::$(shown "$msg")" >&2
           {
             echo "### Presentation branch NOT refreshed"
             echo
