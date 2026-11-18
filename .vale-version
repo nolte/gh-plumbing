@@ -1,0 +1,10 @@
+# The one committed source for the Vale binary CI installs (#488):
+# actions/setup-vale reads it, and reusable-release-publish.yml reads this
+# repository's copy at its own pinned commit. Same format as
+# nolte/claude-shared's .vale-version (nolte/claude-shared#768).
+#
+# VALE_SHA256 is the Linux_64-bit line of the release's
+# vale_<version>_checksums.txt, copied verbatim. The action refuses a checksum
+# line that names another version than VALE_VERSION.
+VALE_VERSION=3.15.2
+VALE_SHA256=fc72e64454d6bd7af91905d4faebbf411bae3eec17bb572f4101311212bc0d9e  vale_3.15.2_Linux_64-bit.tar.gz

@@ -1,0 +1,153 @@
+name: Test Setup Vale
+
+# Self-test for actions/setup-vale (#488). The action is used by local path, so
+# a pull request that changes it is tested with its own copy.
+#
+# Every job is green when the action behaved as specified -- including the
+# negative ones. A refusal job runs the action with `continue-on-error: true`
+# and then asserts that the step failed, with which `result`, and that no
+# `vale` reached PATH. It turns red only when the action accepted what it must
+# refuse. A red-by-design run would block the develop-health pre-flight the
+# way test-release-archive.yml's negative scenarios do.
+#
+# The `install` job also guards a Renovate bump of .vale-version: Renovate
+# changes VALE_VERSION but can't recompute VALE_SHA256, so the action refuses
+# the stale checksum line and the job fails until the line is replaced.
+
+on:
+  pull_request:
+    paths:
+      - actions/setup-vale/**
+      - .github/workflows/test-setup-vale.yml
+      - .vale-version
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-setup-vale-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  install:
+    name: Install from .vale-version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install Vale
+        id: vale
+        uses: ./actions/setup-vale
+
+      - name: Assert the pinned version is on PATH
+        env:
+          RESULT: ${{ steps.vale.outputs.result }}
+          INSTALLED: ${{ steps.vale.outputs.vale-version }}
+        run: |
+          set -euo pipefail
+          pinned=$(sed -n 's/^VALE_VERSION=//p' .vale-version)
+          [[ "$RESULT" == "installed" ]] || { echo "::error::result is '$RESULT', expected 'installed'."; exit 1; }
+          [[ "$INSTALLED" == "$pinned" ]] || { echo "::error::vale-version output is '$INSTALLED', .vale-version pins '$pinned'."; exit 1; }
+          where=$(command -v vale)
+          [[ "$where" == "$RUNNER_TEMP"/* ]] || { echo "::error::vale resolves to '$where', not to the action's directory under RUNNER_TEMP."; exit 1; }
+          printed=$(vale --version)
+          [[ "$printed" == "vale version $pinned" ]] || { echo "::error::vale --version printed '$printed'."; exit 1; }
+          echo "OK: $printed from $where"
+
+  refuse-wrong-checksum:
+    name: Refuse a wrong checksum
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Read the pinned version
+        id: pin
+        run: echo "version=$(sed -n 's/^VALE_VERSION=//p' .vale-version)" >> "$GITHUB_OUTPUT"
+
+      # The real asset is downloaded; only the expected checksum is wrong.
+      - name: Install Vale with a wrong checksum
+        id: vale
+        continue-on-error: true
+        uses: ./actions/setup-vale
+        with:
+          version: ${{ steps.pin.outputs.version }}
+          sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+
+      - name: Assert the action refused
+        env:
+          OUTCOME: ${{ steps.vale.outcome }}
+          RESULT: ${{ steps.vale.outputs.result }}
+          EXPECTED: checksum-mismatch
+        run: bash actions/setup-vale/test/assert-refused.sh
+
+  refuse-other-version-line:
+    name: Refuse a checksum line for another version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      # The pinned file with VALE_VERSION moved one patch release ahead and
+      # the checksum line left alone -- the shape of a Renovate bump.
+      - name: Write a version file whose checksum line names another version
+        run: |
+          set -euo pipefail
+          pinned=$(sed -n 's/^VALE_VERSION=//p' .vale-version)
+          bumped="${pinned%.*}.$(( ${pinned##*.} + 1 ))"
+          sed "s/^VALE_VERSION=.*/VALE_VERSION=${bumped}/" .vale-version > "$RUNNER_TEMP/bumped.vale-version"
+          cat "$RUNNER_TEMP/bumped.vale-version"
+
+      - name: Install Vale from it
+        id: vale
+        continue-on-error: true
+        uses: ./actions/setup-vale
+        with:
+          version-file: ${{ runner.temp }}/bumped.vale-version
+
+      - name: Assert the action refused
+        env:
+          OUTCOME: ${{ steps.vale.outcome }}
+          RESULT: ${{ steps.vale.outputs.result }}
+          EXPECTED: invalid-pin
+        run: bash actions/setup-vale/test/assert-refused.sh
+
+  refuse-malformed-version:
+    name: Refuse a malformed version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install Vale with a version carrying shell and path characters
+        id: vale
+        continue-on-error: true
+        uses: ./actions/setup-vale
+        with:
+          version: "3.15.2/../../x;id"
+          sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+
+      - name: Assert the action refused
+        env:
+          OUTCOME: ${{ steps.vale.outcome }}
+          RESULT: ${{ steps.vale.outputs.result }}
+          EXPECTED: invalid-pin
+        run: bash actions/setup-vale/test/assert-refused.sh

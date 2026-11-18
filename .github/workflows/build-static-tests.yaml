@@ -127,13 +127,18 @@ jobs:
   # context (`required-check-triggers-tests / Python Coverage`), so the guard
   # blocks a merge without a new context in settings.yml. The second `--cov`
   # keeps a separate coverage line per script.
+  #
+  # tests/test_setup_vale.py rides along for the same reason (#488): it drives
+  # actions/setup-vale/setup-vale.sh, the shell that downloads and runs a
+  # binary, through its refusals offline. Coverage can't measure shell, so it
+  # adds no coverage line, only the verdict.
   required-check-triggers-tests:
     uses: ./.github/workflows/reusable-python-coverage.yaml
     with:
       working-directory: scripts
       install-command: pip install --require-hashes --no-deps -r requirements-audit.txt && pip install pytest==9.1.1 pytest-cov==7.1.0
       coverage-source: required_check_triggers
-      pytest-args: --cov=checkout_credentials tests/test_required_check_triggers.py tests/test_checkout_credentials.py
+      pytest-args: --cov=checkout_credentials tests/test_required_check_triggers.py tests/test_checkout_credentials.py tests/test_setup_vale.py
   # The check itself, not its tests. It runs on the pull request so a page
   # added in one language only, or a reference to a workflow that no longer
   # exists, fails here rather than reaching a release.
