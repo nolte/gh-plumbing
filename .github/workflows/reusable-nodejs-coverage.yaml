@@ -83,9 +83,12 @@ jobs:
         run: |
           node <<'NODE' >> "$GITHUB_STEP_SUMMARY"
           const fs = require('fs');
+          // The path is a caller input; control characters are masked before
+          // the message prints it, so it can't start a workflow command (#492).
+          const shown = (value) => String(value).replace(/[\u0000-\u001f\u007f-\u009f]/g, '?');
           const path = process.env.SUMMARY_PATH;
           if (!fs.existsSync(path)) {
-            console.error(`::error::Coverage summary not found at ${path}`);
+            console.error(`::error::Coverage summary not found at ${shown(path)}`);
             process.exit(1);
           }
           const total = JSON.parse(fs.readFileSync(path, 'utf8')).total;
@@ -105,12 +108,14 @@ jobs:
         run: |
           node <<'NODE'
           const fs = require('fs');
+          // pct is read from a file the test run wrote; masked as above (#492).
+          const shown = (value) => String(value).replace(/[\u0000-\u001f\u007f-\u009f]/g, '?');
           const total = JSON.parse(fs.readFileSync(process.env.SUMMARY_PATH, 'utf8')).total;
           const pct = total.lines.pct;
           const threshold = Number(process.env.FAIL_UNDER);
           if (pct < threshold) {
-            console.error(`::error::Line coverage ${pct}% is below the required ${threshold}%`);
+            console.error(`::error::Line coverage ${shown(pct)}% is below the required ${threshold}%`);
             process.exit(1);
           }
-          console.log(`Line coverage ${pct}% meets the required ${threshold}%.`);
+          console.log(`Line coverage ${shown(pct)}% meets the required ${threshold}%.`);
           NODE

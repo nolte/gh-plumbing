@@ -1,0 +1,602 @@
+#!/usr/bin/env python3
+"""Refuse a workflow command or env-file write that carries an unchecked value.
+
+The runner reads every line a step prints as a possible workflow command. A
+value that a caller (`inputs.*`), a draft or API response, or repository
+content controls can carry a line break followed by `::warning::...` and so
+start a command of its own; written as `name=$value` to `$GITHUB_OUTPUT`, the
+same line break adds an output entry. #491 masked one such line in
+reusable-release-publish.yml; #492 found the rest of the class in it and in its
+siblings. Fixing those lines fixes them once. This script refuses the class.
+
+Predicate: EVERY line of a `run:` body that emits a workflow command (it
+carries `::<command>::`, or `::<command> <params>::`) or writes to
+`$GITHUB_OUTPUT`, `$GITHUB_ENV`, `$GITHUB_STATE` or `$GITHUB_PATH` -- a
+`{ ...; } >> "$GITHUB_OUTPUT"` group counts line by line -- and interpolates a
+value. Each interpolated name must be one of:
+
+  * masked at the print: `${name//[[:cntrl:]]/?}` in shell, `shown(...)` in a
+    Python or Node heredoc that defines `shown`;
+  * assigned, last before the print, from such a masked expansion;
+  * refused earlier in the same body: a preceding
+    `if [[ "$name" == *[[:cntrl:]]* ]]; then ... exit ...; fi` block, and no
+    assignment to it since;
+  * constant by construction: every assignment in the body, or the step's
+    `env:` value, is a literal -- or a string built only from literals and
+    names that pass this list themselves (a message assembled from a refused
+    tag); a command substitution or a `read`/`for`/`mapfile` target never is;
+  * numeric by construction: `${#name}`, `${#name[@]}`, `len(...)`;
+  * on ALLOWED below, whose every entry states why the value is constrained.
+
+A name with no assignment in the body and no `env:` entry -- a runner
+variable, a positional parameter -- is a finding unless ALLOWED names it. An
+ALLOWED entry that no line needs is reported too, so the list can't keep a
+reason after its check is gone.
+
+Selector: every `run:` step of every `.github/workflows/reusable-*.y*ml` and
+of every composite action under `actions/` (its `action.y*ml` and the shell
+scripts beside it, test fixtures excluded), found by walking the files, not
+from a list -- a message added to any of them is checked without anyone
+opting it in.
+
+Not covered: lines that print a value without carrying a workflow command
+(plain `echo "$x"`, a `jq` listing to stderr). The runner reads those too --
+the payload can bring its own `::` -- so they are masked where #492 found them,
+but this guard does not select them: almost every log line in these files would
+match, and an allow-list that size would stop meaning anything. Also not
+covered: `${{ ... }}` expressions in a `run:` body (a neighbouring class),
+`$GITHUB_STEP_SUMMARY` (Markdown, not a command channel), the non-reusable
+workflows, Python scripts a step runs from a file, and the output of a command
+substitution `$(...)` -- its variables are checked, what the command prints is
+not (#492 found `du` echoing a file name that way, on a plain log line).
+
+Reads only. Exits non-zero on any finding.
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+import yaml
+
+# `::error::`, `::error title=x::`, `::add-mask::`, `::<token>::` (resume).
+COMMAND = re.compile(r"::[A-Za-z0-9][A-Za-z0-9_-]*(?:\s[^:\n]*)?::")
+ENV_FILE = re.compile(r"""(?:>>?|\btee\b(?:\s+-a)?)\s*["']?\$\{?GITHUB_(?:OUTPUT|ENV|STATE|PATH)\b\}?["']?""")
+GROUP_WRITE = re.compile(r"""^\s*\}\s*""" + ENV_FILE.pattern)
+HEREDOC = re.compile(r"""(?<!<)<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1""")
+# `$name`, `${name...}`, `$1`; `${{` is an expression, `${#` a length.
+SHELL_REF = re.compile(r"\$(?:\{(?!\{)(#?)([A-Za-z_][A-Za-z0-9_]*|[0-9])([^}]*)\}|([A-Za-z_][A-Za-z0-9_]*|[0-9]))")
+SHELL_MASK = re.compile(r"^(?:\[[@*]\])?//\[\[:cntrl:\]\]/[^}]*$")
+MASKED_ASSIGNMENT = re.compile(r"""^"?\$\{[A-Za-z_][A-Za-z0-9_]*//\[\[:cntrl:\]\]/[^}]*\}"?$""")
+REFUSAL = re.compile(r"""^\s*if\s+\[\[\s+"?\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?"?\s+==\s+\*\[\[:cntrl:\]\]\*\s+\]\];\s*then\s*$""")
+STATEMENT_START = r"(?:^|[;&|]\s*|\b(?:then|do|else|if|!)\s+)"
+ASSIGNMENT = re.compile(
+    STATEMENT_START
+    + r"""(?:(?:local|readonly|export|declare)(?:\s+-\w+)*\s+)?([A-Za-z_][A-Za-z0-9_]*)=("(?:[^"\\]|\\.)*"|'[^']*'|\$\((?:[^()]|\([^()]*\))*\)|[^\s;]*)"""
+)
+DECLARE_LIST = re.compile(r"""^\s*(?:local|readonly|declare|export)\b""")
+DECLARED = re.compile(r"""\s([A-Za-z_][A-Za-z0-9_]*)=("(?:[^"\\]|\\.)*"|'[^']*'|[^\s;]*)""")
+LOOP_OR_READ = re.compile(r"""\b(?:for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\b|read\s+(?:-[A-Za-z]+\s+(?:''\s+)?)*([A-Za-z_][A-Za-z0-9_]*)|mapfile\s+(?:-\w+\s+)*([A-Za-z_][A-Za-z0-9_]*))""")
+PY_SHOWN = re.compile(r"^\s*def shown\(")
+JS_SHOWN = re.compile(r"^\s*(?:const|function)\s+shown\b")
+
+
+@dataclass(frozen=True)
+class Allowed:
+    """A value the guard cannot see is constrained, and why it is.
+
+    `step` is the step's `name:` (None: every step of the file). `env` limits
+    the entry to steps whose `env:` maps the name to exactly that expression.
+    `after` limits it to lines below the `if` block whose `if` line contains
+    that text -- the check that constrains the value. `source` names the
+    (step, line) of the file that constrains the value at its origin, another
+    step that writes the output this one reads. Either makes the entry stale
+    when its line is gone, so the reason can't outlive the check.
+    """
+
+    path: str
+    name: str
+    reason: str
+    step: str | None = None
+    env: str | None = None
+    after: str | None = None
+    source: tuple[str, str] | None = None
+
+
+PUBLISH = ".github/workflows/reusable-release-publish.yml"
+ARCHIVE = ".github/workflows/reusable-release-archive.yml"
+DRAFTER = ".github/workflows/reusable-release-drafter.yml"
+TAG_REFUSAL = 'if [[ "$TAG" == *[[:cntrl:]]* ]]; then'
+SHA_CHECK = 'if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then'
+DRAFT_TAG = "${{ steps.draft.outputs.tag }}"
+TARGET_SHA = "${{ steps.align.outputs.target_sha || steps.draft.outputs.target_sha }}"
+
+ALLOWED: tuple[Allowed, ...] = (
+    # reusable-release-publish.yml
+    Allowed(PUBLISH, "TAG", env=DRAFT_TAG, source=("Resolve draft", TAG_REFUSAL),
+            reason="Resolve draft refuses a tag with a control character before it writes this output (#492)"),
+    Allowed(PUBLISH, "tag", env=DRAFT_TAG, source=("Resolve draft", TAG_REFUSAL),
+            reason="Python reads TAG, the same refused output (#492)"),
+    Allowed(PUBLISH, "expected_prefix", step="Verify version-bearing-file alignment", env=DRAFT_TAG,
+            source=("Resolve draft", TAG_REFUSAL), reason="a literal prefix plus the refused tag"),
+    Allowed(PUBLISH, "TARGET_SHA", env=TARGET_SHA, source=("Resolve draft", SHA_CHECK),
+            reason="the draft's target_sha passes ^[0-9a-f]{40}$ before it is written; align's is `git rev-parse HEAD`"),
+    Allowed(PUBLISH, "sha", step="Verify version-bearing-file alignment", env=TARGET_SHA,
+            source=("Resolve draft", SHA_CHECK), reason="Python reads TARGET_SHA, constrained as above"),
+    Allowed(PUBLISH, "DRAFT_TARGET", env="${{ steps.draft.outputs.target_sha }}", source=("Resolve draft", SHA_CHECK),
+            reason="passes ^[0-9a-f]{40}$ in Resolve draft before it is written"),
+    Allowed(PUBLISH, "expected", step="Check the draft target against the expected commit",
+            after='if [[ ! "$expected" =~ ^[0-9a-f]{40}$ ]]; then', reason="refused above unless it is a 40-hex SHA"),
+    Allowed(PUBLISH, "expected", step="Publish (flip draft=false)",
+            source=("Check the draft target against the expected commit", 'if [[ ! "$expected" =~ ^[0-9a-f]{40}$ ]]; then'),
+            reason="the same input, lowercased; the check step refuses it unless 40-hex and runs earlier in this job "
+                   "whenever it is set"),
+    Allowed(PUBLISH, "actual", step="Publish (flip draft=false)",
+            reason="resolve_commit output: a lowercased 40-hex string or `git rev-parse --verify` output"),
+    Allowed(PUBLISH, "total", step="Resolve draft", reason="`jq 'length'`, a number"),
+    Allowed(PUBLISH, "sha", step="Resolve draft",
+            reason="resolve_commit output, confirmed a commit by `git cat-file -e`; checked against "
+                   "^[0-9a-f]{40}$ before the output write"),
+    Allowed(PUBLISH, "new_sha", step="Align version-bearing files (primary path)", reason="`git rev-parse HEAD`"),
+    Allowed(PUBLISH, "published_at", step="Publish (flip draft=false)", reason="`date -Is`"),
+    Allowed(PUBLISH, "is_draft", step="Post-publish sanity", reason="`--jq .isDraft`, a JSON boolean"),
+    Allowed(PUBLISH, "count", step="Detect project type and load version-bearing files",
+            reason="`jq '.entries | length'`, a number"),
+    Allowed(PUBLISH, "source", step="Detect project type and load version-bearing files",
+            reason="`.source` of vbf.json, which the Python above sets to one of five literals"),
+    Allowed(PUBLISH, "VALE_RESULT", step="Check the release notes with Vale", env="${{ steps.vale.outputs.result }}",
+            reason="actions/setup-vale writes one of its fixed result words"),
+    # reusable-release-archive.yml
+    Allowed(ARCHIVE, "TAG", env="${{ needs.resolve.outputs.tag }}", source=("Resolve draft", TAG_REFUSAL),
+            reason="the resolve job refuses a tag with a control character before it writes this output (#492)"),
+    Allowed(ARCHIVE, "sha", step="Resolve draft", after='if [[ "$sha" != "$GITHUB_SHA" ]]; then',
+            reason="equal to GITHUB_SHA below this check"),
+    Allowed(ARCHIVE, "total", step="Resolve draft", reason="`jq 'length'`, a number"),
+    Allowed(ARCHIVE, "artifact", step="Resolve draft", reason="a literal prefix plus a kernel UUID"),
+    Allowed(ARCHIVE, "BUILT_SHA", env="${{ needs.resolve.outputs.target_sha }}",
+            reason="equal to GITHUB_SHA, checked in the resolve job before it is written"),
+    Allowed(ARCHIVE, "delimiter", step="Attach to the draft", reason="a literal prefix plus a kernel UUID"),
+    Allowed(ARCHIVE, "files", step="Attach to the draft",
+            reason="asset names the build job refused unless they match ^[A-Za-z0-9_+-][A-Za-z0-9._+-]*$"),
+    Allowed(ARCHIVE, "dupes", step="Match assets", after='if [[ -n "$bad" ]]; then',
+            reason="names that passed the ^[A-Za-z0-9_+-][A-Za-z0-9._+-]*$ check above"),
+    # reusable-release-drafter.yml
+    Allowed(DRAFTER, "CAPTURED_TAG", env="${{ steps.capture.outputs.captured_tag }}",
+            source=("Capture project-context block", 'if [[ "$captured_tag" == *[[:cntrl:]]* ]]; then'),
+            reason="the capture step skips a tag with a control character before it writes this output (#492)"),
+    Allowed(DRAFTER, "new_tag", step="Restore project-context block",
+            after='if [[ "$new_tag" != "$CAPTURED_TAG" ]]; then', reason="equal to CAPTURED_TAG below this check"),
+    # reusable-nodejs-coverage.yaml
+    Allowed(".github/workflows/reusable-nodejs-coverage.yaml", "threshold", step="Enforce coverage threshold",
+            reason="`Number(process.env.FAIL_UNDER)`, a number"),
+    # reusable-release-drafter-autolabel.yml
+    Allowed(".github/workflows/reusable-release-drafter-autolabel.yml", "label",
+            reason="iterates the literal array type_labels"),
+    Allowed(".github/workflows/reusable-release-drafter-autolabel.yml", "PR_NUMBER",
+            after='if [[ ! "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then', reason="refused unless numeric"),
+    # reusable-fork-guard.yaml
+    Allowed(".github/workflows/reusable-fork-guard.yaml", "EVENT_NAME", env="${{ github.event_name }}",
+            reason="an event name GitHub sets"),
+    Allowed(".github/workflows/reusable-fork-guard.yaml", "2",
+            reason="finish()'s description: literals, plus counts that passed ^[0-9]+$ or are (( )) arithmetic"),
+    Allowed(".github/workflows/reusable-fork-guard.yaml", "resume", reason="`openssl rand -hex 16`"),
+    # reusable-pr-lint.yaml
+    Allowed(".github/workflows/reusable-pr-lint.yaml", "count", reason="`wc -l`, a number"),
+    Allowed(".github/workflows/reusable-pr-lint.yaml", "n", after='if ! [[ "${n}" =~ ^[0-9]{1,9}$ ]]; then',
+            reason="refused unless 1-9 digits"),
+    Allowed(".github/workflows/reusable-pr-lint.yaml", "unreadable",
+            reason="built only from n, refused unless 1-9 digits"),
+    # reusable-pre-commit.yaml
+    Allowed(".github/workflows/reusable-pre-commit.yaml", "key", step="Compute the hook-environment cache key",
+            reason="no caller input: os-release, the installed pre-commit version, setup-python's path, a hashFiles digest"),
+    # actions/setup-vale
+    Allowed("actions/setup-vale/setup-vale.sh", "result", reason="finish()'s first argument, a literal result word at every call site"),
+    Allowed("actions/setup-vale/setup-vale.sh", "version", reason="refused unless it matches VERSION_RE, ^[0-9]+\\.[0-9]+\\.[0-9]+$"),
+    Allowed("actions/setup-vale/setup-vale.sh", "install_dir",
+            reason="RUNNER_TEMP plus the validated version plus a mktemp basename"),
+    # Set by the runner, the same for every caller.
+    *(Allowed("*", name, reason="set by the runner") for name in (
+        "GITHUB_REPOSITORY", "GITHUB_SHA", "GITHUB_RUN_ID", "GITHUB_SERVER_URL",
+        "RUNNER_OS", "RUNNER_ARCH", "RUNNER_TEMP", "GITHUB_ACTION_PATH",
+    )),
+)
+
+
+@dataclass
+class Body:
+    path: str
+    step: str
+    env: dict[str, str]
+    lines: list[str]
+    first_line: int
+
+
+def finding(path: str, line: int, step: str, message: str) -> dict:
+    return {"path": path, "line": line, "step": step, "message": message}
+
+
+# --- reading the files -------------------------------------------------------
+
+
+def mapping_get(node: yaml.Node, key: str) -> yaml.Node | None:
+    if not isinstance(node, yaml.MappingNode):
+        return None
+    for key_node, value_node in node.value:
+        if isinstance(key_node, yaml.ScalarNode) and key_node.value == key:
+            return value_node
+    return None
+
+
+def scalar(node: yaml.Node | None) -> str | None:
+    return node.value if isinstance(node, yaml.ScalarNode) else None
+
+
+def step_bodies(rel: str, text: str) -> list[Body]:
+    root = yaml.compose(text)
+    if root is None:
+        return []
+    step_lists = []
+    jobs = mapping_get(root, "jobs")
+    if isinstance(jobs, yaml.MappingNode):
+        step_lists += [mapping_get(job, "steps") for _, job in jobs.value]
+    runs = mapping_get(root, "runs")
+    if runs is not None:
+        step_lists.append(mapping_get(runs, "steps"))
+    bodies = []
+    for steps in step_lists:
+        if not isinstance(steps, yaml.SequenceNode):
+            continue
+        for index, step in enumerate(steps.value):
+            run = mapping_get(step, "run")
+            if scalar(run) is None:
+                continue
+            env_node = mapping_get(step, "env")
+            env = {}
+            if isinstance(env_node, yaml.MappingNode):
+                env = {k.value: (scalar(v) or "") for k, v in env_node.value if isinstance(k, yaml.ScalarNode)}
+            name = scalar(mapping_get(step, "name")) or scalar(mapping_get(step, "id")) or f"step {index + 1}"
+            # A block scalar's content starts on the line after `run: |`.
+            first = run.start_mark.line + (2 if run.style in ("|", ">") else 1)
+            bodies.append(Body(rel, name, env, run.value.split("\n"), first))
+    return bodies
+
+
+def candidate_files(root: Path) -> list[Path]:
+    files = []
+    workflows = root / ".github" / "workflows"
+    if workflows.is_dir():
+        files += [p for p in workflows.glob("reusable-*") if p.suffix in (".yml", ".yaml")]
+    actions = root / "actions"
+    if actions.is_dir():
+        files += [p for p in actions.rglob("action.y*ml") if p.suffix in (".yml", ".yaml")]
+        # A composite action keeps its shell beside action.yml; that is where
+        # its messages are.
+        files += [p for p in actions.rglob("*.sh") if "test" not in p.relative_to(actions).parts]
+    return sorted(files)
+
+
+def bodies_of(root: Path, path: Path) -> list[Body]:
+    rel = path.relative_to(root).as_posix()
+    text = path.read_text(encoding="utf-8")
+    if path.suffix == ".sh":
+        return [Body(rel, path.name, {}, text.split("\n"), 1)]
+    return step_bodies(rel, text)
+
+
+# --- one run body --------------------------------------------------------------
+
+
+@dataclass
+class Logical:
+    """A statement-ish unit: physical lines joined at a trailing backslash."""
+
+    index: int  # first physical line, 0-based within the body
+    text: str
+    lang: str  # sh, py, js, data
+
+
+def logical_lines(lines: list[str]) -> list[Logical]:
+    out: list[Logical] = []
+    i = 0
+    heredoc: tuple[str, str] | None = None
+    while i < len(lines):
+        if heredoc is not None:
+            delimiter, lang = heredoc
+            if lines[i].strip() == delimiter:
+                heredoc = None
+            else:
+                out.append(Logical(i, lines[i], lang))
+            i += 1
+            continue
+        start, text = i, lines[i]
+        while text.rstrip().endswith("\\") and i + 1 < len(lines) and not text.lstrip().startswith("#"):
+            i += 1
+            text = text.rstrip()[:-1] + " " + lines[i].strip()
+        out.append(Logical(start, text, "sh"))
+        match = HEREDOC.search(text)
+        if match and not text.lstrip().startswith("#"):
+            command = text[:match.start()]
+            if re.search(r"\bpython[0-9.]*\b", command):
+                lang = "py"
+            elif re.search(r"\bnode\b", command):
+                lang = "js"
+            else:
+                # Quoted delimiter: text the shell leaves alone. Unquoted: the
+                # shell expands it, so it reads like any other shell line.
+                lang = "data" if match.group(1) else "sh"
+            heredoc = (match.group(2), lang)
+        i += 1
+    return out
+
+
+def block_end(lines: list[Logical], at: int) -> int:
+    """Index of the `fi` closing the `if` at lines[at], or `at` itself."""
+    if not re.match(r"^\s*if\b", lines[at].text):
+        return at
+    indent = len(lines[at].text) - len(lines[at].text.lstrip())
+    for j in range(at + 1, len(lines)):
+        text = lines[j].text
+        if text.strip() == "fi" and len(text) - len(text.lstrip()) == indent:
+            return j
+    return at
+
+
+def assignments(unit: Logical) -> list[tuple[str, str | None]]:
+    """(name, right-hand side or None when unknown) assigned on a shell line."""
+    if unit.lang != "sh" or unit.text.lstrip().startswith("#"):
+        return []
+    found: list[tuple[str, str | None]] = []
+    text = unit.text.strip()
+    if DECLARE_LIST.match(text):
+        found += [(m.group(1), m.group(2)) for m in DECLARED.finditer(" " + text)]
+    else:
+        found += [(m.group(1), m.group(2)) for m in ASSIGNMENT.finditer(text)]
+    for m in LOOP_OR_READ.finditer(text):
+        name = m.group(1) or m.group(2) or m.group(3)
+        found.append((name, None))
+    return found
+
+
+def is_literal(rhs: str | None) -> bool:
+    if rhs is None:
+        return False
+    return "$" not in rhs and not re.search(r"(?<!\\)`", rhs)
+
+
+def sink_units(units: list[Logical]) -> set[int]:
+    """Indices of units that emit a command or write an env file."""
+    sinks = set()
+    for k, unit in enumerate(units):
+        if unit.lang == "data" or unit.text.lstrip().startswith(("#", "//")):
+            continue
+        if COMMAND.search(unit.text) or (unit.lang == "sh" and ENV_FILE.search(unit.text)):
+            sinks.add(k)
+        if unit.lang == "sh" and GROUP_WRITE.match(unit.text):
+            depth = 0
+            for j in range(k, -1, -1):
+                stripped = units[j].text.strip()
+                if stripped.startswith("}"):
+                    depth += 1
+                if stripped == "{":
+                    depth -= 1
+                    if depth == 0:
+                        sinks.update(range(j + 1, k))
+                        break
+    return sinks
+
+
+def shell_refs(text: str) -> list[tuple[str, bool, bool]]:
+    """(name, masked, numeric) for every expansion outside single quotes."""
+    text = ENV_FILE.sub("", text)
+    refs = []
+    quote = None
+    i = 0
+    while i < len(text):
+        c = text[i]
+        if c == "\\" and quote != "'":
+            i += 2
+            continue
+        if c == "'" and quote is None:
+            end = text.find("'", i + 1)
+            i = len(text) if end < 0 else end + 1
+            continue
+        if c == '"':
+            quote = None if quote == '"' else '"'
+        if c == "$":
+            m = SHELL_REF.match(text, i)
+            if m:
+                if m.group(2):
+                    refs.append((m.group(2), bool(SHELL_MASK.match(m.group(3))), bool(m.group(1))))
+                else:
+                    refs.append((m.group(4), False, False))
+                i = m.end()
+                continue
+        i += 1
+    return refs
+
+
+def template_exprs(text: str, lang: str) -> list[str]:
+    """Interpolated expressions of a Python f-string or a JS template literal."""
+    exprs = []
+    opener = "${" if lang == "js" else "{"
+    if lang == "py" and not re.search(r"\bf['\"]", text):
+        return []
+    i = 0
+    while True:
+        i = text.find(opener, i)
+        if i < 0:
+            return exprs
+        if lang == "py" and text.startswith("{{", i):
+            i += 2
+            continue
+        start = i + len(opener)
+        depth, j = 1, start
+        while j < len(text) and depth:
+            depth += {"{": 1, "}": -1}.get(text[j], 0)
+            j += 1
+        expr = text[start:j - 1].strip()
+        # Drop a format spec or conversion: {x!r}, {x:>8}.
+        expr = re.split(r"![rsa]$|:(?![^\[]*\])", expr)[0].strip() if lang == "py" else expr
+        exprs.append(expr)
+        i = j
+
+
+class Checker:
+    """Decides, for one run body, whether a name on a sink line is clean."""
+
+    def __init__(self, body: Body, siblings: list[Body], entries: tuple[Allowed, ...], used: set[Allowed]):
+        self.body = body
+        self.siblings = siblings
+        self.entries = entries
+        self.used = used
+        self.units = logical_lines(body.lines)
+        self.assigned: dict[str, list[tuple[int, str | None]]] = {}
+        for j, unit in enumerate(self.units):
+            for name, rhs in assignments(unit):
+                self.assigned.setdefault(name, []).append((j, rhs))
+        # Which Python/Node heredoc defines `shown`.
+        self.shown: dict[int, bool] = {}
+        for k, unit in enumerate(self.units):
+            if unit.lang in ("py", "js"):
+                pattern = PY_SHOWN if unit.lang == "py" else JS_SHOWN
+                key = self.heredoc_id(k)
+                self.shown[key] = self.shown.get(key, False) or bool(pattern.match(unit.text))
+
+    def heredoc_id(self, k: int) -> int:
+        j = k
+        while j > 0 and self.units[j - 1].lang == self.units[k].lang:
+            j -= 1
+        return j
+
+    def allowed(self, name: str, k: int, shell: bool) -> bool:
+        body = self.body
+        found = []
+        for entry in self.entries:
+            if entry.path not in ("*", body.path) or entry.name != name:
+                continue
+            if entry.step is not None and entry.step != body.step:
+                continue
+            if entry.env is not None:
+                # A shell variable must BE that env value and never be
+                # reassigned; a Python or Node name reads it, so the step must
+                # at least pass it.
+                if shell and (body.env.get(name) != entry.env or name in self.assigned):
+                    continue
+                if not shell and entry.env not in body.env.values():
+                    continue
+            if entry.after is not None:
+                anchors = [j for j, u in enumerate(self.units) if entry.after in u.text]
+                if not anchors or block_end(self.units, anchors[0]) >= k:
+                    continue
+            if entry.source is not None:
+                step, text = entry.source
+                if not any(b.step == step and any(text in line for line in b.lines) for b in self.siblings):
+                    continue
+            found.append(entry)
+        self.used.update(found)
+        return bool(found)
+
+    def clean_shell(self, name: str, k: int, depth: int = 0) -> bool:
+        before = [(j, rhs) for j, rhs in self.assigned.get(name, []) if j < k]
+        # Refused earlier, and not assigned since.
+        for j in range(k):
+            m = REFUSAL.match(self.units[j].text)
+            if m and m.group(1) == name:
+                end = block_end(self.units, j)
+                if end < k and any(re.search(r"\bexit\b", u.text) for u in self.units[j:end]) \
+                        and not any(a > end for a, _ in before):
+                    return True
+        if before and MASKED_ASSIGNMENT.match((before[-1][1] or "").strip()):
+            return True
+        if self.allowed(name, k, shell=True):
+            return True
+        everywhere = self.assigned.get(name, [])
+        if name in self.body.env:
+            return not everywhere and "$" not in self.body.env[name]
+        if not everywhere or depth > 5:
+            return False
+        # Constant, or built only from clean names: every assignment is a
+        # literal or a string whose expansions are all clean where it stands.
+        for j, rhs in everywhere:
+            if rhs is None or "$(" in rhs or re.search(r"(?<!\\)`", rhs):
+                return False
+            for ref, masked, numeric in shell_refs(rhs):
+                if not (masked or numeric or (ref != name and self.clean_shell(ref, j, depth + 1))):
+                    return False
+        return True
+
+    def names_on(self, k: int) -> list[str]:
+        unit = self.units[k]
+        names = []
+        if unit.lang == "sh":
+            for name, masked, numeric in shell_refs(unit.text):
+                if not (masked or numeric or self.clean_shell(name, k)):
+                    names.append(name)
+            return names
+        for expr in template_exprs(unit.text, unit.lang):
+            if re.match(r"^shown\(.*\)$", expr) and self.shown.get(self.heredoc_id(k)):
+                continue
+            if re.match(r"^len\(.*\)$", expr):
+                continue
+            root = re.match(r"^[A-Za-z_][A-Za-z0-9_]*", expr)
+            name = root.group(0) if root else expr
+            if not self.allowed(name, k, shell=False):
+                names.append(name)
+        return names
+
+
+def audit_body(body: Body, siblings: list[Body] | None = None, entries: tuple[Allowed, ...] = ALLOWED,
+               used: set[Allowed] | None = None) -> list[dict]:
+    checker = Checker(body, siblings if siblings is not None else [body], entries,
+                      used if used is not None else set())
+    findings = []
+    for k in sorted(sink_units(checker.units)):
+        line = body.first_line + checker.units[k].index
+        for name in dict.fromkeys(checker.names_on(k)):
+            findings.append(finding(
+                body.path, line, body.step,
+                f"`{name}` reaches a workflow command or env-file write unmasked. Mask it at the print "
+                "(${name//[[:cntrl:]]/?}, or shown() in a Python/Node heredoc), refuse a control character "
+                "before it, or add it to ALLOWED with the reason it is constrained."))
+    return findings
+
+
+# --- the repository --------------------------------------------------------------
+
+
+def audit(root: Path, entries: tuple[Allowed, ...] = ALLOWED) -> tuple[list[dict], list[Allowed]]:
+    """Findings, and the ALLOWED entries no line used (stale)."""
+    findings: list[dict] = []
+    used: set[Allowed] = set()
+    audited = set()
+    for path in candidate_files(root):
+        bodies = bodies_of(root, path)
+        audited.add(path.relative_to(root).as_posix())
+        for body in bodies:
+            findings += audit_body(body, bodies, entries, used)
+    # Stale: an entry for an audited file that no line needed.
+    stale = [e for e in entries if e.path in audited and e not in used]
+    return findings, stale
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1],
+                        help="repository root (default: this script's repository)")
+    args = parser.parse_args(argv)
+    findings, stale = audit(args.root)
+    for f in findings:
+        print(f"::error file={f['path']},line={f['line']}::step '{f['step']}': {f['message']}")
+    for e in stale:
+        print(f"::error file={e.path}::ALLOWED entry for `{e.name}` matches no line; remove it or fix its scope.")
+    if not findings and not stale:
+        print(f"Every workflow command and env-file write in {args.root} prints only masked or constrained values.")
+    return 1 if findings or stale else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

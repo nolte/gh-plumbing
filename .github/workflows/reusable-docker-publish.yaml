@@ -111,6 +111,13 @@ jobs:
           RAW: ${{ inputs.registry }}/${{ github.repository_owner }}/${{ inputs.image_name }}
         run: |
           set -euo pipefail
+          # registry and image_name are caller inputs. A line break in either
+          # would add an entry to $GITHUB_OUTPUT; no image reference carries a
+          # control character, so one is refused before the write (#492).
+          if [[ "$RAW" == *[[:cntrl:]]* ]]; then
+            echo "::error::Image reference '${RAW//[[:cntrl:]]/?}' contains a control character (shown as '?'); check the registry and image_name inputs."
+            exit 1
+          fi
           printf 'name=%s\n' "${RAW,,}" >> "$GITHUB_OUTPUT"
 
       - name: Extract metadata

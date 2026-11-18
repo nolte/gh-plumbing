@@ -90,6 +90,14 @@ jobs:
           release="uname:$(uname -s)"
         fi
         key="tflint-plugins|${RUNNER_OS}|${RUNNER_ARCH}|${release}|${TFLINT_VERSION}|${CONFIG_HASH}"
+        # tflint_version is a caller input. A line break in the key would add
+        # an entry to $GITHUB_OUTPUT; no version or cache key carries a
+        # control character, so one is refused before the key is printed or
+        # written (#492).
+        if [[ "$key" == *[[:cntrl:]]* ]]; then
+          echo "::error::Cache key '${key//[[:cntrl:]]/?}' contains a control character (shown as '?'); check the tflint_version input."
+          exit 1
+        fi
         echo "Cache key: ${key}"
         echo "key=${key}" >> "${GITHUB_OUTPUT}"
 

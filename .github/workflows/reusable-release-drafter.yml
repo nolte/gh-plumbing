@@ -100,6 +100,23 @@ jobs:
           fi
 
           captured_tag=$(echo "$draft" | jq -r '.tagName')
+          # A draft's tag name is editable text, and the restore step reads it
+          # from this step's output. With a control character it could start a
+          # workflow command in the messages below or add an entry to
+          # $GITHUB_OUTPUT. Such a draft is skipped like the other unusable
+          # ones here, before the first message that prints the tag, and every
+          # later '$captured_tag' is clean by construction (#492).
+          #
+          # Git refuses ASCII control characters and DEL in a ref name. This
+          # check is deliberately wider: in the runner's UTF-8 locale
+          # [[:cntrl:]] also matches C1 (U+0080-U+009F) and U+2028/U+2029,
+          # which git allows -- see the tag check in "Resolve draft" of
+          # reusable-release-publish.yml for why and how it was measured.
+          if [[ "$captured_tag" == *[[:cntrl:]]* ]]; then
+            echo "::warning::Draft tag '${captured_tag//[[:cntrl:]]/?}' contains a control character (shown as '?'); not capturing its project-context block."
+            echo "had_markers=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           body=$(gh release view "$captured_tag" --repo "$REPO" --json body --jq .body)
 
           if ! grep -qF "$start_marker" <<< "$body" || ! grep -qF "$end_marker" <<< "$body"; then
@@ -155,7 +172,8 @@ jobs:
           new_tag=$(echo "$draft" | jq -r '.tagName')
 
           if [[ "$new_tag" != "$CAPTURED_TAG" ]]; then
-            echo "::warning::Draft tag changed from '$CAPTURED_TAG' to '$new_tag' — captured markers may be stale; not restoring. Re-run release-notes-curate to regenerate the project-context block."
+            # new_tag is a draft's tag name, not yet checked: masked (#492).
+            echo "::warning::Draft tag changed from '$CAPTURED_TAG' to '${new_tag//[[:cntrl:]]/?}' — captured markers may be stale; not restoring. Re-run release-notes-curate to regenerate the project-context block."
             exit 0
           fi
 

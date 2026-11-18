@@ -190,18 +190,45 @@ jobs:
             # gets published from a draft nobody was looking at.
             if [[ "$total" != "1" ]]; then
               echo "::error::No tag given and $total drafts are open. Pass 'tag' explicitly. Open drafts:"
-              echo "$drafts" | jq -r '.[] | "  - \(.tagName)"' >&2
+              # Draft tag names are editable text, listed with control
+              # characters masked as in the target messages below (#492).
+              echo "$drafts" | jq -r '.[] | "  - \(.tagName | gsub("[[:cntrl:]]"; "?"))"' >&2
               exit 1
             fi
             TAG=$(echo "$drafts" | jq -r '.[0].tagName')
-            echo "::notice::No tag given; resolved the single open draft '$TAG'."
           else
             TAG="$REQUESTED_TAG"
+          fi
+
+          # The tag is the caller's input or a draft's tag name, and every later
+          # step reads it from this step's output. A control character in it
+          # could start a workflow command in any message that prints the tag,
+          # or add an entry to $GITHUB_OUTPUT. Refused here, before the first
+          # message that prints it and before the output write, so every later
+          # '$TAG' is clean by construction (#492). Only this message shows it,
+          # masked.
+          #
+          # Git refuses ASCII control characters and DEL in a ref name. This
+          # check is deliberately wider: in the runner's UTF-8 locale
+          # [[:cntrl:]] also matches C1 (U+0080-U+009F) and U+2028/U+2029,
+          # which git allows, because whether the runner treats one of those
+          # as a line end wasn't measured. A tag carrying one is refused here
+          # although git would accept it. Measured with (prints "cntrl"; the
+          # same with \u2028, nothing under LC_ALL=C):
+          #   LC_ALL=C.UTF-8 bash -c 'x=$(printf "a\u0085b"); [[ $x == *[[:cntrl:]]* ]] && echo cntrl'
+          if [[ "$TAG" == *[[:cntrl:]]* ]]; then
+            echo "::error::Tag '${TAG//[[:cntrl:]]/?}' contains a control character (shown as '?'); refusing to continue."
+            exit 1
+          fi
+
+          if [[ -z "$REQUESTED_TAG" ]]; then
+            echo "::notice::No tag given; resolved the single open draft '$TAG'."
+          else
             match_count=$(echo "$drafts" | jq --arg t "$TAG" '[.[] | select(.tagName == $t)] | length')
 
             if [[ "$match_count" == "0" ]]; then
               echo "::error::No draft release with tag '$TAG'. Open drafts:"
-              echo "$drafts" | jq -r '.[] | "  - \(.tagName)"' >&2
+              echo "$drafts" | jq -r '.[] | "  - \(.tagName | gsub("[[:cntrl:]]"; "?"))"' >&2
               exit 1
             fi
 
@@ -279,7 +306,9 @@ jobs:
           set -euo pipefail
           expected="${EXPECTED_TARGET_SHA,,}"
           if [[ ! "$expected" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::expected-target-sha '$EXPECTED_TARGET_SHA' is not a full 40-character commit SHA. Pass needs.<archive-job>.outputs.target-sha from reusable-release-archive.yml unchanged."
+            # Printed exactly when it failed the check, so it is the caller's
+            # text as given: control characters masked (#492).
+            echo "::error::expected-target-sha '${EXPECTED_TARGET_SHA//[[:cntrl:]]/?}' is not a full 40-character commit SHA. Pass needs.<archive-job>.outputs.target-sha from reusable-release-archive.yml unchanged."
             exit 1
           fi
 
@@ -310,7 +339,13 @@ jobs:
           python3 -c "import yaml" 2>/dev/null || pip install --quiet pyyaml
 
           python3 - <<'PY' > vbf.json
-          import json, pathlib, sys
+          import json, pathlib, re, sys
+
+          def shown(value):
+              # Paths come from .github/release-automation.yml, repository
+              # content. Control characters are masked before a message prints
+              # one, so it can't start a workflow command on a new line (#492).
+              return re.sub(r"[\x00-\x1f\x7f-\x9f]", "?", str(value))
 
           override_path = pathlib.Path(".github/release-automation.yml")
           if override_path.exists():
@@ -326,7 +361,7 @@ jobs:
                       elif p.endswith(".json"):
                           e["format"] = "json"
                       else:
-                          print(f"::error::Cannot infer format for '{p}'; declare format: json|toml in .github/release-automation.yml", file=sys.stderr)
+                          print(f"::error::Cannot infer format for '{shown(p)}'; declare format: json|toml in .github/release-automation.yml", file=sys.stderr)
                           sys.exit(1)
               json.dump({"source": "override", "entries": entries}, sys.stdout)
               sys.exit(0)
@@ -462,6 +497,11 @@ jobs:
           with open("vbf.json") as f:
               vbf = json.load(f)
 
+          def shown(value):
+              # Paths, selector keys and formats are repository content; masked
+              # before a message prints them, as in the detect step (#492).
+              return re.sub(r"[\x00-\x1f\x7f-\x9f]", "?", str(value))
+
           def target_value(existing, tag):
               # strip-leading-v: keep the file's existing convention — write the
               # v-prefixed tag only when the current value already uses a v
@@ -496,11 +536,11 @@ jobs:
                       pat = re.compile(r'^(\s*' + re.escape(k) + r'\s*=\s*)"' + re.escape(existing) + r'"', re.M)
                       raw, n = pat.subn(lambda mo: mo.group(1) + '"' + newval + '"', raw, count=1)
                       if n == 0:
-                          print(f"::error::Could not rewrite {k} in {path} (format-preserving regex matched nothing).", file=sys.stderr)
+                          print(f"::error::Could not rewrite {shown(k)} in {shown(path)} (format-preserving regex matched nothing).", file=sys.stderr)
                           sys.exit(1)
                   open(path, "w").write(raw)
               else:
-                  print(f"::error::Unsupported format '{fmt}' for {path}", file=sys.stderr)
+                  print(f"::error::Unsupported format '{shown(fmt)}' for {shown(path)}", file=sys.stderr)
                   sys.exit(1)
           PY
 
@@ -577,7 +617,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import json, os, subprocess, sys
+          import json, os, re, subprocess, sys
           from selectorlib import refs
 
           tag = os.environ["TAG"]
@@ -585,6 +625,12 @@ jobs:
 
           with open("vbf.json") as f:
               vbf = json.load(f)
+
+          def shown(value):
+              # Paths, selectors, file values and commit subjects are
+              # repository content; masked before a message prints them, as in
+              # the detect step (#492).
+              return re.sub(r"[\x00-\x1f\x7f-\x9f]", "?", str(value))
 
           def data_at_sha(path, sha, fmt):
               raw = subprocess.run(
@@ -596,7 +642,7 @@ jobs:
               elif fmt == "toml":
                   import tomllib
                   return tomllib.loads(raw)
-              raise SystemExit(f"::error::Unsupported format '{fmt}' for {path}")
+              raise SystemExit(f"::error::Unsupported format '{shown(fmt)}' for {shown(path)}")
 
           def aligned(actual, tag):
               # transform=strip-leading-v: accept either form, matching the file's existing convention
@@ -621,7 +667,7 @@ jobs:
           if errors:
               print("::error::Version-bearing files not aligned to target tag:")
               for line in errors:
-                  print(line)
+                  print(shown(line))
               print(f"::error::Open a 'chore(release): {tag}' PR aligning every file, or wait for the workflow-driven primary path (when the portfolio App/PAT lands).")
               sys.exit(1)
 
@@ -634,11 +680,11 @@ jobs:
           expected_prefix = f"chore(release): {tag}"
           if not subject.startswith(expected_prefix):
               print(f"::error::No 'chore(release): {tag}' alignment commit at {sha[:8]} touching the version-bearing files.")
-              print(f"::error::Most recent commit subject on these paths: '{subject}'")
+              print(f"::error::Most recent commit subject on these paths: '{shown(subject)}'")
               print(f"::error::Per spec/project/release-automation/ §Pre-publish verification, the alignment commit subject must start with '{expected_prefix}'.")
               sys.exit(1)
 
-          print(f"Alignment commit confirmed: '{subject}'")
+          print(f"Alignment commit confirmed: '{shown(subject)}'")
           PY
 
       - name: Disclose target state in job summary
@@ -710,6 +756,12 @@ jobs:
             echo "::error::Could not derive integration domain from vbf.json entries."
             exit 1
           fi
+          # The domain is a directory name, the file name an input or
+          # hacs.json content: text the caller or the repository controls.
+          # Messages print these masked copies, so a control character can't
+          # start a workflow command on a new line (#492). The build itself
+          # uses the values unchanged.
+          shown_domain="${domain//[[:cntrl:]]/?}"
 
           # Asset filename resolution (precedence per spec/ha/hacs-release
           # §ZIP release distribution): explicit inputs.asset-filename wins;
@@ -721,25 +773,27 @@ jobs:
             echo "::warning::No hacs.json at $TARGET_SHA — a HACS integration MUST ship one (spec/ha/hacs-release)."
           fi
           [[ "$hacs_filename" == "null" ]] && hacs_filename=""
+          shown_hacs_filename="${hacs_filename//[[:cntrl:]]/?}"
 
           if [[ -n "$ASSET_FILENAME" ]]; then
             filename="$ASSET_FILENAME"
             # The build name and HACS's own hacs.json contract MUST agree, or
             # HACS downloads an asset this run never built. Warn on divergence.
             if [[ -n "$hacs_filename" && "$hacs_filename" != "$filename" ]]; then
-              echo "::warning::asset-filename '$filename' disagrees with hacs.json filename '$hacs_filename' — HACS reads hacs.json to pick the asset, so the two MUST match (spec/ha/hacs-release §ZIP release distribution)."
+              echo "::warning::asset-filename '${filename//[[:cntrl:]]/?}' disagrees with hacs.json filename '$shown_hacs_filename' — HACS reads hacs.json to pick the asset, so the two MUST match (spec/ha/hacs-release §ZIP release distribution)."
             fi
           else
             filename="$hacs_filename"
           fi
           [[ -z "$filename" ]] && filename="${domain}.zip"
-          echo "Building HACS asset '$filename' from custom_components/$domain at ${TARGET_SHA:0:8}."
+          shown_filename="${filename//[[:cntrl:]]/?}"
+          echo "Building HACS asset '$shown_filename' from custom_components/$shown_domain at ${TARGET_SHA:0:8}."
 
           # Extract the integration directory from the target tree (independent of
           # the checked-out develop HEAD), then zip its CONTENTS at the root.
           workdir=$(mktemp -d)
           if ! git archive "$TARGET_SHA" "custom_components/$domain" | tar -x -C "$workdir"; then
-            echo "::error::custom_components/$domain not found at $TARGET_SHA."
+            echo "::error::custom_components/$shown_domain not found at $TARGET_SHA."
             exit 1
           fi
           srcdir="$workdir/custom_components/$domain"
@@ -750,19 +804,22 @@ jobs:
 
           out="$PWD/$filename"
           ( cd "$srcdir" && find . -type f -printf '%P\n' | sort | zip -X -q "$out" -@ )
-          echo "Built $(du -h "$out" | cut -f1) asset: $filename"
+          # du prints the path after the size; a line break in the file name
+          # would put the raw rest of it on a line of its own, so only the
+          # first line's size field is kept (#492).
+          echo "Built $(du -h "$out" | head -n 1 | cut -f1) asset: $shown_filename"
 
           if [[ "$DRY_RUN" == "true" ]]; then
-            echo "::notice::Dry run — built '$filename' but not uploading to draft '$TAG'."
-            { echo; echo "### HACS asset"; echo; echo "- Built \`$filename\` (dry run, not uploaded)."; } >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice::Dry run — built '$shown_filename' but not uploading to draft '$TAG'."
+            { echo; echo "### HACS asset"; echo; echo "- Built \`$shown_filename\` (dry run, not uploaded)."; } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
           # Attach to the still-draft release so the asset is present the instant
           # the next step flips draft=false. --clobber makes re-runs idempotent.
           gh release upload "$TAG" "$out" --clobber
-          echo "::notice::Attached '$filename' to draft '$TAG'."
-          { echo; echo "### HACS asset"; echo; echo "- Attached \`$filename\` to the release before publish."; } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::Attached '$shown_filename' to draft '$TAG'."
+          { echo; echo "### HACS asset"; echo; echo "- Attached \`$shown_filename\` to the release before publish."; } >> "$GITHUB_STEP_SUMMARY"
 
       # Pre-publish, deliberately. The cascade check below this runs *after* the
       # flip, so it can only report a gap that already happened -- and a release
@@ -788,7 +845,8 @@ jobs:
             exit 1
           fi
           if [[ "$state" != "active" ]]; then
-            echo "::error::${CASCADE} exists but reports state '$state'. GitHub disables a scheduled workflow after 60 days of repository inactivity ('disabled_inactivity'), and it can be switched off by hand ('disabled_manually'). Re-enable it before publishing: gh workflow enable ${CASCADE}"
+            # An API response; masked like every other printed response (#492).
+            echo "::error::${CASCADE} exists but reports state '${state//[[:cntrl:]]/?}'. GitHub disables a scheduled workflow after 60 days of repository inactivity ('disabled_inactivity'), and it can be switched off by hand ('disabled_manually'). Re-enable it before publishing: gh workflow enable ${CASCADE}"
             exit 1
           fi
           echo "Cascade workflow ${CASCADE} is active."
