@@ -1,0 +1,57 @@
+name: Set up Vale (checksum-verified)
+description: >-
+  Install a pinned Vale binary on a Linux x86-64 runner. The release asset is
+  downloaded to RUNNER_TEMP, verified against a committed SHA-256 before it is
+  unpacked, run once, and only then added to PATH. Fails closed: on a checksum
+  mismatch nothing is unpacked, run, or put on PATH.
+
+inputs:
+  version-file:
+    description: >-
+      Path to the version file, relative to the workspace. It holds one
+      `VALE_VERSION=<x.y.z>` line and one
+      `VALE_SHA256=<sha256>  vale_<x.y.z>_Linux_64-bit.tar.gz` line (the
+      Linux_64-bit line of the release's checksums file). Read only when
+      `version` and `sha256` are both empty.
+    required: false
+    default: .vale-version
+  version:
+    description: >-
+      Vale version as x.y.z, without the `v`. Set together with `sha256` to
+      pin without a version file.
+    required: false
+    default: ""
+  sha256:
+    description: >-
+      SHA-256 of `vale_<version>_Linux_64-bit.tar.gz`, 64 hexadecimal digits.
+      Set together with `version`.
+    required: false
+    default: ""
+
+outputs:
+  vale-version:
+    description: The installed Vale version; empty unless `result` is `installed`.
+    value: ${{ steps.install.outputs.vale-version }}
+  result:
+    description: >-
+      `installed`, or why the action failed: `invalid-pin`,
+      `unsupported-platform`, `download-failed`, `checksum-mismatch` or
+      `run-failed`. Set on failure too, so a caller with `continue-on-error`
+      can treat an unreachable download differently from a refusal. Only
+      `download-failed` says nothing about the asset.
+    value: ${{ steps.install.outputs.result }}
+
+runs:
+  using: composite
+  steps:
+    # Inputs reach the script through the environment only, never through
+    # expression interpolation into the shell text, so a hostile value is
+    # data the script validates rather than code it runs.
+    - name: Install Vale
+      id: install
+      shell: bash
+      env:
+        INPUT_VERSION_FILE: ${{ inputs.version-file }}
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_SHA256: ${{ inputs.sha256 }}
+      run: bash "${GITHUB_ACTION_PATH}/setup-vale.sh"

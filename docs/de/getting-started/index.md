@@ -143,3 +143,13 @@ Zum Abschalten den Dependency-Typ deaktivieren, den der Manager setzt:
   ]
 }
 ```
+
+### Vale-Binary in `.vale-version`
+
+Das Preset hebt `VALE_VERSION` in einer `.vale-version`-Datei an, dem Pin, den `actions/setup-vale` liest ([#488](https://github.com/nolte/gh-plumbing/issues/488)). Renovate liest die Versionen aus den Releases von `vale-cli/vale` auf GitHub.
+
+- Renovate kann die Prüfsumme in derselben Datei nicht neu berechnen, deshalb hält das Preset diese Bumps aus dem Automerge heraus.
+- Vor dem Merge die `VALE_SHA256`-Zeile durch die `Linux_64-bit`-Zeile aus der Prüfsummendatei des neuen Releases ersetzen. Bis dahin verweigert die Action die Datei.
+- Eine `vale`-Zeile in `.tool-versions` hebt Renovate nicht an. Sie von Hand auf dieselbe Version setzen.
+
+Das [README](https://github.com/nolte/gh-plumbing#actions) beschreibt das Dateiformat und die Action.

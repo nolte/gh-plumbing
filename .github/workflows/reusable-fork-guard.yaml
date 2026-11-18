@@ -50,6 +50,9 @@ on:
           # Workflows, the scripts and actions they call, and the Probot settings.
           .github/*
           scripts/*
+          # Composite actions outside `.github/`. A required check may run
+          # their scripts from the pull request's own checkout (#488).
+          actions/*
           # Task runner, pre-commit and the shellcheck that actionlint runs.
           Taskfile.yml
           Taskfile.yaml

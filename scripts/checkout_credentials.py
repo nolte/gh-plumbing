@@ -138,9 +138,11 @@ def candidate_files(root: Path) -> list[Path]:
     workflows = root / ".github" / "workflows"
     if workflows.is_dir():
         files += [p for p in workflows.iterdir() if p.suffix in (".yml", ".yaml")]
-    actions = root / ".github" / "actions"
-    if actions.is_dir():
-        files += [p for p in actions.rglob("action.y*ml") if p.suffix in (".yml", ".yaml")]
+    # Composite actions live under `.github/actions/` or the top-level
+    # `actions/` (nolte/gh-plumbing#488).
+    for actions in (root / ".github" / "actions", root / "actions"):
+        if actions.is_dir():
+            files += [p for p in actions.rglob("action.y*ml") if p.suffix in (".yml", ".yaml")]
     return sorted(files)
 
 

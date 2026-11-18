@@ -143,3 +143,13 @@ To opt out, disable the dependency type the manager sets:
   ]
 }
 ```
+
+### Vale binary in `.vale-version`
+
+The preset bumps `VALE_VERSION` in a `.vale-version` file, the pin that `actions/setup-vale` reads ([#488](https://github.com/nolte/gh-plumbing/issues/488)). Renovate reads the versions from the `vale-cli/vale` releases on GitHub.
+
+- Renovate can't recompute the checksum in the same file, so the preset keeps these bumps off automerge.
+- Before merging, replace the `VALE_SHA256` line with the `Linux_64-bit` line of the new release's checksum file. Until then the action refuses the file.
+- Renovate doesn't bump a `vale` line in `.tool-versions`. Set it to the same version by hand.
+
+The [README](https://github.com/nolte/gh-plumbing#actions) describes the file format and the action.
