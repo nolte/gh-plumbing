@@ -27,10 +27,10 @@ on:
           `secrets.app-private-key` and uses it for the master fast-
           forward. When empty (the default), the reusable falls
           through to `secrets.token` — typically the consumer's
-          `GITHUB_TOKEN`. After Phase 2 of issue #330 lands its
-          push-restriction (`restrictions.apps: [<app-slug>]`) on
-          master, `GITHUB_TOKEN` no longer has the right to push to
-          master and the App token is mandatory.
+          `GITHUB_TOKEN`. Where the target branch carries a push
+          restriction (`restrictions.apps: [<app-slug>]`, available on
+          organisation-owned repositories only), `GITHUB_TOKEN` has no
+          right to push to it and the App token is mandatory.
         required: false
         type: string
         default: ""
