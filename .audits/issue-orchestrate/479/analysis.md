@@ -84,5 +84,16 @@ none
 
 | Finding | Source | Outcome | Reproduction | Issue |
 |---|---|---|---|---|
+| A run cancelled between its two steps can leave two type labels when the next title implies no type | diff review @ 54331e2 | fixed directly (e33323b: `cancel-in-progress: false`; 92f3cf1: `timeout-minutes: 5`) | inferred from GitHub's concurrency documentation, not run against GitHub | — |
+| Header said the rules come from the base branch; release-drafter reads the default branch | diff review @ 54331e2 | fixed directly (e33323b) | release-drafter v6.4.0 `lib/config.js` | — |
+| Consumer effects undisclosed: a type label assigned by file path or branch is removed; a consumer with other label names got a warning on every event | diff review @ 54331e2 | fixed directly (e33323b: plain log line, docs EN/DE and comment name both) | stub harness: `fix` + `chore` present → DELETE `chore` | — |
+| Docs and comment said release-drafter reads only title and branch name | specialist result (P1) | fixed directly (cf19fca) | v6.4.0 `index.js` calls `pulls.listFiles` | — |
+| `gh api` has no `GH_HOST`, so a GitHub Enterprise Server consumer would call github.com | diff review @ 54331e2 | dismissed: no consumer runs on GHES; named in Risk / rollout notes | inferred | — |
+| A rate-limited run now fails after five minutes; if that lands between the two steps, two type labels stay until the next event | diff review @ 92f3cf1 | dismissed as accepted trade-off against a six-hour hold; named in Risk / rollout notes | inferred from release-drafter's throttling handlers | — |
+| no blocking findings | diff review @ 92f3cf1760b1152d81e0c303af4fcca9dbe6e882 (lane b, security-briefed; files: `.audits/issue-orchestrate/479/analysis.md`, `.github/workflows/release-drafter-autolabel.yml`, `.github/workflows/reusable-release-drafter-autolabel.yml`, `docs/de/workflows/release.md`, `docs/en/workflows/release.md`) | — | — | — |
 
 ## Dispatch log
+
+- 2026-11-18 P1 dispatched to `nolte-engineering:fullstack-developer` — cf19fca (after rebase onto 0dfb942); harness 40/40, bash-vs-JavaScript regex cross-check 0 mismatches, actionlint rc=0.
+- 2026-11-18 orchestrator: review fixes e33323b, 92f3cf1; harness 40/40 on e33323b's script (unchanged in 92f3cf1), actionlint rc=0, pre-commit green, Vale: no new alert.
+
