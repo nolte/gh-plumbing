@@ -219,10 +219,13 @@ jobs:
           # Every later step treats target_sha as a pinned commit, so every
           # target form resolves to one here: refs/heads/<branch> (what
           # release-drafter sets), a bare branch name or a SHA in any case (what
-          # a draft edited by hand can carry). A branch is read from origin,
-          # never from a local branch of the same name -- the checkout above
-          # creates a local 'develop' that a bare 'develop' would otherwise hit
-          # (#484). The flip step resolves the live target the same way.
+          # a draft edited by hand can carry). origin/<name> is tried first, so
+          # a branch on origin wins over a local branch and over a tag of the
+          # same name -- the checkout above creates a local 'develop' that a
+          # bare 'develop' would otherwise hit (#484). Only a name origin does
+          # not have falls back to the clone's own refs (short SHA, tag); the
+          # reachability check below then rejects anything that is not on
+          # origin/develop. The flip step resolves the live target the same way.
           resolve_commit() {
             local ref="$1"
             if [[ "$ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
@@ -236,8 +239,11 @@ jobs:
 
           # A full SHA passes resolve_commit unchecked; cat-file confirms it
           # names a commit this clone has.
+          # The target is editable text. Control characters are masked before
+          # it is printed, so it cannot start a workflow command on a new line.
+          shown="${target//[[:cntrl:]]/?}"
           if ! sha=$(resolve_commit "$target") || ! git cat-file -e "${sha}^{commit}" 2>/dev/null; then
-            echo "::error::Draft tag '$TAG' target '$target' resolves to no commit on origin. Re-run release-drafter to refresh draft target."
+            echo "::error::Draft tag '$TAG' target '$shown' resolves to no commit on origin. Re-run release-drafter to refresh draft target."
             exit 1
           fi
 
@@ -249,7 +255,7 @@ jobs:
           # Class guard: whatever the resolution above becomes, nothing but a
           # full lowercase commit SHA leaves this step as target_sha.
           if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::Draft tag '$TAG' target '$target' resolved to '$sha', not a full 40-character commit SHA. Refusing to continue."
+            echo "::error::Draft tag '$TAG' target '$shown' resolved to '${sha//[[:cntrl:]]/?}', not a full 40-character commit SHA. Refusing to continue."
             exit 1
           fi
 
@@ -914,12 +920,14 @@ jobs:
 
             git fetch --quiet origin
             target=$(gh release view "$TAG" --json targetCommitish --jq .targetCommitish)
+            # Masked for printing only, as in Resolve draft.
+            shown="${target//[[:cntrl:]]/?}"
             if ! actual=$(resolve_commit "$target"); then
-              echo "::error::Draft '$TAG' target '$target' resolves to no commit on origin; not publishing."
+              echo "::error::Draft '$TAG' target '$shown' resolves to no commit on origin; not publishing."
               exit 1
             fi
             if [[ "$actual" != "$expected" ]]; then
-              echo "::error::Draft '$TAG' now targets $actual (from '$target'), but the archive was built from $expected. The target moved while this run was checking it -- a merge on the target branch or an edited draft. Nothing was published; rebuild the archive from the current draft target, then publish again."
+              echo "::error::Draft '$TAG' now targets $actual (from '$shown'), but the archive was built from $expected. The target moved while this run was checking it -- a merge on the target branch or an edited draft. Nothing was published; rebuild the archive from the current draft target, then publish again."
               exit 1
             fi
             # One edit pins the target and flips the draft, so no second call
