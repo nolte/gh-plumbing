@@ -131,9 +131,12 @@ subscription on would only generate dead webhook attempts.
 !!! tip "Terraform-driven provisioning"
     Steps 5 and 6 are also available as a Terraform module under
     [`terraform/portfolio-app/`](https://github.com/nolte/gh-plumbing/tree/develop/terraform/portfolio-app).
-    The module supports both organisation and user mode, creates the
-    variable and secret in one `terraform apply`, and (optionally)
-    declares the App as a branch-protection bypass actor. Steps 1–4
+    In both organisation and user mode, the module creates the
+    variable and secret in one `terraform apply`. In organisation mode
+    it can also declare the App as a branch-protection bypass actor
+    (optional). GitHub documents push restrictions as available only
+    on organisation-owned repositories, so the module refuses that
+    option in user mode at plan time. Steps 1–4
     stay manual because GitHub provides no API to create an App. See
     [`examples/basic/`](https://github.com/nolte/gh-plumbing/tree/develop/terraform/portfolio-app/examples/basic)
     for organisation mode and

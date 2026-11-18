@@ -134,9 +134,13 @@ Jedes aktivierte Häkchen würde nur tote Webhook-Versuche erzeugen.
 !!! tip "Terraform-getriebene Provisionierung"
     Die Schritte 5 und 6 sind auch als Terraform-Modul unter
     [`terraform/portfolio-app/`](https://github.com/nolte/gh-plumbing/tree/develop/terraform/portfolio-app)
-    verfügbar. Das Modul unterstützt beide Modi (Organisation und
-    User), legt Variable und Secret in einem `terraform apply` an und
-    deklariert optional die App als Branch-Protection-Bypass-Actor.
+    verfügbar. In beiden Modi (Organisation und User) legt das Modul
+    Variable und Secret in einem `terraform apply` an. Im
+    Organisations-Modus kann es die App zusätzlich als
+    Branch-Protection-Bypass-Actor deklarieren (optional). GitHub
+    dokumentiert Push-Restrictions als nur für Repositories einer
+    Organisation verfügbar, daher lehnt das Modul diese Option im
+    User-Modus schon beim Plan ab.
     Schritte 1–4 bleiben manuell, weil GitHub keine API zur
     App-Erstellung anbietet. Siehe
     [`examples/basic/`](https://github.com/nolte/gh-plumbing/tree/develop/terraform/portfolio-app/examples/basic)

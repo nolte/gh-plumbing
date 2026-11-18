@@ -36,12 +36,13 @@ terraform apply plan.tfplan
 - `mode` output reports `user`.
 - No branch-protection change (`enable_branch_bypass = false`).
 
-## Phase 2 follow-up
+## No Phase 2 in user mode
 
-Once every repository in `consumer_repositories` runs the updated
-wrapper pattern, flip `enable_branch_bypass` to `true` and re-apply.
-Terraform plan output then shows added `github_branch_protection.bypass`
-resources only.
+Keep `enable_branch_bypass = false`. GitHub documents push restrictions
+for users, teams and apps as available only on organisation-owned
+repositories, so the module fails at plan time when the configuration
+sets `user` together with `enable_branch_bypass = true`. The module offers the
+branch-protection bypass only in organisation mode.
 
 ## When to prefer organisation mode
 
