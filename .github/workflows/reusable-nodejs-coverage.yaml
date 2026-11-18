@@ -60,6 +60,15 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: ${{ inputs.node-version }}
+          # Off, not left to the default (#494): when the caller's package.json
+          # names npm as its package manager, setup-node restores npm's cache
+          # here and saves it again in its post step -- after the install and
+          # test commands, and whatever they ran, could rewrite it. On a
+          # default-branch run that save lands in the default branch's cache
+          # scope, which every branch restores from.
+          # scripts/builtin_action_cache.py refuses a setup-node step without
+          # this line.
+          package-manager-cache: false
 
       - name: Install dependencies
         run: ${{ inputs.install-command }}

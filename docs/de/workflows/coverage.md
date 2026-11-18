@@ -37,6 +37,8 @@ jobs:
       fail-under: 80
 ```
 
+Der Workflow schaltet den eingebauten npm-Cache von `actions/setup-node` ab (`package-manager-cache: false`). Eingeschaltet nutzt die Action diesen Cache, wenn die `package.json` des Aufrufers npm als Paketmanager nennt. Sie speichert ihn dann, nachdem die Install- und Test-Befehle gelaufen sind, sodass diese Befehle verändern könnten, was spätere Läufe wiederherstellen, auch auf dem Default-Branch. Jeder Lauf installiert die Abhängigkeiten ohne wiederhergestellten npm-Cache.
+
 !!! tip "json-summary-Bericht"
     Das `test-command` (Standard `npm test`) muss einen Istanbul-`json-summary`-Bericht nach `coverage-summary-path` (Standard `coverage/coverage-summary.json`) schreiben. Sowohl Vitest (`--coverage.reporter=json-summary`) als auch Jest (`--coverageReporters=json-summary`) erzeugen dieses Format.
 

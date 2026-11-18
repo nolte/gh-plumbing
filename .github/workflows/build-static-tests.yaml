@@ -136,14 +136,16 @@ jobs:
   # the publish. Coverage can't measure shell, so they add no coverage line,
   # only the verdict. tests/test_vale_version.py covers the pre-commit guard
   # that keeps .vale-version and .tool-versions in agreement, with its own
-  # coverage line.
+  # coverage line. tests/test_builtin_action_cache.py does the same for the
+  # pre-commit guard behind #494, which refuses a setup action whose built-in
+  # cache would save in its post step.
   required-check-triggers-tests:
     uses: ./.github/workflows/reusable-python-coverage.yaml
     with:
       working-directory: scripts
       install-command: pip install --require-hashes --no-deps -r requirements-audit.txt && pip install pytest==9.1.1 pytest-cov==7.1.0
       coverage-source: required_check_triggers
-      pytest-args: --cov=checkout_credentials tests/test_required_check_triggers.py tests/test_checkout_credentials.py tests/test_setup_vale.py tests/test_release_publish_vale.py --cov=vale_version tests/test_vale_version.py
+      pytest-args: --cov=checkout_credentials tests/test_required_check_triggers.py tests/test_checkout_credentials.py tests/test_setup_vale.py tests/test_release_publish_vale.py --cov=vale_version tests/test_vale_version.py --cov=builtin_action_cache tests/test_builtin_action_cache.py
   # The check itself, not its tests. It runs on the pull request so a page
   # added in one language only, or a reference to a workflow that no longer
   # exists, fails here rather than reaching a release.
