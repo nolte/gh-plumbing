@@ -793,6 +793,38 @@ jobs:
           fi
           echo "Cascade workflow ${CASCADE} is active."
 
+      # This repository, at the commit this workflow runs from, checked out
+      # into a directory of its own. Two steps need it: actions/setup-vale and
+      # its .vale-version for the Vale check, and scripts/docs_freshness.py for
+      # the freshness gate. A `uses: ./...` path resolves in the CALLER's
+      # workspace, and a consumer's checkout carries neither, so both come
+      # from here -- and at job.workflow_sha they can never be a different
+      # version than this file's.
+      #
+      # Deliberately after the alignment step, which commits on the caller's
+      # checkout: the directory is never part of that tree's commit. No
+      # continue-on-error: without this checkout the Vale and freshness gates
+      # have nothing to run, and a gate that opens when its tool is missing
+      # verifies nothing while looking like it does. The job fails here,
+      # visibly, before anything is published.
+      - name: Check out gh-plumbing at the pinned commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .gh-plumbing
+          persist-credentials: false
+
+      # Verified against the committed SHA-256 before it is unpacked (#488).
+      # continue-on-error so the next step can apply the failure policy: the
+      # action's `result` output tells a download failure from a refusal.
+      - name: Install Vale (checksum-verified)
+        id: vale
+        continue-on-error: true
+        uses: ./.gh-plumbing/actions/setup-vale
+        with:
+          version-file: .gh-plumbing/.vale-version
+
       # The release notes are the one artefact of a release that nobody reviews
       # again. release-drafter assembles them from pull-request titles and stops
       # touching the release the moment it is published, so the flip freezes the
@@ -807,34 +839,45 @@ jobs:
       # overrides it here so passive voice and long sentences stay out of a
       # release gate. Prose debt must not hold up a fix.
       #
-      # Vale is pinned to the version nolte/claude-shared's CI installs and the
-      # asdf-managed local one, so the same text yields the same alerts in all
-      # three places. Acquired the same way claude-shared does it -- this
-      # repository has no other binary download, and inventing a second
-      # mechanism for one step is worse than following the portfolio's.
+      # Vale is pinned in this repository's .vale-version, read at this
+      # workflow's own commit, and the asdf-managed local one names the same
+      # version (scripts/vale_version.py), so the same text yields the same
+      # alerts in CI and locally.
       - name: Check the release notes with Vale
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.token }}
           TAG: ${{ steps.draft.outputs.tag }}
-          VALE_VERSION: "3.15.2"
+          VALE_OUTCOME: ${{ steps.vale.outcome }}
+          VALE_RESULT: ${{ steps.vale.outputs.result }}
         run: |
           set -euo pipefail
+          # A download failure warns, it does not block. An unreachable release
+          # asset says nothing about the notes, and a release refused for that
+          # reason is a worse outcome than one published without a prose check.
+          #
+          # Every other install failure blocks. A checksum mismatch is not an
+          # acquisition failure: an asset replaced under the same tag is exactly
+          # the event the pin exists to surface, and the action never ran it.
+          # An unknown or missing result blocks too -- fail closed rather than
+          # guess that it was harmless.
+          if [[ "$VALE_OUTCOME" != "success" ]]; then
+            if [[ "$VALE_RESULT" == "download-failed" ]]; then
+              echo "::warning::Could not download Vale. Skipping the release-notes check; the notes were NOT verified."
+              exit 0
+            fi
+            echo "::error::Installing Vale failed with result '${VALE_RESULT:-unknown}'. The release-notes check can't run with an unverified binary, and nothing was published. A 'checksum-mismatch' means the release asset no longer matches the SHA-256 pinned in gh-plumbing's .vale-version: investigate before re-running."
+            exit 1
+          fi
+
           body=$(gh release view "$TAG" --json body --jq .body)
           if [[ -z "${body//[[:space:]]/}" ]]; then
             echo "::warning::Release notes for '$TAG' are empty; nothing to check."
             exit 0
           fi
 
-          # Acquisition failures warn, they do not block. An unreachable release
-          # asset or style server says nothing about the notes, and a release
-          # refused for that reason is a worse outcome than one published
-          # without a prose check. A Vale *finding* is a different matter and
-          # does block, below.
-          if ! curl -fsSL "https://github.com/errata-ai/vale/releases/download/v${VALE_VERSION}/vale_${VALE_VERSION}_Linux_64-bit.tar.gz" \
-               | sudo tar -xz -C /usr/local/bin vale; then
-            echo "::warning::Could not install Vale ${VALE_VERSION}. Skipping the release-notes check; the notes were NOT verified."
-            exit 0
-          fi
+          # A style server that can't be reached says nothing about the notes
+          # either, so it warns like a download failure. A Vale *finding* is a
+          # different matter and does block, below.
           if ! vale sync; then
             echo "::warning::'vale sync' could not fetch the style packages. Skipping the release-notes check; the notes were NOT verified."
             exit 0
@@ -862,14 +905,8 @@ jobs:
       # reader; an undocumented workflow or a leftover marker is a gap. Holding
       # a release for the second kind would make the gate something to route
       # around. `--strict` at this call site would flip that, deliberately.
-      - name: Check out the freshness checker at the pinned commit
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-        with:
-          repository: ${{ job.workflow_repository }}
-          ref: ${{ job.workflow_sha }}
-          path: .docs-freshness
-          persist-credentials: false
-
+      #
+      # The checker comes from the pinned checkout ahead of the Vale step.
       - name: Check documentation freshness
         env:
           TAG: ${{ steps.draft.outputs.tag }}
@@ -877,15 +914,15 @@ jobs:
           set -euo pipefail
           # A consumer's checkout never carries this script -- it lives in the
           # repository that ships this workflow, and arrives through the pinned
-          # checkout above. Reading it from the caller would make the gate warn
-          # instead of gate for every consumer, which is worse than not having
-          # it: a gate that opens when its checker is missing verifies nothing
-          # while looking like it does.
+          # checkout of gh-plumbing. Reading it from the caller would make the
+          # gate warn instead of gate for every consumer, which is worse than
+          # not having it: a gate that opens when its checker is missing
+          # verifies nothing while looking like it does.
           if [[ ! -d docs ]]; then
             echo "::notice::No 'docs/' directory; nothing to audit for freshness."
             exit 0
           fi
-          if ! python3 .docs-freshness/scripts/docs_freshness.py --root .; then
+          if ! python3 .gh-plumbing/scripts/docs_freshness.py --root .; then
             echo "::error::The documentation carries critical freshness findings. Publishing '$TAG' would ship them, because the site and the notes freeze with the tag. Fix them on develop and re-run."
             exit 1
           fi
