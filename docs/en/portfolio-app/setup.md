@@ -193,8 +193,10 @@ Key properties:
     - `release-publish.yml` flips the release to published. The
       resulting `release: published` event then cascades to other
       workflows.
-    - `release-cd-refresh-master.yml` fast-forwards `master`. Master
-      is also push-restricted after phase 2.
+    - `release-cd-refresh-master.yml` fast-forwards `master`. The
+      commons don't restrict pushes to `master`; its own protection
+      decides who may push
+      ([ADR-006](../decisions/adr-006-consumer-owned-master-protection.md)).
 
     Two more wrappers forward the same credential for consistency and
     audit-trail homogeneity, even though their target branch isn't
@@ -257,43 +259,55 @@ If a cascade still fails to fire, check:
 
 ## Branch-protection bypass (phase 2)
 
-`commons-settings.yml` declares the App as a push-restriction actor
-on the `master` branch. Because consumer repositories extend the
-commons through `_extends:`, the entry reaches every adopter. The
-commons declare no `develop` entry: each consumer declares its own
-complete `develop` protection, and that protection together with any
-rulesets decides whether the App may push to `develop`
+Phase 2 declared the App as a push-restriction actor on `master` in
+`commons-settings.yml`. In that form the entry couldn't apply. GitHub limits
+`restrictions.users`, `.teams` and `.apps` to organisation-owned
+repositories, and the Probot Settings App passes the field through
+unchanged. A personal account owns every consumer, so by GitHub's documented
+limit the `master` update couldn't succeed on any of them. Nobody recorded
+the rejection for `master`; for `develop` the same field kept the update from
+applying ([#416](https://github.com/nolte/gh-plumbing/issues/416)).
+
+The commons now declare no branch entry at all, neither `master`
+([ADR-006](../decisions/adr-006-consumer-owned-master-protection.md))
+nor `develop`
 ([ADR-005](../decisions/adr-005-consumer-owned-develop-protection.md)).
+Each consumer declares its own complete entries. That protection,
+together with any rulesets, decides whether the App may push to a
+branch. Nothing restricts pushes to `master` unless the consumer
+declares it.
 
-The configured slug is **`nolte-portfolio-app`**:
+This repository declares `master` in its own `.github/settings.yml`:
 
-```yaml title=".github/commons-settings.yml"
+```yaml title=".github/settings.yml"
 branches:
   - name: master
     protection:
+      required_pull_request_reviews: null
+      required_status_checks: null
       enforce_admins: true
-      restrictions:
-        users: []
-        teams: []
-        apps:
-          - nolte-portfolio-app
+      restrictions: null
 ```
 
-!!! warning "Personal accounts can't honour `restrictions.apps`"
-    GitHub limits `restrictions.users` / `.teams` / `.apps` to
-    organisation-owned repositories. The Probot Settings App passes
-    the field through unchanged, so GitHub rejects the whole update for
-    the branch with 422 in a personal-account repository, and the
-    entry applies nothing. Personal-account consumers operate without
-    push restrictions and declare their own complete branch entry with
-    `restrictions: null`.
+On `master` this applies the protection to admins as well and requires
+no checks, no reviews and no push restriction. Force pushes and deletions stay
+blocked, because the API defaults both to `false`. These are the values
+that were live before the entry existed.
 
-!!! tip "Pre-condition for phase 2"
-    Before merging the phase-2 PR, the App must already live in
-    every consumer repository whose `commons-settings.yml` will
-    receive the bypass. An App that hasn't reached the repository
-    can't bypass anything. The only effect of an early phase 2 is to
-    block direct pushes from any other actor.
+!!! warning "Push restrictions need an organisation"
+    GitHub accepts `restrictions` with users, teams or apps only on
+    organisation-owned repositories. In a personal-account repository,
+    declare `restrictions: null`. Anything else fails the whole update
+    for the branch with 422, and the entry applies nothing. An
+    organisation-owned consumer that wants only the App to push to a
+    branch declares the slug **`nolte-portfolio-app`** under
+    `restrictions.apps` in its own entry.
+
+!!! tip "Install the App before you restrict a branch to it"
+    Before a consumer restricts pushes on a branch to the App, the App
+    must already live in that repository. An App that hasn't reached
+    the repository can't push. The only effect of an early restriction
+    is to block direct pushes from any other actor.
 
 ---
 

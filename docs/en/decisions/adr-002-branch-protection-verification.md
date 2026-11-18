@@ -55,3 +55,5 @@ The open question of whether `restrictions` on `develop` serves any purpose
 stays open. The commons justify it for `master`, where the release cascade
 pushes with an App token. That reasoning doesn't obviously transfer.
 [ADR-005](adr-005-consumer-owned-develop-protection.md) answers it for `develop`.
+[ADR-006](adr-006-consumer-owned-master-protection.md) removes the restriction
+for `master` too, because it never applied there either.

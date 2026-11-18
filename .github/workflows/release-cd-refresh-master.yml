@@ -20,18 +20,17 @@ permissions:
 
 
 # This wrapper pushes a fast-forward merge to master through
-# the force-with-lease push. After Phase 2 of issue #330 lands its
-# push-restriction (`restrictions.apps: [nolte-portfolio-app]`) on
-# master, `GITHUB_TOKEN` no longer has the right to push to master —
-# the App token is now mandatory. Forwarding `vars.PORTFOLIO_APP_ID`
-# and `secrets.PORTFOLIO_APP_PRIVATE_KEY` into the reusable lets it
-# mint a short-lived installation token at job start.
+# the force-with-lease push. Forwarding `vars.PORTFOLIO_APP_ID` and
+# `secrets.PORTFOLIO_APP_PRIVATE_KEY` into the reusable lets it mint a
+# short-lived installation token at job start, so the push cascades to
+# other workflows (a GITHUB_TOKEN push doesn't).
 #
 # Backwards compatibility: when `vars.PORTFOLIO_APP_ID` is unset, the
 # reusable skips the mint step and falls through to `secrets.token`
-# (= GITHUB_TOKEN). On an organisation-owned consumer whose master is
-# also restricted via the inherited commons, the GITHUB_TOKEN push
-# would fail — the operator must complete Phase 0 first.
+# (= GITHUB_TOKEN). The commons don't restrict pushes to master (#481,
+# ADR-006); a consumer that restricts its own master to the App
+# (`restrictions.apps`, organisation-owned repositories only) makes the
+# GITHUB_TOKEN push fail — the operator must complete Phase 0 first.
 
 jobs:
   refresh_presentation_branch:

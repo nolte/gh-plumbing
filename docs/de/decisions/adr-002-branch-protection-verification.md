@@ -57,3 +57,5 @@ Die offene Frage, ob `restrictions` auf `develop` überhaupt etwas bringt, bleib
 offen. Die Commons begründen es für `master`, wo die Release-Kaskade mit einem
 App-Token pusht. Diese Begründung überträgt sich nicht ohne Weiteres.
 [ADR-005](adr-005-consumer-owned-develop-protection.md) beantwortet sie für `develop`.
+[ADR-006](adr-006-consumer-owned-master-protection.md) entfernt die Restriktion
+auch für `master`, weil sie dort ebenso wenig griff.

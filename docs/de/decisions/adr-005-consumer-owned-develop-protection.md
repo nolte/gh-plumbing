@@ -106,3 +106,4 @@ Eintrag geändert hat, das Ergebnis über die API prüfen, nicht über die
 Einstellungsseite.
 
 Für `master` ändert diese Aufzeichnung nichts.
+[ADR-006](adr-006-consumer-owned-master-protection.md) behandelt `master`.

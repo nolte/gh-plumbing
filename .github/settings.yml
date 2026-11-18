@@ -7,7 +7,16 @@
 # file as well (a comment touch is enough) so the App re-runs the merge.
 # Tracked by https://github.com/nolte/gh-plumbing/issues/331.
 #
-# Last propagation: 2026-11-17 (third) — require the commit status
+# Last propagation: 2026-11-18 — commons-settings.yml no longer declares a
+# `master` entry (#481, ADR-006): its `restrictions.apps` can't work on a
+# user-owned repository, so GitHub rejects the master update and it applies
+# nothing (documented limit; not re-observed for master). This file now
+# declares `master` itself, with the values that are
+# live today, so the sync changes nothing there. Verify through the API
+# afterwards that `master` still reads enforce_admins true, no required
+# checks, no required reviews, no restrictions.
+#
+# Previous propagation: 2026-11-17 (third) — require the commit status
 # `fork-guard` on develop: posted from `pull_request_target`, so a fork can't
 # rewrite it, it fails a fork pull request that changes what the other
 # required checks execute (#465). Its workflow lands in the same change; the
@@ -121,4 +130,24 @@ branches:
       # used to make the whole develop update fail with 422 on this user-owned
       # repository, so contexts declared after it never applied
       # (nolte/gh-plumbing#416). The commons no longer declare it (#442).
+      restrictions: null
+
+  # The complete `master` protection payload. The commons declare no `master`
+  # entry any more (#481, ADR-006): since #355 their `restrictions.apps` can't
+  # be accepted on this user-owned repository, so that entry stopped applying
+  # here. The values below mirror the live protection as read
+  # through the API on 2026-11-18, so applying this entry changes nothing:
+  # admins included, no required checks, no required reviews, no push
+  # restriction. The fields not listed here (force pushes, deletions, linear
+  # history and the other booleans of that endpoint) take the API's default
+  # `false` on the full PUT,
+  # which is also what is live. The release workflow keeps `master` current;
+  # reusable-release-cd-refresh-master.yml reads this protection to choose
+  # its write strategy. Verify through the API after the sync
+  # (`gh api repos/nolte/gh-plumbing/branches/master/protection`).
+  - name: master
+    protection:
+      required_pull_request_reviews: null
+      required_status_checks: null
+      enforce_admins: true
       restrictions: null

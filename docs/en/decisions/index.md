@@ -17,6 +17,7 @@ here when it changes what consumers inherit.
 | [ADR-003](adr-003-workflow-validation-gate.md) | Gate workflow validity on a required check | Accepted |
 | [ADR-004](adr-004-spec-drift-routing.md) | Route the Q2 spec-drift cluster through the roadmap | Accepted |
 | [ADR-005](adr-005-consumer-owned-develop-protection.md) | Consumers declare their own complete develop protection | Accepted |
+| [ADR-006](adr-006-consumer-owned-master-protection.md) | Consumers declare their own master protection | Accepted |
 
 ## Format
 
