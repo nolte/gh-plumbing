@@ -98,5 +98,16 @@ None blocking. AC1's variant was decided by the operator (validation from docume
 
 | Finding | Source | Outcome | Reproduction | Issue |
 |---|---|---|---|---|
+| 1.6 floor claim too wide: `init`/`validate` in the module directory fail under 1.6.6 on `mock_provider` | diff review @ d958d9f | fixed directly (da2e90b, wording sharpened in 37bc179) | reviewer ran Terraform 1.6.6: `Blocks of type "mock_provider" are not expected here`; as child module init and validate pass | none |
+| bypass precondition also fired when both owners were set and advised "set `organization`" | diff review @ d958d9f | fixed directly (da2e90b) | plan with both owners + flag on showed both messages; after the fix only the owner message | none |
+| message stated the inference from documentation as fact ("can't apply") | diff review @ d958d9f | fixed directly (da2e90b) | `main.tf:32` at d958d9f | none |
+| Phase 0 row named only the organisation resources | diff review @ d958d9f | fixed directly (da2e90b) | `README.md:192` at d958d9f | none |
+| test-file comments claimed more than measured ("every command", "only the owner precondition is meant to fire") | diff review @ da2e90b | fixed directly (37bc179) | 1.6.6 `plan`/`fmt`/`output` run without error; reverting the narrowing keeps the run green | none |
+| no blocking findings; remaining non-blocking: long line `README.md:53`, the `null_resource` → `terraform_data` comment correction | diff review @ 37bc179 | dismissed (cosmetic; the comment correction is right) | — | none |
+| `push_allowances = ["/${var.app_slug}"]` resolves a user login, not an App, per provider source `getNodeIDv4` — in organisation mode too | specialist result | to file (asserted from source, not observed; needs a decision on the App node id input) | read of integrations/github v6.12.1 `github/util_v4_branch_protection.go` by the specialist; no apply | to be filed |
+| `plaintext_value` deprecated in provider 6.12.1 | specialist result | to file (outside the issue's files' purpose; changes a resource argument) | `terraform test` prints "Argument is deprecated … Use value." at `main.tf:106` | to be filed |
+| no CI lane runs `terraform fmt/validate/test` | specialist result | to file (needs a workflow decision) | `grep -n terraform .github/workflows/build-static-tests.yaml .pre-commit-config.yaml` → nothing | to be filed |
 
 ## Dispatch log
+2026-11-18 P1+P2 dispatched to nolte-engineering:fullstack-developer — implemented, d958d9f; review fixes da2e90b and 37bc179. No refutation of the plan; the specialist read the provider docs and source (v6.12.1): the provider doesn't check the owner type itself.
+2026-11-18 verify — `terraform fmt -check -recursive`: rc 0; `terraform validate`: Success; `terraform test`: 4 passed, 0 failed; pre-commit on the changed files: passed; Vale on changed EN lines: 0 alerts. Diff review lane (b), independent read-only agent, three passes; final head 37bc179197d993e3f9ed61bcf43c1a0eeb6e55d7, 10 files, 0 blocking. Class sweep predicate (7 hits on origin/develop, 0 on HEAD) recorded in the PR draft.
