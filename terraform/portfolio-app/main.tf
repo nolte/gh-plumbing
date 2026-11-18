@@ -28,8 +28,8 @@ resource "terraform_data" "owner_check" {
     }
 
     precondition {
-      condition     = !(var.user != "" && var.enable_branch_bypass)
-      error_message = "`enable_branch_bypass = true` needs organisation mode. GitHub documents push restrictions for users, teams and apps as available only on organisation-owned repositories, so the branch-protection bypass can't apply to repositories owned by the user account `${var.user}`. Leave `enable_branch_bypass = false` in user mode, or set `organization` for repositories an organisation owns."
+      condition     = !(var.user != "" && var.organization == "" && var.enable_branch_bypass)
+      error_message = "`enable_branch_bypass = true` needs organisation mode. GitHub documents push restrictions for users, teams and apps as available only on organisation-owned repositories, so the branch-protection bypass isn't expected to apply to repositories owned by the user account `${var.user}`. This rests on GitHub's documentation and wasn't tested with an apply. Leave `enable_branch_bypass = false` in user mode, or set `organization` for repositories an organisation owns."
     }
   }
 }

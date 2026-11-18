@@ -2,9 +2,11 @@
 # terraform_data.owner_check. The mocked provider needs no GitHub
 # credentials and makes no API calls.
 #
-# `terraform test` with `mock_provider` needs Terraform >= 1.7. That
-# applies to running these tests only; the module itself keeps its
-# >= 1.6 floor in versions.tf.
+# `mock_provider` needs Terraform >= 1.7, and Terraform loads this file
+# for every command run in this directory, so init, validate and test
+# here need >= 1.7. The >= 1.6 floor in versions.tf still holds when
+# the module is consumed as a child module (`source = ...`), because
+# Terraform doesn't load a child module's tests directory.
 #
 # Run from terraform/portfolio-app:
 #   terraform init -backend=false
@@ -50,6 +52,23 @@ run "organization_mode_allows_branch_bypass" {
     condition     = length(github_branch_protection.bypass) == 2
     error_message = "Expected one bypass entry per default protected branch."
   }
+}
+
+# Both owners set: only the owner precondition is meant to fire. The
+# bypass precondition is narrowed to pure user mode, so it doesn't
+# point at `organization` when that is already set.
+run "both_owners_with_branch_bypass" {
+  command = plan
+
+  variables {
+    organization         = "example-org"
+    user                 = "octocat"
+    enable_branch_bypass = true
+  }
+
+  expect_failures = [
+    terraform_data.owner_check,
+  ]
 }
 
 run "user_mode_without_branch_bypass" {

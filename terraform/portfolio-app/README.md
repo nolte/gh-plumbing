@@ -189,7 +189,7 @@ The module supports the three-phase migration described in
 
 | Phase | Module input | Result |
 |---|---|---|
-| Phase 0 | `enable_branch_bypass = false`, partial `consumer_repositories` | Organisation variable and secret created, visible only to the listed repositories. Wrappers in those repositories can adopt the App-token path. |
+| Phase 0 | `enable_branch_bypass = false`, partial `consumer_repositories` | Organisation variable and secret created, visible only to the listed repositories (user mode: one repository-level pair per listed repository). Wrappers in those repositories can adopt the App-token path. |
 | Phase 2 (organisation mode only) | `enable_branch_bypass = true`, same `consumer_repositories` | Branch protection updated with the App as a push-restriction actor. Workflow-driven primary path of `release-automation` becomes available. User mode stays at Phase 0 settings; the module refuses this input there. |
 | Phase 3 | extend `consumer_repositories` as new repositories adopt the wrappers | Variable and secret automatically extend to the new repositories. |
 
@@ -198,8 +198,10 @@ The module supports the three-phase migration described in
 `tests/owner_mode.tftest.hcl` checks the owner-mode preconditions at
 plan time with a mocked provider, without GitHub credentials. Run
 `terraform init -backend=false` and then `terraform test` in this
-directory. The tests need Terraform 1.7 or later for `mock_provider`.
-The module itself still requires only 1.6.
+directory. Because of the test file's `mock_provider`, working inside
+this directory (`init`, `validate`, `test`) needs Terraform 1.7 or
+later. The 1.6 floor in `versions.tf` holds when you consume the
+directory as a module through `source`.
 
 ## Versioning
 

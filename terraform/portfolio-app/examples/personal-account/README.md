@@ -41,8 +41,8 @@ terraform apply plan.tfplan
 Keep `enable_branch_bypass = false`. GitHub documents push restrictions
 for users, teams and apps as available only on organisation-owned
 repositories, so the module fails at plan time when the configuration
-sets `user` together with `enable_branch_bypass = true`. The branch-protection
-bypass needs organisation mode.
+sets `user` together with `enable_branch_bypass = true`. The module offers the
+branch-protection bypass only in organisation mode.
 
 ## When to prefer organisation mode
 
