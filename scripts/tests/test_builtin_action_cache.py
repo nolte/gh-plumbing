@@ -227,6 +227,56 @@ def test_long_values_are_shortened(tmp_path):
     assert "p" * (guard.ECHO_LIMIT + 1) not in found[0]
 
 
+def test_every_matched_uses_applies_its_rule(tmp_path):
+    # Both rules apply: setup-python's (clean here) and setup-node's (missing
+    # off switch). Checking only the first `uses:` would report nothing.
+    write(tmp_path, "w.yaml", workflow(f"{PYTHON}\n        uses: actions/setup-node@v6"))
+    found = messages(tmp_path)
+    assert len(found) == 1
+    assert "`actions/setup-node` without" in found[0]
+
+
+@pytest.mark.parametrize("text, problem", [
+    ("on: push\njobs:\n  j:\n    steps:\n      - run: x\n::warning::via-traceback: [a\n",
+     "not parseable"),
+    ("on: push\n---\n::warning::second-document: x\n", "not parseable"),
+])
+def test_unparseable_file_is_one_escaped_finding(tmp_path, capsys, text, problem):
+    write(tmp_path, "w.yaml", text)
+    assert guard.main(["--root", str(tmp_path)]) == 1
+    captured = capsys.readouterr()
+    lines = (captured.out + captured.err).splitlines()
+    assert [line for line in lines if line.lstrip().startswith("::")] == lines
+    assert len(lines) == 1
+    assert lines[0].startswith("::error file=.github/workflows/w.yaml,line=")
+    assert problem in lines[0]
+    assert "via-traceback" not in lines[0] and "second-document" not in lines[0]
+
+
+def test_unreadable_file_reports_the_exception_type_only(tmp_path, capsys):
+    path = write(tmp_path, "w.yaml", "")
+    path.write_bytes(b"on: push\n::warning::bytes \xff\xfe\n")
+    assert guard.main(["--root", str(tmp_path)]) == 1
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 1
+    assert "UnicodeDecodeError" in lines[0] and "::warning::" not in lines[0]
+
+
+def test_non_scalar_job_key_is_reported_without_crashing(tmp_path, capsys):
+    key = "[" + ", ".join(f"k{i}" for i in range(80)) + "]"
+    write(tmp_path, "w.yaml", (
+        "on: push\njobs:\n"
+        f"  ? {key}\n  : runs-on: ubuntu-latest\n    steps:\n      - uses: {NODE}\n"))
+    assert guard.main(["--root", str(tmp_path)]) == 1
+    out = capsys.readouterr().out
+    assert "job <non-scalar job key>:" in out
+
+
+def test_echoed_coerces_non_text_before_shortening():
+    assert guard.echoed(list(range(100))).endswith("...")
+    assert len(guard.echoed(list(range(100)))) == guard.ECHO_LIMIT + 3
+
+
 # --- selector and file discovery ---------------------------------------------
 
 def test_findings_are_printed_as_annotations(tmp_path, capsys):

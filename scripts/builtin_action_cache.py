@@ -140,9 +140,9 @@ def escape_property(value: str) -> str:
     return escape_data(value).replace(":", "%3A").replace(",", "%2C")
 
 
-def echoed(value: str | None) -> str:
-    """A value read from the file, shortened before it goes into a message."""
-    text = "<not a scalar>" if value is None else value
+def echoed(value: object) -> str:
+    """A value read from the file, as text and shortened before it goes into a message."""
+    text = "<not a scalar>" if value is None else str(value)
     return text if len(text) <= ECHO_LIMIT else text[:ECHO_LIMIT] + "..."
 
 
@@ -192,17 +192,15 @@ def audit_steps(path: Path, job: str, steps: yaml.Node) -> list[dict]:
         return findings
     for step in steps.value:
         # Every `uses:` of the step, so a duplicated key can't hide the action.
+        # The rule of every matched action applies, not only the first one's.
         uses_values = [scalar(value) for _, value in mapping_all(step, "uses")]
-        matched = next(
-            (rule for rule in (rule_for(u) for u in uses_values if u) if rule), None)
-        if matched is None:
-            continue
-        action, rule = matched
+        matched = dict(rule for rule in (rule_for(u) for u in uses_values if u) if rule)
         with_nodes = [value for _, value in mapping_all(step, "with")]
-        results = check_merge_keys(action, step, with_nodes)
-        for key, state in rule.items():
-            results += check_input(action, key, state, with_nodes, step.start_mark.line + 1)
-        findings += [finding(path, line, job, message) for line, message in results]
+        for action, rule in matched.items():
+            results = check_merge_keys(action, step, with_nodes)
+            for key, state in rule.items():
+                results += check_input(action, key, state, with_nodes, step.start_mark.line + 1)
+            findings += [finding(path, line, job, message) for line, message in results]
     return findings
 
 
@@ -216,7 +214,9 @@ def audit_file(path: Path) -> list[dict]:
         for job_key, job in jobs[1].value:
             steps = mapping_get(job, "steps")
             if steps:
-                findings += audit_steps(path, job_key.value, steps[1])
+                name = scalar(job_key)
+                findings += audit_steps(
+                    path, "<non-scalar job key>" if name is None else name, steps[1])
     runs = mapping_get(root, "runs")
     if runs:
         steps = mapping_get(runs[1], "steps")
@@ -237,9 +237,27 @@ def candidate_files(root: Path) -> list[Path]:
 
 
 def audit(root: Path) -> list[dict]:
+    """Audit every candidate file; a file that can't be read is a finding.
+
+    Fail-closed, and without the exception's own rendering: a PyYAML error
+    quotes the offending source line, and a line of a hostile file printed to
+    the log could be read as a workflow command. Only the problem text (escaped
+    and shortened on output) or the exception type is reported.
+    """
     findings = []
     for path in candidate_files(root):
-        findings += audit_file(path)
+        try:
+            findings += audit_file(path)
+        except yaml.MarkedYAMLError as error:
+            mark = error.problem_mark or error.context_mark
+            findings.append(finding(
+                path, mark.line + 1 if mark else 1, "(file)",
+                f"not parseable as one YAML document ({echoed(error.problem)}); "
+                "this guard can't check it."))
+        except Exception as error:  # fail closed, report the type only
+            findings.append(finding(
+                path, 1, "(file)",
+                f"could not be checked ({type(error).__name__}); this guard fails closed."))
     return findings
 
 
