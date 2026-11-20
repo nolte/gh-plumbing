@@ -138,6 +138,10 @@ none
 | N4: Node encoder test skips when `node` is missing (`test_step_summary_markdown.py:105`); the CI job provisions Python only | diff review @ 2b49da4 (pipeline lane) | fix directly (back to P2 specialist) | `grep -n skipif scripts/tests/test_step_summary_markdown.py` | none |
 | F4: encoders differ on U+2028/2029, C1 under `LC_ALL=C`, invalid UTF-8; bidi and zero-width characters pass all three; comments say `?` where output is `&#63;` | diff review @ 2b49da4 (security lane) | fix directly where cheap (wording, C1), rest named in the docstring (back to P2 specialist) | reviewer runs under `C.UTF-8`/`LC_ALL=C` | none |
 | F5: entity inflation may reach the 1 MiB summary limit earlier on very large coverage reports | diff review @ 2b49da4 (security lane) | not reproduced; into Risk / rollout notes; settled by a run with a ~600 KB report | none | none |
+| Re-review: F1, F3, F4 and the reported F2 bypasses closed | diff review @ ba38066 (code state 9e44d00, security lane) | no action | reviewer runs on bash 5.1/5.2/5.3 and the render API | none |
+| N1 BLOCKING: a closer on the line of the last statement (`echo "$V"; } >> "$GITHUB_STEP_SUMMARY"`) hides the whole group from the guard; regression from 9d198a9 | diff review @ ba38066 (security lane) | fix directly (back to P2 specialist) | fixture under scratchpad `n1/`, re-run by the orchestrator: guard rc=0 with a raw `$V` | none |
+| N2: `function f {` … `} >> "$S"` and `done \|` + `tee -a "$S"` on the next line pass; path-in-variable and print aliases not listed for the summary | diff review @ ba38066 (security lane) | fix directly: close or list (back to P2 specialist) | reviewer fixtures v22b, v36, b02, d29, b16, b22, b26 | none |
+| N3: bash `md_enc` is quadratic per line (40 000 chars: 7.1 s) | diff review @ ba38066 (security lane) | fix directly if a linear form stays byte-identical, else stated in the helper comment (back to P2 specialist) | reviewer timing on bash 5.2/5.3 | none |
 
 ## Dispatch log
 
