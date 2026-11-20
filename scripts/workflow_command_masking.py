@@ -142,6 +142,12 @@ Not covered (each would need a parser this script doesn't have):
   * `unset -f shown` or a later weak redefinition of `shown` after the
     canonical one, and a canonical `shown` that is defined only after its
     first use (the guard checks that the body defines it, not where);
+  * on a log line, a masked assignment in a branch that doesn't run: the
+    last assignment by line counts there (`x="$V"`, then `x=$(shown "$x")`
+    inside `if false`), because reading control flow is out of proportion and
+    the straight-line form -- raw, then masked -- is in use
+    (actions/setup-vale/setup-vale.sh, finish()); the summary rule reads
+    every assignment instead;
   * `shell: python` steps and other non-bash `shell:` values;
   * in the step summary: a bare name passed to a Node or Python print on a
     continuation line of the call (an f-string or template part there is
