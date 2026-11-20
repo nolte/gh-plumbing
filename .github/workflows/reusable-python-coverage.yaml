@@ -76,10 +76,20 @@ jobs:
       - name: Render coverage into the job summary
         if: ${{ !cancelled() }}
         run: |
+          # Encode, then wrap, for the step summary (#506): control characters
+          # become '?', ASCII punctuation a numeric HTML entity, inside <code>
+          # (md_code) or <pre> (md_pre, line ends kept). Caller and repository
+          # text then renders as text and links nothing.
+          md_enc() { local s="${1//[[:cntrl:]]/?}" o="" c i; local LC_ALL=C; for ((i = 0; i < ${#s}; i++)); do c="${s:i:1}"; [[ "$c" == [[:punct:]] ]] && printf -v c '&#%d;' "'$c"; o+="$c"; done; printf '%s' "$o"; }
+          md_code() { printf '<code>%s</code>' "$(md_enc "$1")"; }
+          md_pre() { local line; printf '<pre>'; while IFS= read -r line; do md_enc "${line%$'\r'}"; printf '\n'; done <<< "$1"; printf '</pre>\n'; }
+          # The report quotes the consumer's file names: captured as plain
+          # text and written as one <pre> block, not appended as Markdown.
+          report=$(coverage report --format=text)
           {
             echo "## Test coverage"
             echo
-            coverage report --format=markdown
+            md_pre "$report"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Enforce coverage threshold

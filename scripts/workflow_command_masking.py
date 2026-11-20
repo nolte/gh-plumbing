@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refuse a log line or env-file write that carries an unchecked value.
+"""Refuse a log line, env-file or step-summary write that carries an unchecked value.
 
 The runner reads every line a step prints as a possible workflow command, in
 two syntaxes (actions/runner, src/Runner.Common/ActionCommand.cs, read from
@@ -63,6 +63,36 @@ Two rules hold per line, whatever its names:
     another `$(shown "...")`, quotes in between included -- `'#'` followed by
     a masked `#[x` re-forms `##[` (`<mask seam>`).
 
+The step summary is a third sink with its own rule (#506). GitHub renders
+`$GITHUB_STEP_SUMMARY` as Markdown, so a controlled value there can add a
+link, an image, a heading, a mention or a table cell. Every line whose output
+reaches it -- a statement redirected or `tee`d there, a line of a
+`{ ...; } >> "$GITHUB_STEP_SUMMARY"` group, a line of a heredoc written there
+(`cat`, or a Python or Node heredoc whose stdout goes there; their stderr
+prints stay log lines) -- may interpolate only names that are:
+
+  * encoded and wrapped at the print by the canonical helper, which turns
+    control characters into `?` and every ASCII punctuation character into
+    its numeric HTML entity, inside `<code>` or `<pre>`: `$(md_code "$name")`,
+    or `md_code "$name"` / `md_pre "$name"` as a statement of their own, in
+    shell; `md_code(...)` / `md_pre(...)` in Python, `mdCode(...)` /
+    `mdPre(...)` in Node -- and only where the body or heredoc defines all of
+    the helper's lines exactly that way (SHELL_MD, PY_MD, JS_MD);
+  * assigned, last before the print, from `$(md_code "$name")`;
+  * constant or numeric by construction, as above;
+  * on ALLOWED with `sink="summary"`.
+
+`$(shown ...)`, a refusal and a log-sink ALLOWED entry don't count there: none
+of them touches Markdown. Nor does the bare encoder `md_enc`: unwrapped,
+`@name` and `#1` still link. A statement on such a line must be `echo`,
+`printf`, `md_code`/`md_pre` or one that prints nothing (`for`, `[[`, an
+assignment, ...); any other command, a pipeline, and a command substitution
+other than the helper are a finding named `<command output>`, since what a
+command prints is controlled text the guard can't read. In a Python or Node
+heredoc, every f-string or template-literal part on a stdout line, and every
+argument of a stdout print that is not one plain string literal, must be a
+call of the helper.
+
 A name with no assignment in the body and no `env:` entry -- a runner
 variable, a positional parameter -- is a finding unless ALLOWED names it. An
 ALLOWED entry that no line needs is reported too, and an entry bound to a check
@@ -80,7 +110,8 @@ Not covered (each would need a parser this script doesn't have):
   * what another command prints -- `jq`, `git`, `gh`, `vale`, a script run
     from a file, the output of a `$(...)` substitution (its variables are
     checked, its output is not; #492 found `du` echoing a file name that way)
-    -- and a print piped into another command;
+    -- and a print piped into another command, on a log line (on a summary
+    line both are refused as `<command output>`);
   * a leading value the line-start rule can't see: an `echo` whose first word
     is built by a command substitution or a variable holding the whole
     message, and a call site of a helper such as fork-guard's or setup-vale's
@@ -103,14 +134,20 @@ Not covered (each would need a parser this script doesn't have):
     canonical one, and a canonical `shown` that is defined only after its
     first use (the guard checks that the body defines it, not where);
   * `shell: python` steps and other non-bash `shell:` values;
+  * in the step summary: a bare name passed to a Node or Python print on a
+    continuation line of the call (an f-string or template part there is
+    read), a name built into a string by `+`, `%` or `.format(...)` before it
+    is printed, and a summary written by a script run from a file --
+    scripts/docs_freshness.py, scripts/branch_protection_audit.py and
+    scripts/required_check_triggers.py encode theirs with PY_MD's helpers,
+    held by their own tests, not by this guard;
   * Python string concatenation, `%` and `.format(...)`, and `+` in Node --
     only f-strings, template literals and bare arguments are read;
   * `: "${x:=$V}"`, `printf -v`, `eval`, `${!n}`, `declare -n`, an alias or a
     variable holding `$GITHUB_OUTPUT`, a command prefix held in a variable,
     `node -e` / `python -c` one-liners;
   * `actions/**/*.bash` and extension-less scripts;
-  * `${{ ... }}` expressions in a `run:` body (a neighbouring class),
-    `$GITHUB_STEP_SUMMARY` (Markdown, not a command channel), and the
+  * `${{ ... }}` expressions in a `run:` body (a neighbouring class), and the
     non-reusable workflows.
 
 Reads only. Exits non-zero on any finding, and on any file it can't read or
@@ -130,7 +167,8 @@ import yaml
 # `::error::`, `::error title=x::`, `::add-mask::`, `::<token>::` (resume).
 COMMAND = re.compile(r"::[A-Za-z0-9][A-Za-z0-9_-]*(?:\s[^:\n]*)?::")
 ENV_FILE = re.compile(r"""(?:>>?|\btee\b(?:\s+-a)?)\s*["']?\$\{?GITHUB_(?:OUTPUT|ENV|STATE|PATH)\b\}?["']?""")
-SUMMARY = re.compile(r"""\$\{?GITHUB_STEP_SUMMARY\b""")
+SUMMARY_FILE = re.compile(r"""(?:>>?|\btee\b(?:\s+-a)?)\s*["']?\$\{?GITHUB_STEP_SUMMARY\b\}?["']?""")
+SUMMARY_TEE = re.compile(r"""\btee\b(?:\s+-a)?\s*["']?\$\{?GITHUB_STEP_SUMMARY\b""")
 HEREDOC = re.compile(r"""(?<!<)<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1""")
 # `$name`, `${name...}`, `$1`; `${{` is an expression, `${#` a length.
 SHELL_REF = re.compile(r"\$(?:\{(?!\{)(#?)([A-Za-z_][A-Za-z0-9_]*|[0-9])([^}]*)\}|([A-Za-z_][A-Za-z0-9_]*|[0-9]))")
@@ -166,6 +204,58 @@ SEAM_NAME = "<mask seam>"
 # + '[', shown('x#') + shown('#[y').
 SEAM = re.compile(r"""#["']*\$\(shown "|\$\(shown "[^"]*"\)["']*(?:[#\[]|\$\(shown ")""")
 
+# The step summary is Markdown, rendered by GitHub (#506). Its canonical
+# helpers encode, then wrap: control characters become '?', every ASCII
+# punctuation character its numeric HTML entity (`&#NN;`), and the result sits
+# inside <code>...</code> (one line) or <pre>...</pre> (line ends kept, a
+# CR before one dropped). Encoded text holds no character Markdown, HTML or an
+# autolink reads, and inside <code>/<pre> GitHub links no `@name` or `#1`
+# either. md_enc alone is not a mask: unwrapped, `@name` and `#1` still link.
+SHELL_MD = (
+    """md_enc() { local s="${1//[[:cntrl:]]/?}" o="" c i; local LC_ALL=C; for ((i = 0; i < ${#s}; i++)); do """
+    """c="${s:i:1}"; [[ "$c" == [[:punct:]] ]] && printf -v c '&#%d;' "'$c"; o+="$c"; done; printf '%s' "$o"; }""",
+    """md_code() { printf '<code>%s</code>' "$(md_enc "$1")"; }""",
+    """md_pre() { local line; printf '<pre>'; while IFS= read -r line; do md_enc "${line%$'\\r'}"; printf '\\n'; """
+    """done <<< "$1"; printf '</pre>\\n'; }""",
+)
+JS_MD = (
+    "const mdEnc = (value) => String(value).replace(/[\\u0000-\\u001f\\u007f-\\u009f]/g, '?')"
+    ".replace(/[\\x21-\\x2f\\x3a-\\x40\\x5b-\\x60\\x7b-\\x7e]/g, (c) => `&#${c.charCodeAt(0)};`);",
+    "const mdCode = (value) => `<code>${mdEnc(value)}</code>`;",
+    "const mdPre = (value) => `<pre>${String(value).replace(/\\r\\n/g, '\\n').split('\\n').map(mdEnc).join('\\n')}"
+    "\\n</pre>`;",
+)
+PY_MD = '''def md_enc(value):
+    return re.sub(r"[\\x21-\\x2f\\x3a-\\x40\\x5b-\\x60\\x7b-\\x7e]", lambda m: f"&#{ord(m.group())};",
+                  re.sub(r"[\\x00-\\x1f\\x7f-\\x9f]", "?", str(value)))
+
+
+def md_code(value):
+    return f"<code>{md_enc(value)}</code>"
+
+
+def md_pre(value):
+    lines = str(value).replace("\\r\\n", "\\n").split("\\n")
+    return "<pre>" + "\\n".join(md_enc(line) for line in lines) + "\\n</pre>"
+'''
+NAME = r"([A-Za-z_][A-Za-z0-9_]*|[0-9])"
+# `$(md_code "$x")`, `$(md_code "${x}")` inside a printed string.
+SHELL_MD_CODE = re.compile(r"""\$\(md_code "\$\{?""" + NAME + r"""\}?"\)""")
+MD_ASSIGNMENT = re.compile(r"""^"?\$\(md_code "\$\{?""" + NAME + r"""\}?"\)"?$""")
+# `md_code "$x"` or `md_pre "$x"` as a statement of its own.
+MD_STATEMENT = re.compile(r"""^md_(?:code|pre) "\$\{?""" + NAME + r"""\}?"$""")
+# Substitutions whose names are reported on their own: a log mask, the bare
+# encoder or a non-canonical md_code is not a summary mask, and saying so names
+# the value.
+NAMED_SUBSTITUTION = re.compile(r"""\$\((?:shown|md_enc|md_code) "\$\{?""" + NAME + r"""\}?"\)""")
+# Statements that write nothing to stdout, or only start a block.
+SILENT = {"fi", "done", "esac", "}", "{", "[[", "[", "test", "true", "false", ":", "exit", "return", "break",
+          "continue", "local", "declare", "readonly", "export", "set", "shift", "unset", "read", "mapfile", "cd"}
+KEYWORDS = ("then", "else", "elif", "do", "if", "while", "until", "!", "{", "}")
+OUTPUT_NAME = "<command output>"
+JS_MD_CALL = ("mdCode", "mdPre")
+PY_MD_CALL = ("md_code", "md_pre")
+
 
 @dataclass(frozen=True)
 class Allowed:
@@ -178,7 +268,10 @@ class Allowed:
     (step, line) of the file that constrains the value at its origin, another
     step that writes the output this one reads. Both must match a non-comment
     line; either makes the entry stale when its line is gone, so the reason
-    can't outlive the check.
+    can't outlive the check. `sink` is the channel the reason holds for:
+    "log" (log lines and env files) or "summary" (`$GITHUB_STEP_SUMMARY`) --
+    a value safe on a command channel is not safe in Markdown, so an entry
+    never covers both.
     """
 
     path: str
@@ -188,6 +281,7 @@ class Allowed:
     env: str | None = None
     after: str | None = None
     source: tuple[str, str] | None = None
+    sink: str = "log"
 
 
 PUBLISH = ".github/workflows/reusable-release-publish.yml"
@@ -319,6 +413,19 @@ ALLOWED: tuple[Allowed, ...] = (
         "GITHUB_REPOSITORY", "GITHUB_SHA", "GITHUB_RUN_ID", "GITHUB_SERVER_URL",
         "RUNNER_OS", "RUNNER_ARCH", "RUNNER_TEMP", "GITHUB_ACTION_PATH",
     )),
+    # Step-summary Markdown (#506): values left as Markdown on purpose.
+    *(Allowed(PUBLISH, name, step="Disclose target state in job summary", sink="summary",
+              reason="the login of the user who triggered the run, set by the runner; written after '@' so the "
+                     "summary links the triggerer on purpose")
+      for name in ("GITHUB_TRIGGERING_ACTOR", "GITHUB_ACTOR")),
+    *(Allowed(PUBLISH, name, step="Disclose target state in job summary", sink="summary",
+              reason="set by the runner; the run URL is built from them so that it autolinks")
+      for name in ("GITHUB_SERVER_URL", "GITHUB_REPOSITORY", "GITHUB_RUN_ID")),
+    Allowed(REFRESH, "REASON", step="Refuse: no permitted write path", env="${{ steps.strategy.outputs.reason }}",
+            source=("Determine the write strategy from the target's protection", 'echo "reason=$reason"'),
+            sink="summary",
+            reason="the strategy step assigns reason only from literals, one with intended backticks (read by hand, "
+                   "NOT checked by this guard)"),
 )
 
 
@@ -450,10 +557,15 @@ def unquoted(text: str) -> str:
 
 
 def destination(text: str) -> str:
-    """Where a shell line's stdout goes: log, file, envfile or pipe."""
+    """Where a shell line's stdout goes: log, file, envfile, summary or pipe."""
     bare = unquoted(text)
     if ENV_FILE.search(text):
         return "envfile"
+    if SUMMARY_TEE.search(text):
+        return "summary"
+    # A pipeline into the summary still ends there.
+    if any(SUMMARY_FILE.match(text, m.start()) for m in re.finditer(r"(?<![0-9&<])>>?(?!&)", bare)):
+        return "summary"
     if re.search(r"(?<!\|)\|(?!\|)", bare):
         return "pipe"
     for m in re.finditer(r"(?<![0-9&<])(>>?)(?!&)\s*", bare):
@@ -560,10 +672,11 @@ def is_comment(text: str) -> bool:
     return text.lstrip().startswith(("#", "//"))
 
 
-def redirected_groups(units: list[Logical]) -> tuple[set[int], set[int]]:
-    """Lines inside a `{ ... } > target` group: all of them, and those into an env file."""
+def redirected_groups(units: list[Logical]) -> tuple[set[int], set[int], set[int]]:
+    """Lines inside a `{ ... } > target` group: all of them, those into an env file, those into the summary."""
     redirected: set[int] = set()
     envfile: set[int] = set()
+    summary: set[int] = set()
     for k, unit in enumerate(units):
         if unit.lang == "sh" and re.match(r"^\s*\}", unit.text) and destination(unit.text) != "log":
             depth = 0
@@ -577,13 +690,15 @@ def redirected_groups(units: list[Logical]) -> tuple[set[int], set[int]]:
                         redirected.update(range(j + 1, k))
                         if destination(unit.text) == "envfile":
                             envfile.update(range(j + 1, k))
+                        if destination(unit.text) == "summary":
+                            summary.update(range(j + 1, k))
                         break
-    return redirected, envfile
+    return redirected, envfile, summary
 
 
 def sink_units(units: list[Logical]) -> set[int]:
     """Indices of units that emit a command, write an env file or print to the log."""
-    redirected, sinks = redirected_groups(units)
+    redirected, sinks, _ = redirected_groups(units)
     for k, unit in enumerate(units):
         if unit.lang == "data" or is_comment(unit.text):
             continue
@@ -595,7 +710,7 @@ def sink_units(units: list[Logical]) -> set[int]:
             if dest == "envfile":
                 sinks.add(k)
             elif (SHELL_PRINT.search(unquoted(text)) and dest == "log" and k not in redirected
-                  and text.strip() != SHELL_SHOWN):
+                  and text.strip() != SHELL_SHOWN and text.strip() not in SHELL_MD):
                 sinks.add(k)
         elif unit.lang == "sh-heredoc":
             if unit.dest in ("envfile", "log"):
@@ -615,9 +730,13 @@ def sink_units(units: list[Logical]) -> set[int]:
     return sinks
 
 
-def shell_refs(text: str) -> list[tuple[str, bool, bool]]:
-    """(name, masked, numeric) for every expansion outside single quotes."""
-    text = ENV_FILE.sub("", text)
+def shell_refs(text: str, mask: re.Pattern = SHELL_MASKED) -> list[tuple[str, bool, bool]]:
+    """(name, masked, numeric) for every expansion outside single quotes.
+
+    `mask` is the masked form of the sink: `$(shown "$x")` for a log line,
+    `$(md_code "$x")` for the step summary.
+    """
+    text = SUMMARY_FILE.sub("", ENV_FILE.sub("", text))
     refs = []
     quote = None
     i = 0
@@ -633,7 +752,7 @@ def shell_refs(text: str) -> list[tuple[str, bool, bool]]:
         if c == '"':
             quote = None if quote == '"' else '"'
         if c == "$":
-            masked = SHELL_MASKED.match(text, i)
+            masked = mask.match(text, i)
             if masked:
                 refs.append((masked.group(1), True, False))
                 i = masked.end()
@@ -643,7 +762,7 @@ def shell_refs(text: str) -> list[tuple[str, bool, bool]]:
                 if m.group(2):
                     refs.append((m.group(2), False, bool(m.group(1))))
                     # `${x:-$y}`, `${x//pat/$y}`: the modifier expands too.
-                    refs += shell_refs(m.group(3))
+                    refs += shell_refs(m.group(3), mask)
                 else:
                     refs.append((m.group(4), False, False))
                 i = m.end()
@@ -727,6 +846,40 @@ def printed_exprs(unit: Logical) -> list[str]:
     return exprs
 
 
+def single_literal(arg: str, lang: str) -> bool:
+    """One string literal and nothing else; a template's or f-string's parts are read on their own."""
+    prefix = r"[rRbBfFuU]{0,2}" if lang == "py" else ""
+    quotes = ("'", '"') if lang == "py" else ("'", '"', "`")
+    return any(re.fullmatch(prefix + q + r"(?:[^" + q + r"\\]|\\.)*" + q, arg.strip()) for q in quotes)
+
+
+def whole_call(expr: str, names: tuple[str, ...]) -> bool:
+    """The expression is one call of one of `names`, closed at its very end."""
+    text = expr.strip()
+    m = re.match(r"^(?:" + "|".join(map(re.escape, names)) + r")\(", text)
+    if not m:
+        return False
+    depth, quote, i = 0, None, m.end() - 1
+    while i < len(text):
+        c = text[i]
+        if quote:
+            if c == "\\":
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+        elif c in "'\"`":
+            quote = c
+        elif c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+            if depth == 0:
+                return i == len(text) - 1
+        i += 1
+    return False
+
+
 class Checker:
     """Decides, for one run body, whether a name on a sink line is clean."""
 
@@ -753,6 +906,33 @@ class Checker:
             else:
                 continue
             self.shown[key] = self.shown.get(key, False) or ok
+        # The summary helpers: every line of the canonical block, in the body
+        # (shell) or in the same heredoc (Python, Node).
+        self.shell_md = all(any(u.lang == "sh" and u.text.strip() == line for u in self.units) for line in SHELL_MD)
+        self.md: dict[int, bool] = {}
+        heredocs: dict[int, list[str]] = {}
+        for k, unit in enumerate(self.units):
+            if unit.lang in ("py", "js") and unit.text.strip():
+                heredocs.setdefault(self.heredoc_id(k), []).append(unit.text.strip())
+        py_block = [line.strip() for line in PY_MD.split("\n") if line.strip()]
+        for key, lines in heredocs.items():
+            if self.units[key].lang == "js":
+                self.md[key] = all(line in lines for line in JS_MD)
+            else:
+                self.md[key] = any(lines[i:i + len(py_block)] == py_block for i in range(len(lines)))
+
+    def helper_line(self, k: int) -> bool:
+        """A line of a canonical helper's own definition."""
+        unit = self.units[k]
+        text = unit.text.strip()
+        if unit.lang == "sh":
+            return text in SHELL_MD or text == SHELL_SHOWN
+        if unit.lang == "js":
+            return text in JS_MD or text == JS_SHOWN
+        if unit.lang == "py":
+            return text in [line.strip() for line in PY_MD.split("\n")] or text == PY_SHOWN_RETURN \
+                or PY_SHOWN.match(unit.text) is not None
+        return False
 
     def heredoc_id(self, k: int) -> int:
         j = k
@@ -760,11 +940,11 @@ class Checker:
             j -= 1
         return j
 
-    def allowed(self, name: str, k: int, shell: bool) -> bool:
+    def allowed(self, name: str, k: int, shell: bool, sink: str = "log") -> bool:
         body = self.body
         found = []
         for entry in self.entries:
-            if entry.path not in ("*", body.path) or entry.name != name:
+            if entry.path not in ("*", body.path) or entry.name != name or entry.sink != sink:
                 continue
             if entry.step is not None and entry.step != body.step:
                 continue
@@ -824,6 +1004,175 @@ class Checker:
                         or (ref != name and self.clean_shell(ref, j, depth + 1))):
                     return False
         return True
+
+    def clean_summary(self, name: str, k: int, depth: int = 0) -> bool:
+        """A shell name is safe in the step summary's Markdown where it stands.
+
+        Encoded and wrapped by md_code at its last assignment, constant or built
+        only from such names, or on ALLOWED for the summary. No refusal and
+        no log mask counts: neither touches Markdown.
+        """
+        before = [(j, rhs) for j, rhs in self.assigned.get(name, []) if j < k]
+        if before and self.shell_md and MD_ASSIGNMENT.match((before[-1][1] or "").strip()):
+            return True
+        if self.allowed(name, k, shell=True, sink="summary"):
+            return True
+        everywhere = self.assigned.get(name, [])
+        if name in self.body.env:
+            return not everywhere and "$" not in self.body.env[name]
+        if not everywhere or depth > 5:
+            return False
+        for j, rhs in everywhere:
+            if rhs is None:
+                return False
+            rest = SHELL_MD_CODE.sub("", rhs) if self.shell_md else rhs
+            if "$(" in rest or re.search(r"(?<!\\)`", rest):
+                return False
+            for ref, masked, numeric in shell_refs(rhs, SHELL_MD_CODE):
+                if not ((masked and self.shell_md) or numeric
+                        or (ref != name and self.clean_summary(ref, j, depth + 1))):
+                    return False
+        return True
+
+    def summary_units(self) -> list[int]:
+        """Units whose output reaches `$GITHUB_STEP_SUMMARY`."""
+        _, _, grouped = redirected_groups(self.units)
+        out = []
+        for k, unit in enumerate(self.units):
+            if is_comment(unit.text) or not unit.text.strip() or self.helper_line(k):
+                continue
+            if unit.lang == "sh" and (k in grouped or destination(unit.text) == "summary"):
+                out.append(k)
+            elif unit.lang in ("sh-heredoc", "py", "js") and unit.dest == "summary":
+                out.append(k)
+        return out
+
+    def summary_shell(self, k: int) -> list[str]:
+        """Unclean names on a shell line whose output reaches the summary."""
+        unit = self.units[k]
+        text = SUMMARY_FILE.sub("", unit.text)
+        if unit.lang == "sh-heredoc":
+            # Text the shell expands: a single quote is literal, `$x` after it
+            # expands.
+            return self.summary_statements([("echo", text.replace("'", " "))], k)
+        heredoc = HEREDOC.search(text)
+        if heredoc:
+            # The heredoc's own lines are read where they stand; `cat` prints
+            # them unchanged, any other command prints its own output.
+            command = text[:heredoc.start()]
+            if re.search(r"\b(?:python[0-9.]*|node)\b", command) or self.statement_head(command) == "cat":
+                return []
+            return [OUTPUT_NAME]
+        bare = unquoted(text)
+        # Output that goes elsewhere: a file, an env file, stderr.
+        if re.search(r">&2|(?<![0-9&<])>>?(?!&)", bare):
+            return []
+        names = []
+        if re.search(r"(?<!\|)\|(?!\|)", bare):
+            names.append(OUTPUT_NAME)  # the summary gets the last command's output
+        statements, start = [], 0
+        for m in re.finditer(r";|&&|\|\||\|", bare):
+            statements.append(text[start:m.start()])
+            start = m.end()
+        statements.append(text[start:])
+        return names + self.summary_statements([(self.statement_head(s), s) for s in statements], k)
+
+    @staticmethod
+    def statement_head(statement: str) -> str:
+        """The command word: after keywords and `NAME=value` prefixes."""
+        words = statement.split()
+        while words and (words[0] in KEYWORDS or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0])):
+            words.pop(0)
+        return words[0] if words else ""
+
+    def summary_statements(self, statements: list[tuple[str, str]], k: int) -> list[str]:
+        names: list[str] = []
+        for head, statement in statements:
+            body = statement.strip()
+            while True:
+                words = body.split(None, 1)
+                if not words or words[0] not in KEYWORDS:
+                    break
+                body = words[1] if len(words) > 1 else ""
+            body = re.sub(r"\s*\}$", "", body).strip()
+            assignment = ASSIGNMENT.match(body)
+            if assignment and assignment.end() == len(body):
+                continue  # prints nothing; a command substitution in it is captured
+            if head in ("md_code", "md_pre"):
+                if not (self.shell_md and MD_STATEMENT.match(body)):
+                    names.append(OUTPUT_NAME)
+                continue
+            if head in ("echo", "printf"):
+                # A command substitution prints a command's output, unless it
+                # is the summary mask; names in `$(shown "$x")` and
+                # `$(md_enc "$x")` are reported by name below.
+                visible = self._outside_single_quotes(body)
+                if self.shell_md:
+                    visible = SHELL_MD_CODE.sub(lambda m: " " * len(m.group()), visible)
+                visible = NAMED_SUBSTITUTION.sub(lambda m: " " * len(m.group()), visible)
+                if re.search(r"\$\((?!\()", visible) or re.search(r"(?<!\\)`", visible):
+                    names.append(OUTPUT_NAME)
+                for name, masked, numeric in shell_refs(body, SHELL_MD_CODE):
+                    if not ((masked and self.shell_md) or numeric or self.clean_summary(name, k)):
+                        names.append(name)
+                continue
+            if not head or head in SILENT or head == "for":
+                continue
+            names.append(OUTPUT_NAME)
+        return names
+
+    @staticmethod
+    def _outside_single_quotes(text: str) -> str:
+        """The text with single-quoted strings blanked; double quotes kept."""
+        out, quote, i = [], None, 0
+        while i < len(text):
+            c = text[i]
+            if c == "\\" and quote is None and i + 1 < len(text):
+                out.append(text[i:i + 2])
+                i += 2
+                continue
+            if quote == "'":
+                quote = None if c == "'" else quote
+                out.append(" ")
+            elif c == "'" and quote is None:
+                quote = "'"
+                out.append(" ")
+            else:
+                if c == '"':
+                    quote = None if quote == '"' else ('"' if quote is None else quote)
+                out.append(c)
+            i += 1
+        return "".join(out)
+
+    def summary_template(self, k: int) -> list[str]:
+        """Unclean values on a Python or Node line whose stdout reaches the summary."""
+        unit = self.units[k]
+        text = unit.text
+        calls = JS_MD_CALL if unit.lang == "js" else PY_MD_CALL
+        defined = self.md.get(self.heredoc_id(k), False)
+        m = (PY_PRINT if unit.lang == "py" else JS_PRINT).search(text)
+        if m:
+            to_stderr = m.group(1) not in ("print", "sys.stdout.write", "console.log", "console.info",
+                                           "console.debug", "process.stdout.write") or "file=sys.stderr" in text
+            if to_stderr:
+                return []  # a log line; the log rules above read it
+        exprs = list(template_exprs(text, unit.lang))
+        if m:
+            for arg in call_args(text, m.end()):
+                if unit.lang == "py" and re.match(r"^[A-Za-z_]+\s*=", arg):
+                    continue
+                if single_literal(arg, unit.lang):
+                    continue  # a literal, or a template whose parts are read above
+                exprs.append(arg)
+        names = []
+        for expr in exprs:
+            if defined and whole_call(expr, calls):
+                continue
+            if unit.lang == "py" and whole_call(expr, ("len",)):
+                continue
+            root = re.match(r"^[A-Za-z_][A-Za-z0-9_.]*", expr)
+            names.append(root.group(0) if root else expr)
+        return names
 
     @staticmethod
     def printed_segment(unit: Logical) -> str:
@@ -930,7 +1279,7 @@ def audit_body(body: Body, siblings: list[Body] | None = None, entries: tuple[Al
     checker = Checker(body, siblings if siblings is not None else [body], entries,
                       used if used is not None else set())
     findings = []
-    redirected, _ = redirected_groups(checker.units)
+    redirected, _, _ = redirected_groups(checker.units)
     for k in sorted(sink_units(checker.units)):
         line = body.first_line + checker.units[k].index
         for name in dict.fromkeys(checker.names_on(k)):
@@ -950,6 +1299,19 @@ def audit_body(body: Body, siblings: list[Body] | None = None, entries: tuple[Al
                 body.path, line, body.step,
                 f"`{LEADING}`: this log line begins with an interpolated value. No mask touches a "
                 "leading '::', so put a literal in front of it."))
+    for k in checker.summary_units():
+        unit = checker.units[k]
+        line = body.first_line + unit.index
+        names = checker.summary_shell(k) if unit.lang in ("sh", "sh-heredoc") else checker.summary_template(k)
+        for name in dict.fromkeys(names):
+            if name == OUTPUT_NAME:
+                message = (f"`{OUTPUT_NAME}`: a command's output reaches a step-summary write as Markdown. Capture "
+                           "it and write it through the canonical md_pre helper (md_code for one line).")
+            else:
+                message = (f"`{capped(name)}` reaches a step-summary write unencoded. Write it through the "
+                           "canonical md_code/md_pre helper (mdCode/mdPre in Node, md_code/md_pre in Python), or "
+                           "add it to ALLOWED with sink='summary' and the reason it is constrained.")
+            findings.append(finding(body.path, line, body.step, message))
     return findings
 
 
@@ -1015,8 +1377,8 @@ def main(argv: list[str] | None = None) -> int:
     for e in stale:
         print(annotation(e.path, 0, f"ALLOWED entry for `{e.name}` matches no line; remove it or fix its scope."))
     if not findings and not stale:
-        print(f"Every log line and env-file write in {shown(str(args.root))} prints only masked or "
-              "constrained values.")
+        print(f"Every log line, env-file and step-summary write in {shown(str(args.root))} prints only masked "
+              "or constrained values.")
     return 1 if findings or stale else 0
 
 

@@ -24,11 +24,14 @@ by scripts/workflow_command_masking.py and its tests.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
+import sys
 
 import pytest
 import yaml
@@ -38,6 +41,16 @@ WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 HOSTILE = "v1\n::warning::injected"
 
 HOSTILE_V1 = "v1##[set-output name=x]y"
+
+# The step summary's encoder (#506), the Python form the masking guard ships.
+_guard_spec = importlib.util.spec_from_file_location(
+    "workflow_command_masking", REPO_ROOT / "scripts" / "workflow_command_masking.py")
+_guard = importlib.util.module_from_spec(_guard_spec)
+sys.modules.setdefault(_guard_spec.name, _guard)
+_guard_spec.loader.exec_module(_guard)
+_md: dict = {}
+exec("import re\n" + _guard.PY_MD, _md)
+md_code = _md["md_code"]
 HOSTILE_WARN = "##[warning]z"
 
 GH_STUB = """#!/usr/bin/env bash
@@ -48,6 +61,8 @@ case "$1 $2" in
     case "$*" in
       *targetCommitish*) printf '%s\\n' "$STUB_TARGET" ;;
       *body*) printf '%s\\n' "$STUB_BODY" ;;
+      *"--json name"*) printf '%s\\n' "${STUB_TITLE:-}" ;;
+      *createdAt*) printf '%s\\n' "${STUB_CREATED:-}" ;;
     esac ;;
   "run list") printf '%s\\n' "$STUB_RUNS" ;;
   "api "*)
@@ -277,7 +292,8 @@ def test_hacs_asset_filename_is_masked(run, tmp_path, asset, from_hacs):
                            "(spec/ha/hacs-release §ZIP release distribution).")
     assert commands(proc) == expected
     assert f"Building HACS asset '{shown}' from custom_components/demo at {sha[:8]}." in proc.stdout
-    assert f"- Built `{shown}` (dry run, not uploaded)." in summary
+    # The summary encodes the name as given; the log mask plays no part there.
+    assert f"- Built {md_code(asset or from_hacs)} (dry run, not uploaded)." in summary
     assert output == ""
 
 
@@ -288,7 +304,7 @@ def test_hacs_clean_filename_is_unchanged(run, tmp_path):
     assert proc.returncode == 0, proc.stderr
     assert commands(proc) == ["::notice::Dry run — built 'demo.zip' but not uploading to draft 'v1.2.3'."]
     assert (repo / "demo.zip").is_file()
-    assert "- Built `demo.zip` (dry run, not uploaded)." in summary
+    assert "- Built <code>demo&#46;zip</code> (dry run, not uploaded)." in summary
 
 
 # --- reusable-release-publish.yml: Python messages ---------------------------
@@ -529,7 +545,8 @@ def test_hacs_asset_filename_with_a_v1_command_is_masked(run, tmp_path):
     no_v1_commands(proc)
     assert "Building HACS asset 'demo#?[warning]z.zip' from custom_components/demo" in proc.stdout
     assert "asset: demo#?[warning]z.zip" in proc.stdout
-    assert "- Built `demo#?[warning]z.zip` (dry run, not uploaded)." in summary
+    assert f"- Built {md_code('demo' + HOSTILE_WARN + '.zip')} (dry run, not uploaded)." in summary
+    assert "##[" not in summary
 
 
 @pytest.mark.parametrize("version", ["0.55.0##[set-output name=key]attacker", "0.55.0" + HOSTILE_WARN])
@@ -740,3 +757,96 @@ def test_publish_lists_draft_tag_names_with_v1_commands_masked(run, given):
     assert len(commands(proc)) == 1 and commands(proc)[0].startswith("::error::")
     assert "  - v1.0.0\n  - v3#?[warning]z\n  - v4##?[x\n" in proc.stderr
     assert output == ""
+
+
+
+# --- the step summary is Markdown (#506) -------------------------------------------
+#
+# GitHub renders $GITHUB_STEP_SUMMARY. A caller input, draft text, a file name
+# or a figure from the test run must not add a link, an image, a heading, a
+# mention or a table cell there. Each test runs a repaired step and checks that
+# outside the <code>/<pre> elements the helper writes, none of the value's
+# Markdown survives, and that inside them only entities stand for punctuation.
+
+MD_HOSTILE = "[x](https://example.com) <img src=x> @octocat #1 |c| `d` **e**"
+MD_FRAGMENTS = ("[x](", "<img", "@octocat", "#1", "|c|", "`d`", "**e**", "https://")
+
+
+def assert_inert(summary: str, allowed: tuple[str, ...] = ()) -> None:
+    rest = re.sub(r"(?s)<code>[^<]*</code>|<pre>[^<]*</pre>", "", summary)
+    for fragment in MD_FRAGMENTS:
+        if fragment not in allowed:
+            assert fragment not in rest, (fragment, rest)
+    for element in re.findall(r"(?s)<code>([^<]*)</code>|<pre>([^<]*)</pre>", summary):
+        inner = re.sub(r"&#[0-9]+;", "", "".join(element))
+        assert not re.search(r"[\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e]", inner), inner
+
+
+def test_disclose_encodes_tag_title_and_body(run):
+    body = f"## Notes\n\n{MD_HOSTILE}\n```\n</pre>\n# heading\r\nlast"
+    proc, _, summary = run(PUBLISH, "Disclose target state in job summary", {
+        "TAG": "v1.2.3[x](u)", "TARGET_SHA": "a" * 40, "DRY_RUN": "true", "VBF_SOURCE": "python",
+        "VBF_COUNT": "1", "STUB_TITLE": MD_HOSTILE, "STUB_BODY": body, "STUB_CREATED": "2026-11-20T00:00:00Z",
+        "GITHUB_ACTOR": "octocat", "GITHUB_SERVER_URL": "https://github.com", "GITHUB_RUN_ID": "1"})
+    assert proc.returncode == 0, proc.stderr
+    # The triggerer stays a mention and the run URL a link, on purpose.
+    assert_inert(summary, allowed=("@octocat", "https://"))
+    assert "| Triggerer | @octocat |" in summary
+    assert "| Run URL | https://github.com/owner/repo/actions/runs/1 |" in summary
+    assert f"| Title | {md_code(MD_HOSTILE)} |" in summary
+    assert summary.count("<pre>") == 1 and summary.count("</pre>") == 1
+    assert "```" not in summary and "# heading" not in summary
+
+
+def test_disclose_keeps_the_empty_title_fallback(run):
+    proc, _, summary = run(PUBLISH, "Disclose target state in job summary", {
+        "TAG": "v1.2.3", "TARGET_SHA": "a" * 40, "DRY_RUN": "false", "VBF_SOURCE": "python", "VBF_COUNT": "1",
+        "GITHUB_ACTOR": "octocat", "GITHUB_SERVER_URL": "https://github.com", "GITHUB_RUN_ID": "1"})
+    assert proc.returncode == 0, proc.stderr
+    assert "| Title | _(empty)_ |" in summary
+
+
+def test_refresh_master_refusal_encodes_the_refs_in_the_summary(run):
+    proc, _, summary = run("reusable-release-cd-refresh-master.yml", "Refuse: no permitted write path", {
+        "TARGET": "master" + MD_HOSTILE, "FROM_REF": "v1.2.3",
+        "REASON": "a `pull_request` ruleset rule requires every change to arrive through a pull request"})
+    assert proc.returncode == 1
+    assert_inert(summary)
+    assert f"Cannot refresh {md_code('master' + MD_HOSTILE)} to {md_code('v1.2.3')}: a `pull_request`" in summary
+    assert "| Reason | a `pull_request` ruleset rule" in summary, "REASON keeps its intended Markdown"
+
+
+def test_archive_dry_run_encodes_the_asset_names(run, tmp_path):
+    archive = tmp_path / "work" / "release-archive"
+    archive.mkdir(parents=True)
+    hostile = "a[x](u) @octocat #1 |c| `d`.tar.gz"
+    (archive / hostile).write_text("x", encoding="utf-8")
+    proc, _, summary = run("reusable-release-archive.yml", "Attach to the draft", {
+        "TAG": "v1.2.3", "BUILT_SHA": "a" * 40, "DRY_RUN": "true", "GH_REPO": "owner/repo"})
+    assert proc.returncode == 0, proc.stderr
+    assert_inert(summary)
+    assert summary == f"### Release archive (dry run)\n- {md_code(hostile)}\n"
+
+
+def test_python_coverage_writes_the_report_as_one_pre_block(run):
+    stub = "#!/usr/bin/env bash\n" + 'printf \'%s\\n\' "Name    Stmts" "' + MD_HOSTILE + '.py  3" "</pre>"\n'
+    proc, _, summary = run("reusable-python-coverage.yaml", "Render coverage into the job summary",
+                           stubs_extra={"coverage": stub})
+    assert proc.returncode == 0, proc.stderr
+    assert_inert(summary)
+    assert summary.startswith("## Test coverage\n\n<pre>Name    Stmts\n")
+    assert summary.count("<pre>") == 1 and summary.endswith("</pre>\n")
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_nodejs_coverage_encodes_the_figures(run, tmp_path):
+    report = tmp_path / "coverage-summary.json"
+    metric = {"pct": MD_HOSTILE, "covered": 1, "total": 2}
+    report.write_text(json.dumps({"total": {k: metric for k in ("lines", "statements", "functions", "branches")}}),
+                      encoding="utf-8")
+    proc, _, table = run("reusable-nodejs-coverage.yaml", "Render coverage into the job summary",
+                         {"SUMMARY_PATH": str(report)})
+    assert proc.returncode == 0, proc.stderr
+    assert_inert(table)
+    rows = [line for line in table.splitlines() if line.startswith("| <code>")]
+    assert len(rows) == 4 and all(row.count("|") == 4 for row in rows), "three cells per row"
