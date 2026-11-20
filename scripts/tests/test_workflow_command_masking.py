@@ -842,3 +842,51 @@ def test_a_statement_before_a_group_on_its_line_stays_a_log_line(tmp_path):
     write(tmp_path, REL, workflow(f'echo "x $VALUE"; {{ echo a\n  echo b\n}} {SUMMARY}'))
     messages = [f["message"] for f in guard.audit(tmp_path, ())[0]]
     assert any(m.startswith("`VALUE` reaches a log line") for m in messages), messages
+
+
+# --- a heredoc inside a redirected group, an array of keywords (#506, third pass) ---
+
+def summary_messages(tmp_path, run: str) -> list[str]:
+    write(tmp_path, REL, workflow(run))
+    return [f["message"] for f in guard.audit(tmp_path, ())[0]]
+
+
+@pytest.mark.parametrize("run", [
+    f'{HELPER}\n{{\n  cat <<EOF\nx $(shown "$VALUE")\nEOF\n}} {SUMMARY}',
+    f'{HELPER}\nfor v in a; do\n  cat <<EOF\nx $(shown "$VALUE")\nEOF\ndone {SUMMARY}',
+    (f"{{\n  node <<'NODE'\n{guard.JS_SHOWN}\nconst p = process.env.P;\nconsole.log(`x ${{shown(p)}}`);\nNODE\n}} "
+     f"{SUMMARY}"),
+])
+def test_a_heredoc_inside_a_summary_group_is_read_by_the_summary_rule(tmp_path, run):
+    messages = summary_messages(tmp_path, run)
+    assert messages and all("step-summary write" in m for m in messages), messages
+
+
+def test_a_raw_heredoc_value_inside_a_summary_group_gets_the_summary_message(tmp_path):
+    messages = summary_messages(tmp_path, f'{{\n  cat <<EOF\nx $VALUE\nEOF\n}} {SUMMARY}')
+    assert [m.split("`")[1] for m in messages] == ["VALUE"]
+    assert messages[0].startswith("`VALUE` reaches a step-summary write unencoded")
+
+
+def test_an_encoded_python_heredoc_inside_a_summary_group_is_fine(tmp_path):
+    run = ("{\n  python3 - <<'PY'\nimport os, re\n" + guard.PY_MD
+           + f"k = os.environ['K']\nprint(md_code(k))\nPY\n}} {SUMMARY}")
+    assert summary_messages(tmp_path, run) == []
+
+
+def test_a_heredoc_inside_an_env_file_group_stays_an_env_file_write(tmp_path):
+    messages = summary_messages(tmp_path, '{\n  cat <<EOF\nv=$VALUE\nEOF\n} >> "$GITHUB_OUTPUT"')
+    assert [m.split("`")[1] for m in messages] == ["VALUE"]
+    assert messages[0].startswith("`VALUE` reaches a log line or env-file write unmasked")
+
+
+def test_a_heredoc_redirected_elsewhere_inside_a_summary_group_is_not_summary(tmp_path):
+    run = f"{{\n  echo fixed\n  python3 - <<'PY' >&2\nimport os\nprint(os.environ['V'])\nPY\n}} {SUMMARY}"
+    messages = summary_messages(tmp_path, run)
+    assert messages and all("log line" in m for m in messages), messages
+
+
+def test_an_array_of_keywords_opens_nothing(tmp_path):
+    run = (f'{HELPER}\nfor x in 1; do\n  echo "x $(shown "$VALUE")"\n  kw=(if for while)\n  local -a k2=(do {{ case)\n'
+           f'done {SUMMARY}')
+    assert summary_names(tmp_path, run) == ["VALUE"]

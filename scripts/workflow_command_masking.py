@@ -73,9 +73,11 @@ a `{ ...; } >> "$GITHUB_STEP_SUMMARY"` group, a function body (`f() {`,
 into `tee` there as a whole, its opening line included, unless it sends its
 own stdout elsewhere -- openers and closers count anywhere at statement level
 (`echo "$v"; } >> ...` ends its group), and a closer redirected there whose
-opener the guard can't find is itself a finding (`<summary group>`); a line of a heredoc written there by a bare
-`cat`, or a Python or Node heredoc whose stdout goes there (their stderr
-prints stay log lines) -- may interpolate only names that are:
+opener the guard can't find is itself a finding (`<summary group>`); a line
+of a heredoc written there by a bare `cat`, or a Python or Node heredoc whose
+stdout goes there (their stderr prints stay log lines) -- also one opened
+inside such a group without a stdout redirect of its own -- may interpolate
+only names that are:
 
   * encoded and wrapped at the print by the canonical helper, which turns a
     control character into a question mark and every ASCII punctuation
@@ -169,6 +171,11 @@ Not covered (each would need a parser this script doesn't have):
   * `: "${x:=$V}"`, `printf -v`, `eval`, `${!n}`, `declare -n`, an alias or a
     variable holding `$GITHUB_OUTPUT` or `$GITHUB_STEP_SUMMARY`, a command
     prefix held in a variable, `node -e` / `python -c` one-liners;
+  * the stdout of a Python or Node heredoc written to an env file
+    (`node <<'X' >> "$GITHUB_OUTPUT"`): only its stderr prints are read;
+  * an array literal that spans lines (`kw=(` ... `)`): its words on the
+    later lines read as statements, so a keyword there opens or closes a
+    group (one closed on its own line is blanked);
   * a print the Python or Node reading doesn't name: an alias of it
     (`out = sys.stdout.write`, `const log = console.log`), `os.write(1, ...)`,
     `print` passed or rebound, `process.stdout` behind another name;
@@ -256,7 +263,10 @@ SEAM = re.compile(r"""#["']*\$\(shown "|\$\(shown "[^"]*"\)["']*(?:[#\[]|\$\(sho
 # with a per-character loop: measured with bash 5.3.9 on a loaded machine,
 # 40 000 characters of code-like text take 0.27 s (the loop took 15.5 s);
 # 40 000 characters of nothing but punctuation still take about 3 s, since
-# bash's substitution slows with the number of matches.
+# bash's substitution slows with the number of matches. It walks the
+# punctuation codes by brace expansion (`{33..47} ...`), so it needs brace
+# expansion on: under `set +B` it aborts (`printf: {91..96}: invalid number`).
+# No step sets +B today.
 SHELL_MD = (
     """md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" c n x; """
     """s="${s//$'\\xc2'[$'\\x80'-$'\\x9f']/?}"; s="${s//$'\\xe2\\x80'[$'\\xa8\\xa9']/?}"; """
@@ -578,7 +588,8 @@ class Logical:
     index: int  # first physical line, 0-based within the body
     text: str
     lang: str  # sh, py, js, data
-    dest: str = "log"  # where a heredoc's stdout goes: log, file, envfile, pipe
+    dest: str = "log"  # where a heredoc's stdout goes: log, file, envfile, summary, pipe
+    origin: int = -1  # a heredoc line: the unit of the command that opened it
 
 
 def unquoted(text: str) -> str:
@@ -636,14 +647,14 @@ def destination(text: str) -> str:
 def logical_lines(lines: list[str]) -> list[Logical]:
     out: list[Logical] = []
     i = 0
-    heredoc: tuple[str, str, str] | None = None
+    heredoc: tuple[str, str, str, int] | None = None
     while i < len(lines):
         if heredoc is not None:
-            delimiter, lang, dest = heredoc
+            delimiter, lang, dest, origin = heredoc
             if lines[i].strip() == delimiter:
                 heredoc = None
             else:
-                out.append(Logical(i, lines[i], lang, dest))
+                out.append(Logical(i, lines[i], lang, dest, origin))
             i += 1
             continue
         start, text = i, lines[i]
@@ -663,7 +674,7 @@ def logical_lines(lines: list[str]) -> list[Logical]:
                 # Quoted delimiter: text the shell leaves alone. Unquoted: the
                 # shell expands it, so it reads like any other shell line.
                 lang = "data" if match.group(1) else "sh-heredoc"
-            heredoc = (match.group(2), lang, dest)
+            heredoc = (match.group(2), lang, dest, len(out) - 1)
         i += 1
     return out
 
@@ -741,9 +752,17 @@ STATEMENT_SPLIT = re.compile(r";|&&|\|\||(?<!>)\|(?!\|)|(?<![>&])&(?![>&])|[()]"
 GROUP_NAME = "<summary group>"
 
 
+# `name=(...)`, `name+=(...)`: an array literal, whose words are data.
+ARRAY_LITERAL = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\+?=\([^()]*\)")
+
+
 def statements_of(text: str) -> list[tuple[str, str, str]]:
-    """(text, unquoted text, separator after it) for every statement-level segment."""
-    bare = unquoted(text)
+    """(text, unquoted text, separator after it) for every statement-level segment.
+
+    An array literal closed on the same line is blanked first, so `kw=(if fi)`
+    neither splits a statement nor opens or closes a group.
+    """
+    bare = ARRAY_LITERAL.sub(lambda m: " " * len(m.group()), unquoted(text))
     out, start = [], 0
     for m in STATEMENT_SPLIT.finditer(bare):
         out.append((text[start:m.start()], bare[start:m.start()], m.group()))
@@ -862,6 +881,28 @@ def redirected_groups(units: list[Logical]) -> tuple[set[int], set[int], set[int
     # the log after all: the log rule keeps reading it.
     redirected = {i for i in redirected if not TO_STDERR.search(unquoted(units[i].text))}
     return redirected, envfile, summary
+
+
+def inherit_group_dest(units: list[Logical]) -> None:
+    """A heredoc opened inside a redirected group writes where the group does.
+
+    Its own line decides first: a heredoc whose command redirects stdout
+    (`> f`, `>> "$GITHUB_OUTPUT"`, `>&2`, a pipe) keeps that. Otherwise, in
+    a group redirected to the summary, its lines take the summary as their
+    target, so the summary rule reads them. In a group into an env file they
+    stay as they were: the log rule reads them, with the same name check and
+    message an env-file write gets.
+    """
+    _, _, summary = redirected_groups(units)
+    for unit in units:
+        if unit.lang == "sh" or unit.origin < 0 or unit.dest != "log":
+            continue
+        opener = units[unit.origin]
+        command = HEREDOC.sub(" ", opener.text)
+        if STDOUT_ELSEWHERE.search(unquoted(command)) or PIPE.search(unquoted(command)):
+            continue
+        if unit.origin in summary:
+            unit.dest = "summary"
 
 
 def unattributed_summary_closers(units: list[Logical]) -> list[int]:
@@ -1096,6 +1137,7 @@ class Checker:
         self.entries = entries
         self.used = used
         self.units = logical_lines(body.lines)
+        inherit_group_dest(self.units)
         self.assigned: dict[str, list[tuple[int, str | None]]] = {}
         for j, unit in enumerate(self.units):
             for name, rhs in assignments(unit):
