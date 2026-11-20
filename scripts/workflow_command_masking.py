@@ -136,8 +136,9 @@ Not covered (each would need a parser this script doesn't have):
   * `shell: python` steps and other non-bash `shell:` values;
   * in the step summary: a bare name passed to a Node or Python print on a
     continuation line of the call (an f-string or template part there is
-    read), a name built into a string by `+`, `%` or `.format(...)` before it
-    is printed, and a summary written by a script run from a file --
+    read), a heredoc that opens the summary file itself (`fs.appendFileSync`,
+    `open(os.environ["GITHUB_STEP_SUMMARY"], "a")`) instead of printing to a
+    redirected stdout, and a summary written by a script run from a file --
     scripts/docs_freshness.py, scripts/branch_protection_audit.py and
     scripts/required_check_triggers.py encode theirs with PY_MD's helpers,
     held by their own tests, not by this guard;
