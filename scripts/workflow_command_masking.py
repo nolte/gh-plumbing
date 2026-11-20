@@ -68,9 +68,12 @@ The step summary is a third sink with its own rule (#506). GitHub renders
 link, an image, a heading, a mention or a table cell. Every line whose output
 reaches it -- a statement redirected (`>`, `>>`, `>|`) or `tee`d there,
 also through `> >(tee ...)` and whatever else the line holds; a statement of
-a `{ ...; } >> "$GITHUB_STEP_SUMMARY"` group or of a `for`/`while`/`until`/
-`if` compound redirected there as a whole, its opening line included, unless
-it sends its own stdout elsewhere; a line of a heredoc written there by a bare
+a `{ ...; } >> "$GITHUB_STEP_SUMMARY"` group, a function body (`f() {`,
+`function f {`) or a `for`/`while`/`until`/`if` compound redirected or piped
+into `tee` there as a whole, its opening line included, unless it sends its
+own stdout elsewhere -- openers and closers count anywhere at statement level
+(`echo "$v"; } >> ...` ends its group), and a closer redirected there whose
+opener the guard can't find is itself a finding (`<summary group>`); a line of a heredoc written there by a bare
 `cat`, or a Python or Node heredoc whose stdout goes there (their stderr
 prints stay log lines) -- may interpolate only names that are:
 
@@ -164,8 +167,11 @@ Not covered (each would need a parser this script doesn't have):
     `+` in Node -- only f-strings, template literals and bare arguments are
     read (on a summary line each is refused);
   * `: "${x:=$V}"`, `printf -v`, `eval`, `${!n}`, `declare -n`, an alias or a
-    variable holding `$GITHUB_OUTPUT`, a command prefix held in a variable,
-    `node -e` / `python -c` one-liners;
+    variable holding `$GITHUB_OUTPUT` or `$GITHUB_STEP_SUMMARY`, a command
+    prefix held in a variable, `node -e` / `python -c` one-liners;
+  * a print the Python or Node reading doesn't name: an alias of it
+    (`out = sys.stdout.write`, `const log = console.log`), `os.write(1, ...)`,
+    `print` passed or rebound, `process.stdout` behind another name;
   * `actions/**/*.bash` and extension-less scripts;
   * `${{ ... }}` expressions in a `run:` body (a neighbouring class), and the
     non-reusable workflows.
@@ -729,32 +735,80 @@ OPENERS = {"{", "for", "while", "until", "select", "if", "case"}
 CLOSERS = {"}", "done", "fi", "esac"}
 
 
-def depth_change(unit: Logical) -> int:
-    """How many compound commands a shell line opens minus how many it closes."""
-    if unit.lang != "sh" or is_comment(unit.text):
-        return 0
-    change = 0
-    for segment in re.split(r"[;&|()]", unquoted(unit.text)):
-        words = segment.split()
-        while words and words[0] in ("then", "else", "elif", "do", "!"):
+# Statement boundaries in unquoted text: `;`, `&&`, `||`, a pipe (not the `|`
+# of `>|`), a background `&` (not `2>&1` or `&>`), and `(` / `)`.
+STATEMENT_SPLIT = re.compile(r";|&&|\|\||(?<!>)\|(?!\|)|(?<![>&])&(?![>&])|[()]")
+GROUP_NAME = "<summary group>"
+
+
+def statements_of(text: str) -> list[tuple[str, str, str]]:
+    """(text, unquoted text, separator after it) for every statement-level segment."""
+    bare = unquoted(text)
+    out, start = [], 0
+    for m in STATEMENT_SPLIT.finditer(bare):
+        out.append((text[start:m.start()], bare[start:m.start()], m.group()))
+        start = m.end()
+    out.append((text[start:], bare[start:], ""))
+    return out
+
+
+def segment_role(bare: str) -> tuple[int, int]:
+    """(groups opened, groups closed) by a statement-level segment: `{ for x` opens two."""
+    words = bare.split()
+    opens = closes = 0
+    while words:
+        if words[0] in ("then", "else", "elif", "do", "!"):
             words.pop(0)
-        if words and words[0] in OPENERS:
-            change += 1
-        elif words and words[0] in CLOSERS:
-            change -= 1
-    return change
+        elif words[0] in OPENERS:
+            opens += 1
+            words.pop(0)
+        elif words[0] == "function" and "{" in words[1:3]:
+            opens += 1
+            words = words[words.index("{", 1) + 1:]
+        elif words[0] in CLOSERS and not opens:
+            closes += 1
+            words.pop(0)
+        else:
+            break
+    return opens, closes
+
+
+def segment_dest(segments: list[tuple[str, str, str]], i: int, units: list[Logical], k: int) -> str:
+    """Where the closer segment i of unit k sends its group's output."""
+    text = segments[i][0]
+    if SUMMARY_FILE.search(text) or SUMMARY_TEE.search(text):
+        return "summary"
+    if ENV_FILE.search(text):
+        return "envfile"
+    if segments[i][2] == "|":
+        # A pipeline: where its tee writes, on this line or -- after a
+        # trailing `|` -- on the next shell line.
+        rest = "".join(seg[0] + seg[2] for seg in segments[i + 1:])
+        if not rest.strip():
+            rest = next((u.text for u in units[k + 1:] if u.lang == "sh" and u.text.strip()), "")
+        if SUMMARY_TEE.search(rest):
+            return "summary"
+        if ENV_FILE.search(rest):
+            return "envfile"
+        return "pipe"
+    if STDOUT_ELSEWHERE.search(segments[i][1]):
+        return "file"
+    return "log"
 
 
 def redirected_groups(units: list[Logical]) -> tuple[set[int], set[int], set[int]]:
     """Lines whose output a redirect on a later line sends to a file.
 
     Returns all lines inside a `{ ... } > target` group, the lines of a group
-    or compound command (`{`, `for`/`while`/`until`, `if`, `case`) into an env
-    file, and those into the summary. A group whose `{` is alone on its line is
-    read as before for every target; for an env file or the summary the opener
-    may also carry a statement (`{ echo a`) and a loop or `if` counts too, its
-    opening line included -- that is where `{ echo "$v"` or `do echo "$v"`
-    prints. Into a plain file only the old `{`-alone form is taken out of the
+    or compound command (`{`, `f() {`, `function f {`, `for`/`while`/`until`/
+    `select`, `if`, `case`) into an env file, and those into the summary.
+
+    Openers and closers are read per statement, anywhere on a line, through a
+    stack across lines, so `echo "$v"; } >> "$GITHUB_STEP_SUMMARY"` closes the
+    group it ends. For an env file or the summary every line from the opener's
+    to the closer's counts; a line is only taken out of the log rule if its
+    opener starts it and its closer ends it, and never when it sends stdout to
+    stderr. Into a plain file only the old `{`-alone form is taken out of the
     log rule.
     """
     redirected: set[int] = set()
@@ -764,45 +818,66 @@ def redirected_groups(units: list[Logical]) -> tuple[set[int], set[int], set[int
         if unit.lang != "sh" or is_comment(unit.text):
             continue
         head = unquoted(unit.text).split()
-        if not head or head[0] not in CLOSERS:
+        if not head or head[0] != "}" or destination(unit.text) == "log":
             continue
-        dest = destination(unit.text)
-        if dest == "log":
-            continue
-        if head[0] == "}":
-            depth = 0
-            for j in range(k, -1, -1):
-                stripped = units[j].text.strip()
-                if stripped.startswith("}"):
-                    depth += 1
-                if stripped == "{":
-                    depth -= 1
-                    if depth == 0:
-                        redirected.update(range(j + 1, k))
-                        if dest == "envfile":
-                            envfile.update(range(j + 1, k))
-                        if dest == "summary":
-                            summary.update(range(j + 1, k))
-                        break
-        if dest not in ("envfile", "summary"):
-            continue
-        total = 0
+        depth = 0
         for j in range(k, -1, -1):
-            total += depth_change(units[j])
-            if total == 0 and j < k:
-                members = [i for i in range(j, k) if units[i].lang == "sh"]
+            stripped = units[j].text.strip()
+            if stripped.startswith("}"):
+                depth += 1
+            if stripped == "{":
+                depth -= 1
+                if depth == 0:
+                    redirected.update(range(j + 1, k))
+                    if destination(unit.text) == "envfile":
+                        envfile.update(range(j + 1, k))
+                    if destination(unit.text) == "summary":
+                        summary.update(range(j + 1, k))
+                    break
+    stack: list[tuple[int, bool]] = []
+    for k, unit in enumerate(units):
+        if unit.lang != "sh" or is_comment(unit.text):
+            continue
+        segments = statements_of(unit.text)
+        for i, (_, bare, _) in enumerate(segments):
+            opens, closes = segment_role(bare)
+            first = not any(seg[1].strip() for seg in segments[:i])
+            stack += [(k, first)] * opens
+            for c in range(closes):
+                # Only the last closer of `} }` carries the segment's redirect.
+                dest = segment_dest(segments, i, units, k) if c == closes - 1 else "log"
+                if not stack:
+                    break  # unattributed; a summary closer is reported by audit_body
+                opened, first = stack.pop()
+                if dest not in ("envfile", "summary"):
+                    continue
+                members = [m for m in range(opened, k + 1) if units[m].lang == "sh"]
                 if dest == "envfile":
                     envfile.update(members)
-                else:
-                    summary.update(members)
-                    redirected.update(members)
-                break
-            if total == 0:
-                break  # a compound command that opens and closes on this line
+                    continue
+                summary.update(members)
+                last = not any(seg[1].strip() for seg in segments[i + 1:])
+                redirected.update(m for m in members if (m != opened or first) and (m != k or last))
     # A line inside such a group that sends its own stdout to stderr prints to
     # the log after all: the log rule keeps reading it.
     redirected = {i for i in redirected if not TO_STDERR.search(unquoted(units[i].text))}
     return redirected, envfile, summary
+
+
+def unattributed_summary_closers(units: list[Logical]) -> list[int]:
+    """Lines whose closer is redirected to the summary but whose opener the guard can't find."""
+    out, depth = [], 0
+    for k, unit in enumerate(units):
+        if unit.lang != "sh" or is_comment(unit.text):
+            continue
+        segments = statements_of(unit.text)
+        for i, (_, bare, _) in enumerate(segments):
+            opens, closes = segment_role(bare)
+            depth += opens
+            if closes > depth and segment_dest(segments, i, units, k) == "summary":
+                out.append(k)
+            depth = max(depth - closes, 0)
+    return out
 
 
 def sink_units(units: list[Logical]) -> set[int]:
@@ -1493,6 +1568,12 @@ def audit_body(body: Body, siblings: list[Body] | None = None, entries: tuple[Al
                 body.path, line, body.step,
                 f"`{LEADING}`: this log line begins with an interpolated value. No mask touches a "
                 "leading '::', so put a literal in front of it."))
+    for k in unattributed_summary_closers(checker.units):
+        findings.append(finding(
+            body.path, body.first_line + checker.units[k].index, body.step,
+            f"`{GROUP_NAME}`: this line closes a group or compound redirected to the step summary, but the "
+            "guard finds no opener for it, so it can't tell which lines print there. Write the opener as a "
+            "statement of its own (`{`, `for ...; do`, `if ...; then`)."))
     for k in checker.summary_units():
         unit = checker.units[k]
         line = body.first_line + unit.index

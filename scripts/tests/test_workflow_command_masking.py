@@ -805,3 +805,40 @@ def test_a_stderr_line_inside_a_redirected_group_is_still_a_log_line(tmp_path, r
     write(tmp_path, REL, workflow(run))
     messages = [f["message"] for f in guard.audit(tmp_path, ())[0]]
     assert any(m.startswith("`VALUE` reaches a log line") for m in messages), messages
+
+
+# --- a closer anywhere on a line ends its group (#506 re-review) ------------------
+
+@pytest.mark.parametrize("run", [
+    # the 2b49da4-era form: the closer on the line of the last statement
+    f'{{\n  echo "### t"\n  echo "$VALUE"; }} {SUMMARY}',
+    f'for v in a; do\n  echo "x $VALUE"; done {SUMMARY}',
+    f'if true; then\n  echo "x $VALUE"; fi {SUMMARY}',
+    f'{{ for v in a; do\n  echo "x $VALUE"\ndone; }} {SUMMARY}',
+    f'{{ for v in a; do\n  echo "x $VALUE"; done; }} {SUMMARY}',
+    f'f() {{\n  echo "x $VALUE"\n}} {SUMMARY}\nf',
+    f'function f {{\n  echo "x $VALUE"\n}} {SUMMARY}\nf',
+    'for v in a; do\n  echo "x $VALUE"\ndone |\n  tee -a "$GITHUB_STEP_SUMMARY"',
+])
+def test_a_closer_after_a_statement_still_ends_the_group(tmp_path, run):
+    write(tmp_path, REL, workflow(run))
+    messages = [f["message"] for f in guard.audit(tmp_path, ())[0]]
+    assert any(m.startswith("`VALUE` reaches a step-summary write") for m in messages), messages
+
+
+def test_an_env_file_group_closed_after_a_statement_is_read_as_env_file(tmp_path):
+    write(tmp_path, REL, workflow('{\n  echo "a=fixed"\n  echo "b=$VALUE"; } >> "$GITHUB_OUTPUT"'))
+    findings = guard.audit(tmp_path, ())[0]
+    assert findings and {f["line"] for f in findings} == {14}, "only the line that writes b=$VALUE"
+    assert all(f["message"].startswith("`VALUE` reaches a log line or env-file write") for f in findings)
+
+
+def test_a_summary_closer_without_an_opener_fails_closed(tmp_path):
+    run = f"cat > g.sh <<'EOF'\n{{\nEOF\n  echo \"fixed\"; }} {SUMMARY}"
+    assert summary_names(tmp_path, run) == [guard.GROUP_NAME]
+
+
+def test_a_statement_before_a_group_on_its_line_stays_a_log_line(tmp_path):
+    write(tmp_path, REL, workflow(f'echo "x $VALUE"; {{ echo a\n  echo b\n}} {SUMMARY}'))
+    messages = [f["message"] for f in guard.audit(tmp_path, ())[0]]
+    assert any(m.startswith("`VALUE` reaches a log line") for m in messages), messages
