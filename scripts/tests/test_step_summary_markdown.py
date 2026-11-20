@@ -57,7 +57,10 @@ guard = load("workflow_command_masking")
 # Unicode line and paragraph separators, an HTML comment opener, and
 # non-ASCII letters that must pass as is.
 HOSTILE = ("a`b`|c\r\nd</pre>[x](https://example.com)<img src=x>@name #1 & ```\x07\x1b"
-           "\n# h\nwww.example.com é\rz a@b.co xmpp:a@b.co/r v1@evil.example \x85 \u2028 \u2029 <!-- x -->ü")
+           "\n# h\nwww.example.com é\rz a@b.co xmpp:a@b.co/r v1@evil.example \x85 \u2028 \u2029 <!-- x -->ü"
+           # every ASCII punctuation character, and what bash's printf and
+           # pattern substitution could read: `&`, `%d`, `\\x41`, `*`, `?`, `[`.
+           " !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~ && %d %s \\x41 [a-z]* ?")
 CONTROLS = r"[\x00-\x1f\x7f-\x9f\u2028\u2029]"
 AT = "&#64;<!-- -->"
 PUNCTUATION = re.compile(r"[\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e]")

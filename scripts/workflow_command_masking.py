@@ -244,13 +244,19 @@ SEAM = re.compile(r"""#["']*\$\(shown "|\$\(shown "[^"]*"\)["']*(?:[#\[]|\$\(sho
 # still link. What passes all three helpers unchanged: bidi controls and
 # zero-width characters (they can make a value inside <code> read differently,
 # not add Markdown), and, in bash only, bytes that are not valid UTF-8 (Node
-# and Python see decoded strings).
+# and Python see decoded strings). Bash encodes with one pattern substitution
+# per punctuation character over the whole value (each match becomes control
+# markers around its code, the markers then `&#`, `;` and the comment), not
+# with a per-character loop: measured with bash 5.3.9 on a loaded machine,
+# 40 000 characters of code-like text take 0.27 s (the loop took 15.5 s);
+# 40 000 characters of nothing but punctuation still take about 3 s, since
+# bash's substitution slows with the number of matches.
 SHELL_MD = (
-    """md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" o="" c i; """
+    """md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" c n x; """
     """s="${s//$'\\xc2'[$'\\x80'-$'\\x9f']/?}"; s="${s//$'\\xe2\\x80'[$'\\xa8\\xa9']/?}"; """
-    """for ((i = 0; i < ${#s}; i++)); do c="${s:i:1}"; """
-    """case "$c" in @) c='&#64;<!-- -->' ;; [[:punct:]]) printf -v c '&#%d;' "'$c" ;; esac; """
-    """o+="$c"; done; printf '%s' "$o"; }""",
+    """for n in {33..47} {58..64} {91..96} {123..126}; do printf -v x '%x' "$n"; printf -v c '%b' "\\\\x$x"; """
+    """s=${s//"$c"/$'\\x01'$n$'\\x02'}; done; s=${s//$'\\x01'64$'\\x02'/$'\\x01'64$'\\x02\\x03'}; """
+    """s=${s//$'\\x01'/'&#'}; s=${s//$'\\x02'/';'}; s=${s//$'\\x03'/'<!-- -->'}; printf '%s' "$s"; }""",
     """md_code() { printf '<code>%s</code>' "$(md_enc "$1")"; }""",
     """md_pre() { local line; printf '<pre>'; while IFS= read -r line; do md_enc "${line%$'\\r'}"; printf '\\n'; """
     """done <<< "$1"; printf '</pre>\\n'; }""",

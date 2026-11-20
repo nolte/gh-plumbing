@@ -327,7 +327,7 @@ jobs:
           # e-mail autolink forms), inside <code> (md_code) or <pre> (md_pre,
           # line ends kept). Draft, caller and repository text then renders as
           # text and links nothing.
-          md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" o="" c i; s="${s//$'\xc2'[$'\x80'-$'\x9f']/?}"; s="${s//$'\xe2\x80'[$'\xa8\xa9']/?}"; for ((i = 0; i < ${#s}; i++)); do c="${s:i:1}"; case "$c" in @) c='&#64;<!-- -->' ;; [[:punct:]]) printf -v c '&#%d;' "'$c" ;; esac; o+="$c"; done; printf '%s' "$o"; }
+          md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" c n x; s="${s//$'\xc2'[$'\x80'-$'\x9f']/?}"; s="${s//$'\xe2\x80'[$'\xa8\xa9']/?}"; for n in {33..47} {58..64} {91..96} {123..126}; do printf -v x '%x' "$n"; printf -v c '%b' "\\x$x"; s=${s//"$c"/$'\x01'$n$'\x02'}; done; s=${s//$'\x01'64$'\x02'/$'\x01'64$'\x02\x03'}; s=${s//$'\x01'/'&#'}; s=${s//$'\x02'/';'}; s=${s//$'\x03'/'<!-- -->'}; printf '%s' "$s"; }
           md_code() { printf '<code>%s</code>' "$(md_enc "$1")"; }
           md_pre() { local line; printf '<pre>'; while IFS= read -r line; do md_enc "${line%$'\r'}"; printf '\n'; done <<< "$1"; printf '</pre>\n'; }
           expected="${EXPECTED_TARGET_SHA,,}"
@@ -521,7 +521,7 @@ jobs:
           # e-mail autolink forms), inside <code> (md_code) or <pre> (md_pre,
           # line ends kept). Draft, caller and repository text then renders as
           # text and links nothing.
-          md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" o="" c i; s="${s//$'\xc2'[$'\x80'-$'\x9f']/?}"; s="${s//$'\xe2\x80'[$'\xa8\xa9']/?}"; for ((i = 0; i < ${#s}; i++)); do c="${s:i:1}"; case "$c" in @) c='&#64;<!-- -->' ;; [[:punct:]]) printf -v c '&#%d;' "'$c" ;; esac; o+="$c"; done; printf '%s' "$o"; }
+          md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" c n x; s="${s//$'\xc2'[$'\x80'-$'\x9f']/?}"; s="${s//$'\xe2\x80'[$'\xa8\xa9']/?}"; for n in {33..47} {58..64} {91..96} {123..126}; do printf -v x '%x' "$n"; printf -v c '%b' "\\x$x"; s=${s//"$c"/$'\x01'$n$'\x02'}; done; s=${s//$'\x01'64$'\x02'/$'\x01'64$'\x02\x03'}; s=${s//$'\x01'/'&#'}; s=${s//$'\x02'/';'}; s=${s//$'\x03'/'<!-- -->'}; printf '%s' "$s"; }
           md_code() { printf '<code>%s</code>' "$(md_enc "$1")"; }
           md_pre() { local line; printf '<pre>'; while IFS= read -r line; do md_enc "${line%$'\r'}"; printf '\n'; done <<< "$1"; printf '</pre>\n'; }
           # Edit every version-bearing file in the checked-out develop tree to the
@@ -759,7 +759,7 @@ jobs:
           # e-mail autolink forms), inside <code> (md_code) or <pre> (md_pre,
           # line ends kept). Draft, caller and repository text then renders as
           # text and links nothing.
-          md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" o="" c i; s="${s//$'\xc2'[$'\x80'-$'\x9f']/?}"; s="${s//$'\xe2\x80'[$'\xa8\xa9']/?}"; for ((i = 0; i < ${#s}; i++)); do c="${s:i:1}"; case "$c" in @) c='&#64;<!-- -->' ;; [[:punct:]]) printf -v c '&#%d;' "'$c" ;; esac; o+="$c"; done; printf '%s' "$o"; }
+          md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" c n x; s="${s//$'\xc2'[$'\x80'-$'\x9f']/?}"; s="${s//$'\xe2\x80'[$'\xa8\xa9']/?}"; for n in {33..47} {58..64} {91..96} {123..126}; do printf -v x '%x' "$n"; printf -v c '%b' "\\x$x"; s=${s//"$c"/$'\x01'$n$'\x02'}; done; s=${s//$'\x01'64$'\x02'/$'\x01'64$'\x02\x03'}; s=${s//$'\x01'/'&#'}; s=${s//$'\x02'/';'}; s=${s//$'\x03'/'<!-- -->'}; printf '%s' "$s"; }
           md_code() { printf '<code>%s</code>' "$(md_enc "$1")"; }
           md_pre() { local line; printf '<pre>'; while IFS= read -r line; do md_enc "${line%$'\r'}"; printf '\n'; done <<< "$1"; printf '</pre>\n'; }
           created_at=$(gh release view "$TAG" --json createdAt --jq .createdAt)
@@ -827,7 +827,7 @@ jobs:
           # e-mail autolink forms), inside <code> (md_code) or <pre> (md_pre,
           # line ends kept). Draft, caller and repository text then renders as
           # text and links nothing.
-          md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" o="" c i; s="${s//$'\xc2'[$'\x80'-$'\x9f']/?}"; s="${s//$'\xe2\x80'[$'\xa8\xa9']/?}"; for ((i = 0; i < ${#s}; i++)); do c="${s:i:1}"; case "$c" in @) c='&#64;<!-- -->' ;; [[:punct:]]) printf -v c '&#%d;' "'$c" ;; esac; o+="$c"; done; printf '%s' "$o"; }
+          md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" c n x; s="${s//$'\xc2'[$'\x80'-$'\x9f']/?}"; s="${s//$'\xe2\x80'[$'\xa8\xa9']/?}"; for n in {33..47} {58..64} {91..96} {123..126}; do printf -v x '%x' "$n"; printf -v c '%b' "\\x$x"; s=${s//"$c"/$'\x01'$n$'\x02'}; done; s=${s//$'\x01'64$'\x02'/$'\x01'64$'\x02\x03'}; s=${s//$'\x01'/'&#'}; s=${s//$'\x02'/';'}; s=${s//$'\x03'/'<!-- -->'}; printf '%s' "$s"; }
           md_code() { printf '<code>%s</code>' "$(md_enc "$1")"; }
           md_pre() { local line; printf '<pre>'; while IFS= read -r line; do md_enc "${line%$'\r'}"; printf '\n'; done <<< "$1"; printf '</pre>\n'; }
 
@@ -1106,7 +1106,7 @@ jobs:
           # e-mail autolink forms), inside <code> (md_code) or <pre> (md_pre,
           # line ends kept). Draft, caller and repository text then renders as
           # text and links nothing.
-          md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" o="" c i; s="${s//$'\xc2'[$'\x80'-$'\x9f']/?}"; s="${s//$'\xe2\x80'[$'\xa8\xa9']/?}"; for ((i = 0; i < ${#s}; i++)); do c="${s:i:1}"; case "$c" in @) c='&#64;<!-- -->' ;; [[:punct:]]) printf -v c '&#%d;' "'$c" ;; esac; o+="$c"; done; printf '%s' "$o"; }
+          md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" c n x; s="${s//$'\xc2'[$'\x80'-$'\x9f']/?}"; s="${s//$'\xe2\x80'[$'\xa8\xa9']/?}"; for n in {33..47} {58..64} {91..96} {123..126}; do printf -v x '%x' "$n"; printf -v c '%b' "\\x$x"; s=${s//"$c"/$'\x01'$n$'\x02'}; done; s=${s//$'\x01'64$'\x02'/$'\x01'64$'\x02\x03'}; s=${s//$'\x01'/'&#'}; s=${s//$'\x02'/';'}; s=${s//$'\x03'/'<!-- -->'}; printf '%s' "$s"; }
           md_code() { printf '<code>%s</code>' "$(md_enc "$1")"; }
           md_pre() { local line; printf '<pre>'; while IFS= read -r line; do md_enc "${line%$'\r'}"; printf '\n'; done <<< "$1"; printf '</pre>\n'; }
           if [[ -n "$EXPECTED_TARGET_SHA" ]]; then
@@ -1163,7 +1163,7 @@ jobs:
           # e-mail autolink forms), inside <code> (md_code) or <pre> (md_pre,
           # line ends kept). Draft, caller and repository text then renders as
           # text and links nothing.
-          md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" o="" c i; s="${s//$'\xc2'[$'\x80'-$'\x9f']/?}"; s="${s//$'\xe2\x80'[$'\xa8\xa9']/?}"; for ((i = 0; i < ${#s}; i++)); do c="${s:i:1}"; case "$c" in @) c='&#64;<!-- -->' ;; [[:punct:]]) printf -v c '&#%d;' "'$c" ;; esac; o+="$c"; done; printf '%s' "$o"; }
+          md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" c n x; s="${s//$'\xc2'[$'\x80'-$'\x9f']/?}"; s="${s//$'\xe2\x80'[$'\xa8\xa9']/?}"; for n in {33..47} {58..64} {91..96} {123..126}; do printf -v x '%x' "$n"; printf -v c '%b' "\\x$x"; s=${s//"$c"/$'\x01'$n$'\x02'}; done; s=${s//$'\x01'64$'\x02'/$'\x01'64$'\x02\x03'}; s=${s//$'\x01'/'&#'}; s=${s//$'\x02'/';'}; s=${s//$'\x03'/'<!-- -->'}; printf '%s' "$s"; }
           md_code() { printf '<code>%s</code>' "$(md_enc "$1")"; }
           md_pre() { local line; printf '<pre>'; while IFS= read -r line; do md_enc "${line%$'\r'}"; printf '\n'; done <<< "$1"; printf '</pre>\n'; }
           {
