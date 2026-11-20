@@ -126,6 +126,10 @@ Not covered (each would need a parser this script doesn't have):
     checked, its output is not; #492 found `du` echoing a file name that way)
     -- and a print piped into another command, on a log line (on a summary
     line both are refused as `<command output>`);
+  * a summary write inside a command substitution: the body of `$(...)` is
+    blanked before sinks are read, so `out=$(echo "$V" | tee -a
+    "$GITHUB_STEP_SUMMARY")` and `x=$(echo "$V" >> "$GITHUB_STEP_SUMMARY")`
+    pass with a raw value;
   * a leading value the line-start rule can't see: an `echo` whose first word
     is built by a command substitution or a variable holding the whole
     message, and a call site of a helper such as fork-guard's or setup-vale's
@@ -182,6 +186,17 @@ Not covered (each would need a parser this script doesn't have):
   * `actions/**/*.bash` and extension-less scripts;
   * `${{ ... }}` expressions in a `run:` body (a neighbouring class), and the
     non-reusable workflows.
+
+Refused although harmless (the summary rule errs towards a finding):
+
+  * a heredoc in an inner group with a target of its own, inside a group
+    redirected to the summary (`{ { cat <<EOF ... EOF } > /tmp/f; } >>
+    "$GITHUB_STEP_SUMMARY"`, or an inner `>> "$GITHUB_OUTPUT"`): its lines
+    are read as summary lines, because the heredoc takes its destination
+    from its own start line and the outer group, not from the inner group;
+  * an array assignment inside a group or compound redirected to the summary
+    (`for n in a; do kw=(if for); echo "- $(md_code "$n")"; done >> ...`):
+    the statement reads as a command and is refused as `<command output>`.
 
 Reads only. Exits non-zero on any finding, and on any file it can't read or
 parse.
