@@ -49,8 +49,49 @@ ADR_STATUS = re.compile(r"^\*\*Status:\*\*\s+(\S+)", re.MULTILINE)
 ADR_ROW = re.compile(r"^\|\s*\[(ADR-\d+)\]\(([^)]+)\)\s*\|[^|]*\|\s*([^|]+?)\s*\|", re.MULTILINE)
 
 
-def finding(severity: str, dimension: str, message: str) -> dict:
-    return {"severity": severity, "dimension": dimension, "message": message}
+# The step summary is Markdown that GitHub renders (#506). File names, ADR
+# targets, status words and doc lines are repository content, so the summary
+# writes each one encoded, then wrapped: control characters become '?', ASCII
+# punctuation a numeric HTML entity, inside <code> (md_code) or <pre> (md_pre).
+# The same helpers as scripts/workflow_command_masking.py's PY_MD, which a
+# test holds this copy to.
+def md_enc(value):
+    return re.sub(r"[\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e]", lambda m: f"&#{ord(m.group())};",
+                  re.sub(r"[\x00-\x1f\x7f-\x9f]", "?", str(value)))
+
+
+def md_code(value):
+    return f"<code>{md_enc(value)}</code>"
+
+
+def md_pre(value):
+    lines = str(value).replace("\r\n", "\n").split("\n")
+    return "<pre>" + "\n".join(md_enc(line) for line in lines) + "\n</pre>"
+
+
+def phrase(template: str, *values) -> tuple[str, str]:
+    """A sentence as plain text and as step-summary Markdown.
+
+    Each `{}` takes one value, or a list of values. In the plain text a slot
+    written as `` `{}` `` is a code span (a list: one span per item); in the
+    Markdown every value is md_code() instead, and the slot's backticks go.
+    """
+    pieces = template.split("{}")
+    assert len(pieces) == len(values) + 1, template
+    plain, markdown = pieces[0], pieces[0]
+    for i, value in enumerate(values):
+        items = [str(v) for v in value] if isinstance(value, (list, tuple)) else [str(value)]
+        quoted = pieces[i].endswith("`") and pieces[i + 1].startswith("`")
+        plain += ("`, `" if quoted else ", ").join(items) + pieces[i + 1]
+        markdown = (markdown[:-1] if quoted else markdown) + ", ".join(md_code(v) for v in items) \
+            + (pieces[i + 1][1:] if quoted else pieces[i + 1])
+    return plain, markdown
+
+
+def finding(severity: str, dimension: str, template: str, *values) -> dict:
+    """`message` is the plain sentence, `markdown` the same for the step summary."""
+    message, markdown = phrase(template, *values)
+    return {"severity": severity, "dimension": dimension, "message": message, "markdown": markdown}
 
 
 def languages(docs: Path) -> list[str]:
@@ -78,7 +119,7 @@ def check_parity(docs: Path, langs: list[str]) -> list[dict]:
             present = [lang for lang in langs if path in pages[lang]]
             out.append(finding(
                 CRITICAL, "parity",
-                f"`{path}` exists in {', '.join(present)} but not in {', '.join(missing)}",
+                "`{}` exists in {} but not in {}", path, present, missing,
             ))
     return out
 
@@ -104,15 +145,14 @@ def check_workflow_refs(docs: Path, workflows: Path, extra: list[Path]) -> list[
 
     out = []
     for name in sorted(set(mentioned) - existing):
-        where = ", ".join(f"`{p}`" for p in sorted(mentioned[name])[:3])
         out.append(finding(
             CRITICAL, "stale-reference",
-            f"`{name}` is referenced in {where} but no such workflow exists",
+            "`{}` is referenced in `{}` but no such workflow exists", name, sorted(mentioned[name])[:3],
         ))
     for name in sorted(existing - set(mentioned)):
         out.append(finding(
             WARNING, "undocumented-workflow",
-            f"`{name}` exists but no page or README mentions it",
+            "`{}` exists but no page or README mentions it", name,
         ))
     return out
 
@@ -145,27 +185,27 @@ def check_adrs(docs: Path, langs: list[str]) -> list[dict]:
             if not path.is_file():
                 out.append(finding(
                     CRITICAL, "adr-hygiene",
-                    f"{lang}: the index lists `{target}` for {adr_id}, which does not exist",
+                    "{}: the index lists `{}` for {}, which does not exist", lang, target, adr_id,
                 ))
                 continue
             match = ADR_STATUS.search(path.read_text(encoding="utf-8"))
             if match is None:
                 out.append(finding(
                     CRITICAL, "adr-hygiene",
-                    f"{lang}: `{target}` carries no `**Status:**` line",
+                    "{}: `{}` carries no `**Status:**` line", lang, target,
                 ))
             elif match.group(1) != index_status:
                 out.append(finding(
                     CRITICAL, "adr-hygiene",
-                    f"{lang}: {adr_id} reads `{match.group(1)}` in the record and "
-                    f"`{index_status}` in the index",
+                    "{}: {} reads `{}` in the record and `{}` in the index",
+                    lang, adr_id, match.group(1), index_status,
                 ))
 
         for record in records:
             if record.name not in listed_files:
                 out.append(finding(
                     CRITICAL, "adr-hygiene",
-                    f"{lang}: `{record.name}` exists but the decision index omits it",
+                    "{}: `{}` exists but the decision index omits it", lang, record.name,
                 ))
     return out
 
@@ -182,7 +222,7 @@ def check_placeholders(docs: Path) -> list[dict]:
             if PLACEHOLDER.search(line):
                 out.append(finding(
                     WARNING, "placeholder",
-                    f"`{page}:{number}` carries an unfinished marker: {line.strip()[:70]}",
+                    "`{}` carries an unfinished marker: {}", f"{page}:{number}", line.strip()[:70],
                 ))
     return out
 
@@ -201,7 +241,9 @@ def audit(root: Path) -> list[dict]:
     )
 
 
-def render(findings: list[dict]) -> str:
+def render(findings: list[dict], markdown: bool = True) -> str:
+    """The report: for the step summary (`markdown`), or as plain text for the log."""
+    key = "markdown" if markdown else "message"
     lines = ["# Documentation freshness", ""]
     criticals = [f for f in findings if f["severity"] == CRITICAL]
     warnings = [f for f in findings if f["severity"] == WARNING]
@@ -219,7 +261,7 @@ def render(findings: list[dict]) -> str:
         lines.append(f"## {severity.capitalize()}")
         lines.append("")
         for item in group:
-            lines.append(f"- **{item['dimension']}** — {item['message']}")
+            lines.append(f"- **{item['dimension']}** — {item[key]}")
         lines.append("")
     return "\n".join(lines).rstrip()
 
@@ -240,13 +282,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     findings = audit(Path(args.root))
-    report = render(findings)
-    print(report)
+    print(render(findings, markdown=False))
 
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as handle:
-            handle.write(report + "\n")
+            handle.write(render(findings) + "\n")
 
     blocking = [
         f for f in findings

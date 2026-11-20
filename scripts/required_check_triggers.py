@@ -489,7 +489,15 @@ def audit(root: Path) -> list[dict]:
     ]
 
 
-def render(findings: list[dict]) -> str:
+def render(findings: list[dict], markdown: bool = True) -> str:
+    """The report: for the step summary (`markdown`), or as plain text for the log.
+
+    Contexts and messages quote settings.yml and workflow content, so the
+    Markdown writes them through branch_protection_audit.py's md_code(), the
+    canonical encoder (#506): a message reads as one code element there, its
+    own backticks shown literally.
+    """
+    code = branch_protection_audit.md_code if markdown else str
     lines = ["# Required-check triggers", ""]
     if not findings:
         lines.append("No findings. Every required context is produced by a workflow "
@@ -498,7 +506,7 @@ def render(findings: list[dict]) -> str:
     lines.append(f"**{len(findings)} finding(s).**")
     lines.append("")
     for item in findings:
-        lines.append(f"- **{item['context']}** ({item['kind']}) — {item['message']}")
+        lines.append(f"- **{code(item['context'])}** ({code(item['kind'])}) — {code(item['message'])}")
     return "\n".join(lines)
 
 
@@ -509,13 +517,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     findings = audit(Path(args.root))
-    report = render(findings)
-    print(report)
+    print(render(findings, markdown=False))
 
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as handle:
-            handle.write(report + "\n")
+            handle.write(render(findings) + "\n")
 
     if findings:
         print(f"::error::{len(findings)} required-check trigger finding(s)", file=sys.stderr)

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
+import re
 
 import pytest
 
@@ -225,3 +226,51 @@ def test_warnings_alone_do_not_block_unless_strict(tree):
 
 def test_render_says_so_when_there_is_nothing_to_say(tree):
     assert "No findings" in freshness.render([])
+
+
+
+# --- the step summary (#506) --------------------------------------------------
+
+# A file name may hold anything but `/`: a link, an image, a mention, an issue
+# reference, table pipes, a code span and a bare domain.
+HOSTILE_NAME = "[x](u) @user #1 <img src=x> |b| `c` www.example.com"
+MARKDOWN_ACTIVE = ("[x](", "<img", "@user", "#1", "|b|", "`c`", "www.")
+
+
+def outside_code(markdown: str) -> str:
+    """The report with every <code>...</code> element removed."""
+    return re.sub(r"<code>[^<]*</code>", "", markdown)
+
+
+def test_the_summary_encodes_repository_text(tree):
+    """File names and doc lines are repository content; the summary is Markdown.
+
+    In the summary each is entity-encoded inside <code>, so no link, image,
+    mention, issue reference or extra table cell renders from it. The plain
+    report for the log keeps the text as it was.
+    """
+    write(tree / "docs" / "en" / f"{HOSTILE_NAME}.md", f"# T\n\nTODO {HOSTILE_NAME}\n")
+    findings = freshness.audit(tree)
+    assert dimensions(findings) == ["parity", "placeholder"]
+    markdown = freshness.render(findings)
+
+    assert HOSTILE_NAME in freshness.render(findings, markdown=False)
+    for fragment in MARKDOWN_ACTIVE:
+        assert fragment not in outside_code(markdown), fragment
+    for element in re.findall(r"<code>([^<]*)</code>", markdown):
+        assert not re.search(r"[\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e]", re.sub(r"&#[0-9]+;", "", element))
+    assert freshness.md_code(f"{HOSTILE_NAME}.md") in markdown
+    assert freshness.md_code(f"TODO {HOSTILE_NAME}") in markdown
+    # Outside <code> only the report's own constants are left.
+    assert "&#" not in outside_code(markdown)
+
+
+def test_main_appends_the_encoded_report_and_logs_the_plain_one(tree, monkeypatch, tmp_path_factory, capsys):
+    summary = tmp_path_factory.mktemp("summary") / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    write(tree / "docs" / "en" / f"{HOSTILE_NAME}.md", "# T\n")
+    freshness.main(["--root", str(tree), "--exit-zero"])
+    written = summary.read_text(encoding="utf-8")
+    assert written == freshness.render(freshness.audit(tree)) + "\n"
+    assert HOSTILE_NAME not in written
+    assert HOSTILE_NAME in capsys.readouterr().out
