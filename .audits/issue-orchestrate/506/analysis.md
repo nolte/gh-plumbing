@@ -5,7 +5,7 @@ issue: "506"
 classification: "security"
 secondary-classes: ["bug"]
 route: "direct"
-status: draft
+status: approved
 created: "2026-11-20"
 ---
 
@@ -127,5 +127,11 @@ none
 
 | Finding | Source | Outcome | Reproduction | Issue |
 |---|---|---|---|---|
+| `scripts/docs_freshness.py:246-249` writes its report to the summary (called from `reusable-docs-freshness.yaml:87`, `reusable-release-publish.yml:1027`); repository file names and a raw doc line (`:185`) in it | specialist result (P1, refutes H1) | fix directly in P2 (same-pattern sibling; file added to P2's touched files) | `grep -n STEP_SUMMARY scripts/docs_freshness.py` | none |
+| `scripts/branch_protection_audit.py:427-430` writes its report to the summary (called from `reusable-branch-protection-audit.yaml:101`, run from the caller's checkout); repo, branch, context names, `_extends` value in it | specialist result (P1, refutes H1) | fix directly in P2 (same-pattern sibling; file added to P2's touched files) | `grep -n STEP_SUMMARY scripts/branch_protection_audit.py` | none |
+| `EXPECTED` at `reusable-release-cd-refresh-master.yml:217` may be more than one line (`git ls-remote` tail match) | specialist result (P1) | asserted, not reproduced; handed to P2 as a value to treat as controlled | settled by `git ls-remote` against a repo with a branch `x/refs/heads/<target>` | none |
+| Intended markdown in values: `@` mention of the triggerer (`release-publish:742`), backticks in `REASON` (`refresh-master:153`), `_(empty)_` fallback (`:738`) | specialist result (P1) | handed to P2: constants stay as written; the actor stays a mention as a runner-provided login, on the guard's ALLOWED list with that reason | `file:line` as named | none |
 
 ## Dispatch log
+
+2026-11-20 P1 dispatched to nolte-engineering:code-security-reviewer — H1 refuted (16 shell writes complete; two Python scripts also write the summary), H2 confirmed; per-value origin table returned. Sweep total: 18 write sites (16 shell lines in 5 workflows + 2 scripts reached from 3 workflows). `scripts/required_check_triggers.py:515` writes too but no workflow calls it.
