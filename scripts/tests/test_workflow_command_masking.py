@@ -678,3 +678,130 @@ def test_undoing_an_encoding_in_a_sibling_is_seen(tmp_path, rel, old, new):
     root = copy_with(tmp_path, rel, old, new)
     findings, _ = guard.audit(root)
     assert [f["path"] for f in findings] == [rel]
+
+
+# --- review bypasses (#506): each closed, each a fixture -----------------------
+
+PY_SUMMARY = "python3 - <<'PY' >> \"$GITHUB_STEP_SUMMARY\"\nimport os, re, sys\n" + guard.PY_MD
+NODE_SUMMARY = f"node <<'NODE' >> \"$GITHUB_STEP_SUMMARY\"\n{JS_MD}\n"
+
+
+@pytest.mark.parametrize("run", [
+    # a compound command redirected as a whole
+    f'for v in a b; do\n  echo "x $VALUE"\ndone {SUMMARY}',
+    f'for v in a; do echo "x $VALUE"; done {SUMMARY}',
+    f'if true; then\n  echo "x $VALUE"\nfi {SUMMARY}',
+    f'while read -r line; do\n  echo "x $VALUE"\ndone < list.txt {SUMMARY}',
+    f'for v in a; do\n  if true; then\n    echo "x $VALUE"\n  fi\ndone {SUMMARY}',
+    # tee into the summary with its own stdout thrown away
+    'echo "x $VALUE" | tee -a "$GITHUB_STEP_SUMMARY" > /dev/null',
+    'echo "x $VALUE" > >(tee -a "$GITHUB_STEP_SUMMARY")',
+    # a second statement or redirect on the same line
+    f'echo "x $VALUE" {SUMMARY}; echo done >&2',
+    f'true > /dev/null; echo "x $VALUE" {SUMMARY}',
+    f'{{\n  echo "x $VALUE"; echo y > /dev/null\n}} {SUMMARY}',
+    f'{{\n  echo y > /dev/null; echo "x $VALUE"\n}} {SUMMARY}',
+    # a group whose `{` shares a line with its first statement
+    f'{{ echo "x $VALUE"\n  echo y\n}} {SUMMARY}',
+    f'{{ echo y\n  echo "x $VALUE"\n}} {SUMMARY}',
+    # the clobber operator
+    'echo "x $VALUE" >| "$GITHUB_STEP_SUMMARY"',
+])
+def test_a_raw_value_reaching_the_summary_another_way_is_a_finding(tmp_path, run):
+    found = summary_names(tmp_path, run)
+    assert "VALUE" in found, found
+    assert all(n in ("VALUE", guard.OUTPUT_NAME) for n in found), found
+
+
+def test_a_summary_finding_inside_a_compound_is_named_once_as_such(tmp_path):
+    write(tmp_path, REL, workflow(f'for v in a b; do\n  echo "x $VALUE"\ndone {SUMMARY}'))
+    [finding] = guard.audit(tmp_path, ())[0]
+    assert finding["message"].startswith("`VALUE` reaches a step-summary write unencoded")
+
+
+def test_encoded_values_in_compounds_are_fine(tmp_path):
+    run = (f'{MD}\nfor v in a b; do\n  echo "- $(md_code "$v")"\ndone {SUMMARY}\n'
+           f'{{ echo "### x"\n  echo "- $(md_code "$VALUE")"\n}} {SUMMARY}\n'
+           f'if true; then\n  md_pre "$VALUE"\nfi {SUMMARY}')
+    assert summary_names(tmp_path, run) == []
+
+
+def test_the_masked_assignment_must_hold_on_every_path(tmp_path):
+    run = f'{MD}\nx="$VALUE"; if false; then x=$(md_code "$VALUE"); fi; echo "$x" {SUMMARY}'
+    assert summary_names(tmp_path, run) == ["x"]
+    shutil.rmtree(tmp_path / ".github")
+    run = f'{MD}\nx="$VALUE"\nif false; then\n  x=$(md_code "$VALUE")\nfi\necho "$x" {SUMMARY}'
+    assert summary_names(tmp_path, run) == ["x"]
+
+
+@pytest.mark.parametrize("run", [
+    f'cat "$VALUE" - <<EOF {SUMMARY}\nfixed\nEOF',
+    f"cat notes.md <<'EOF' {SUMMARY}\nfixed\nEOF",
+])
+def test_cat_with_more_than_its_heredoc_prints_a_file(tmp_path, run):
+    assert guard.OUTPUT_NAME in summary_names(tmp_path, run)
+
+
+@pytest.mark.parametrize("line", [
+    'print(md_code("a"), end=os.environ["V"])',
+    'print(md_code("a"), sep=v)',
+    "print('a'); print(v)",
+    "print('x ' + v)  # file=sys.stderr",
+    "print('x', file=sys.stderr); print(v)",
+])
+def test_python_summary_prints_need_every_part_encoded(tmp_path, line):
+    run = PY_SUMMARY + f"v = os.environ['V']\n{line}\nPY"
+    assert summary_names(tmp_path, run) != [], line
+
+
+def test_python_stderr_and_literal_keywords_stay_fine(tmp_path):
+    run = PY_SUMMARY + ("v = os.environ['V']\nprint(md_code(v), end='')\nprint(md_code(v), sep=' ', flush=True)\n"
+                        "print(f'::error::{shown(v)}', file=sys.stderr) if False else None\nPY")
+    # the stderr line is the log rule's: shown is not defined here
+    assert summary_names(tmp_path, run) == ["shown"]
+
+
+@pytest.mark.parametrize("redefinition", [
+    'unset -f md_code; md_code() { cat <<< "$1"; }',
+    'md_code() { cat <<< "$1"; }',
+    'function md_enc { printf %s "$1"; }',
+    "alias md_code=echo",
+])
+def test_a_later_shell_redefinition_voids_the_helper(tmp_path, redefinition):
+    run = f'{MD}\n{redefinition}\necho "x $(md_code "$VALUE")" {SUMMARY}'
+    assert "VALUE" in summary_names(tmp_path, run)
+
+
+@pytest.mark.parametrize("redefinition", ["md_code = str", "from html import escape as md_code",
+                                          "def md_enc(value):\n    return value"])
+def test_a_later_python_redefinition_voids_the_helper(tmp_path, redefinition):
+    run = PY_SUMMARY + f"{redefinition}\nv = os.environ['V']\nprint(md_code(v))\nPY"
+    assert "md_code" in summary_names(tmp_path, run)
+
+
+@pytest.mark.parametrize("redefinition", ["{\n  const mdCode = (v) => v;\n  console.log(mdCode(p));\n}",
+                                          "let mdEnc = String;", "mdCode = (v) => v;"])
+def test_a_later_node_redefinition_voids_the_helper(tmp_path, redefinition):
+    run = NODE_SUMMARY + f"const p = process.env.P;\n{redefinition}\nconsole.log(mdCode(p));\nNODE"
+    assert "mdCode" in summary_names(tmp_path, run)
+
+
+def test_env_file_clobber_is_an_env_file_write(tmp_path):
+    # `>|` writes the env file just as `>` does; the #505 rule reads it now.
+    assert check(tmp_path, 'echo "v=$VALUE" >| "$GITHUB_OUTPUT"') == ["VALUE"]
+
+
+def test_an_env_file_loop_is_still_read_line_by_line(tmp_path):
+    run = 'for v in a; do\n  echo "v=$VALUE"\ndone >> "$GITHUB_OUTPUT"'
+    assert check(tmp_path, run) == ["VALUE"]
+
+
+@pytest.mark.parametrize("run", [
+    f'for v in a; do\n  echo "x $VALUE" >&2\ndone {SUMMARY}',
+    f'{{\n  echo "x $VALUE" >&2\n}} {SUMMARY}',
+    '{\n  echo "x $VALUE" >&2\n} > out.txt',
+])
+def test_a_stderr_line_inside_a_redirected_group_is_still_a_log_line(tmp_path, run):
+    write(tmp_path, REL, workflow(run))
+    messages = [f["message"] for f in guard.audit(tmp_path, ())[0]]
+    assert any(m.startswith("`VALUE` reaches a log line") for m in messages), messages
