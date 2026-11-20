@@ -51,13 +51,16 @@ ADR_ROW = re.compile(r"^\|\s*\[(ADR-\d+)\]\(([^)]+)\)\s*\|[^|]*\|\s*([^|]+?)\s*\
 
 # The step summary is Markdown that GitHub renders (#506). File names, ADR
 # targets, status words and doc lines are repository content, so the summary
-# writes each one encoded, then wrapped: control characters become '?', ASCII
-# punctuation a numeric HTML entity, inside <code> (md_code) or <pre> (md_pre).
+# writes each one encoded, then wrapped: a control character becomes a
+# question mark and an ASCII punctuation character its numeric HTML entity
+# (`@` also gets an empty comment after it, so no e-mail autolink forms),
+# inside <code> (md_code) or <pre> (md_pre).
 # The same helpers as scripts/workflow_command_masking.py's PY_MD, which a
 # test holds this copy to.
 def md_enc(value):
-    return re.sub(r"[\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e]", lambda m: f"&#{ord(m.group())};",
-                  re.sub(r"[\x00-\x1f\x7f-\x9f]", "?", str(value)))
+    return re.sub(r"[\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e]",
+                  lambda m: "&#64;<!-- -->" if m.group() == "@" else f"&#{ord(m.group())};",
+                  re.sub(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]", "?", str(value)))
 
 
 def md_code(value):

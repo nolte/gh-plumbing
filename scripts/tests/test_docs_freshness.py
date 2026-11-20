@@ -239,7 +239,7 @@ MARKDOWN_ACTIVE = ("[x](", "<img", "@user", "#1", "|b|", "`c`", "www.")
 
 def outside_code(markdown: str) -> str:
     """The report with every <code>...</code> element removed."""
-    return re.sub(r"<code>[^<]*</code>", "", markdown)
+    return re.sub(r"<code>[^<]*</code>", "", markdown.replace("&#64;<!-- -->", "&#64;"))
 
 
 def test_the_summary_encodes_repository_text(tree):
@@ -257,7 +257,7 @@ def test_the_summary_encodes_repository_text(tree):
     assert HOSTILE_NAME in freshness.render(findings, markdown=False)
     for fragment in MARKDOWN_ACTIVE:
         assert fragment not in outside_code(markdown), fragment
-    for element in re.findall(r"<code>([^<]*)</code>", markdown):
+    for element in re.findall(r"<code>([^<]*)</code>", markdown.replace("&#64;<!-- -->", "&#64;")):
         assert not re.search(r"[\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e]", re.sub(r"&#[0-9]+;", "", element))
     assert freshness.md_code(f"{HOSTILE_NAME}.md") in markdown
     assert freshness.md_code(f"TODO {HOSTILE_NAME}") in markdown

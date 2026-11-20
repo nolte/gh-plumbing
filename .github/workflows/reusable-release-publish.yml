@@ -321,11 +321,13 @@ jobs:
           # '##[' becomes '#?[', so the value can neither end the line nor open
           # the runner's older '##[command]' syntax in the middle of one.
           shown() { local v="${1//[[:cntrl:]]/?}"; printf '%s' "${v//\#\#\[/#?[}"; }
-          # Encode, then wrap, for the step summary (#506): control characters
-          # become '?', ASCII punctuation a numeric HTML entity, inside <code>
-          # (md_code) or <pre> (md_pre, line ends kept). Draft, caller and
-          # repository text then renders as text and links nothing.
-          md_enc() { local s="${1//[[:cntrl:]]/?}" o="" c i; local LC_ALL=C; for ((i = 0; i < ${#s}; i++)); do c="${s:i:1}"; [[ "$c" == [[:punct:]] ]] && printf -v c '&#%d;' "'$c"; o+="$c"; done; printf '%s' "$o"; }
+          # Encode, then wrap, for the step summary (#506): a control character
+          # becomes a question mark and an ASCII punctuation character its
+          # numeric HTML entity (`@` also gets an empty comment after it, so no
+          # e-mail autolink forms), inside <code> (md_code) or <pre> (md_pre,
+          # line ends kept). Draft, caller and repository text then renders as
+          # text and links nothing.
+          md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" o="" c i; s="${s//$'\xc2'[$'\x80'-$'\x9f']/?}"; s="${s//$'\xe2\x80'[$'\xa8\xa9']/?}"; for ((i = 0; i < ${#s}; i++)); do c="${s:i:1}"; case "$c" in @) c='&#64;<!-- -->' ;; [[:punct:]]) printf -v c '&#%d;' "'$c" ;; esac; o+="$c"; done; printf '%s' "$o"; }
           md_code() { printf '<code>%s</code>' "$(md_enc "$1")"; }
           md_pre() { local line; printf '<pre>'; while IFS= read -r line; do md_enc "${line%$'\r'}"; printf '\n'; done <<< "$1"; printf '</pre>\n'; }
           expected="${EXPECTED_TARGET_SHA,,}"
@@ -513,11 +515,13 @@ jobs:
           APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: |
           set -euo pipefail
-          # Encode, then wrap, for the step summary (#506): control characters
-          # become '?', ASCII punctuation a numeric HTML entity, inside <code>
-          # (md_code) or <pre> (md_pre, line ends kept). Draft, caller and
-          # repository text then renders as text and links nothing.
-          md_enc() { local s="${1//[[:cntrl:]]/?}" o="" c i; local LC_ALL=C; for ((i = 0; i < ${#s}; i++)); do c="${s:i:1}"; [[ "$c" == [[:punct:]] ]] && printf -v c '&#%d;' "'$c"; o+="$c"; done; printf '%s' "$o"; }
+          # Encode, then wrap, for the step summary (#506): a control character
+          # becomes a question mark and an ASCII punctuation character its
+          # numeric HTML entity (`@` also gets an empty comment after it, so no
+          # e-mail autolink forms), inside <code> (md_code) or <pre> (md_pre,
+          # line ends kept). Draft, caller and repository text then renders as
+          # text and links nothing.
+          md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" o="" c i; s="${s//$'\xc2'[$'\x80'-$'\x9f']/?}"; s="${s//$'\xe2\x80'[$'\xa8\xa9']/?}"; for ((i = 0; i < ${#s}; i++)); do c="${s:i:1}"; case "$c" in @) c='&#64;<!-- -->' ;; [[:punct:]]) printf -v c '&#%d;' "'$c" ;; esac; o+="$c"; done; printf '%s' "$o"; }
           md_code() { printf '<code>%s</code>' "$(md_enc "$1")"; }
           md_pre() { local line; printf '<pre>'; while IFS= read -r line; do md_enc "${line%$'\r'}"; printf '\n'; done <<< "$1"; printf '</pre>\n'; }
           # Edit every version-bearing file in the checked-out develop tree to the
@@ -747,11 +751,13 @@ jobs:
           VBF_COUNT: ${{ steps.vbf.outputs.count }}
         run: |
           set -euo pipefail
-          # Encode, then wrap, for the step summary (#506): control characters
-          # become '?', ASCII punctuation a numeric HTML entity, inside <code>
-          # (md_code) or <pre> (md_pre, line ends kept). Draft, caller and
-          # repository text then renders as text and links nothing.
-          md_enc() { local s="${1//[[:cntrl:]]/?}" o="" c i; local LC_ALL=C; for ((i = 0; i < ${#s}; i++)); do c="${s:i:1}"; [[ "$c" == [[:punct:]] ]] && printf -v c '&#%d;' "'$c"; o+="$c"; done; printf '%s' "$o"; }
+          # Encode, then wrap, for the step summary (#506): a control character
+          # becomes a question mark and an ASCII punctuation character its
+          # numeric HTML entity (`@` also gets an empty comment after it, so no
+          # e-mail autolink forms), inside <code> (md_code) or <pre> (md_pre,
+          # line ends kept). Draft, caller and repository text then renders as
+          # text and links nothing.
+          md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" o="" c i; s="${s//$'\xc2'[$'\x80'-$'\x9f']/?}"; s="${s//$'\xe2\x80'[$'\xa8\xa9']/?}"; for ((i = 0; i < ${#s}; i++)); do c="${s:i:1}"; case "$c" in @) c='&#64;<!-- -->' ;; [[:punct:]]) printf -v c '&#%d;' "'$c" ;; esac; o+="$c"; done; printf '%s' "$o"; }
           md_code() { printf '<code>%s</code>' "$(md_enc "$1")"; }
           md_pre() { local line; printf '<pre>'; while IFS= read -r line; do md_enc "${line%$'\r'}"; printf '\n'; done <<< "$1"; printf '</pre>\n'; }
           created_at=$(gh release view "$TAG" --json createdAt --jq .createdAt)
@@ -813,11 +819,13 @@ jobs:
           # '##[' becomes '#?[', so the value can neither end the line nor open
           # the runner's older '##[command]' syntax in the middle of one.
           shown() { local v="${1//[[:cntrl:]]/?}"; printf '%s' "${v//\#\#\[/#?[}"; }
-          # Encode, then wrap, for the step summary (#506): control characters
-          # become '?', ASCII punctuation a numeric HTML entity, inside <code>
-          # (md_code) or <pre> (md_pre, line ends kept). Draft, caller and
-          # repository text then renders as text and links nothing.
-          md_enc() { local s="${1//[[:cntrl:]]/?}" o="" c i; local LC_ALL=C; for ((i = 0; i < ${#s}; i++)); do c="${s:i:1}"; [[ "$c" == [[:punct:]] ]] && printf -v c '&#%d;' "'$c"; o+="$c"; done; printf '%s' "$o"; }
+          # Encode, then wrap, for the step summary (#506): a control character
+          # becomes a question mark and an ASCII punctuation character its
+          # numeric HTML entity (`@` also gets an empty comment after it, so no
+          # e-mail autolink forms), inside <code> (md_code) or <pre> (md_pre,
+          # line ends kept). Draft, caller and repository text then renders as
+          # text and links nothing.
+          md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" o="" c i; s="${s//$'\xc2'[$'\x80'-$'\x9f']/?}"; s="${s//$'\xe2\x80'[$'\xa8\xa9']/?}"; for ((i = 0; i < ${#s}; i++)); do c="${s:i:1}"; case "$c" in @) c='&#64;<!-- -->' ;; [[:punct:]]) printf -v c '&#%d;' "'$c" ;; esac; o+="$c"; done; printf '%s' "$o"; }
           md_code() { printf '<code>%s</code>' "$(md_enc "$1")"; }
           md_pre() { local line; printf '<pre>'; while IFS= read -r line; do md_enc "${line%$'\r'}"; printf '\n'; done <<< "$1"; printf '</pre>\n'; }
 
@@ -1090,11 +1098,13 @@ jobs:
           # '##[' becomes '#?[', so the value can neither end the line nor open
           # the runner's older '##[command]' syntax in the middle of one.
           shown() { local v="${1//[[:cntrl:]]/?}"; printf '%s' "${v//\#\#\[/#?[}"; }
-          # Encode, then wrap, for the step summary (#506): control characters
-          # become '?', ASCII punctuation a numeric HTML entity, inside <code>
-          # (md_code) or <pre> (md_pre, line ends kept). Draft, caller and
-          # repository text then renders as text and links nothing.
-          md_enc() { local s="${1//[[:cntrl:]]/?}" o="" c i; local LC_ALL=C; for ((i = 0; i < ${#s}; i++)); do c="${s:i:1}"; [[ "$c" == [[:punct:]] ]] && printf -v c '&#%d;' "'$c"; o+="$c"; done; printf '%s' "$o"; }
+          # Encode, then wrap, for the step summary (#506): a control character
+          # becomes a question mark and an ASCII punctuation character its
+          # numeric HTML entity (`@` also gets an empty comment after it, so no
+          # e-mail autolink forms), inside <code> (md_code) or <pre> (md_pre,
+          # line ends kept). Draft, caller and repository text then renders as
+          # text and links nothing.
+          md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" o="" c i; s="${s//$'\xc2'[$'\x80'-$'\x9f']/?}"; s="${s//$'\xe2\x80'[$'\xa8\xa9']/?}"; for ((i = 0; i < ${#s}; i++)); do c="${s:i:1}"; case "$c" in @) c='&#64;<!-- -->' ;; [[:punct:]]) printf -v c '&#%d;' "'$c" ;; esac; o+="$c"; done; printf '%s' "$o"; }
           md_code() { printf '<code>%s</code>' "$(md_enc "$1")"; }
           md_pre() { local line; printf '<pre>'; while IFS= read -r line; do md_enc "${line%$'\r'}"; printf '\n'; done <<< "$1"; printf '</pre>\n'; }
           if [[ -n "$EXPECTED_TARGET_SHA" ]]; then
@@ -1145,11 +1155,13 @@ jobs:
         env:
           TAG: ${{ steps.draft.outputs.tag }}
         run: |
-          # Encode, then wrap, for the step summary (#506): control characters
-          # become '?', ASCII punctuation a numeric HTML entity, inside <code>
-          # (md_code) or <pre> (md_pre, line ends kept). Draft, caller and
-          # repository text then renders as text and links nothing.
-          md_enc() { local s="${1//[[:cntrl:]]/?}" o="" c i; local LC_ALL=C; for ((i = 0; i < ${#s}; i++)); do c="${s:i:1}"; [[ "$c" == [[:punct:]] ]] && printf -v c '&#%d;' "'$c"; o+="$c"; done; printf '%s' "$o"; }
+          # Encode, then wrap, for the step summary (#506): a control character
+          # becomes a question mark and an ASCII punctuation character its
+          # numeric HTML entity (`@` also gets an empty comment after it, so no
+          # e-mail autolink forms), inside <code> (md_code) or <pre> (md_pre,
+          # line ends kept). Draft, caller and repository text then renders as
+          # text and links nothing.
+          md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" o="" c i; s="${s//$'\xc2'[$'\x80'-$'\x9f']/?}"; s="${s//$'\xe2\x80'[$'\xa8\xa9']/?}"; for ((i = 0; i < ${#s}; i++)); do c="${s:i:1}"; case "$c" in @) c='&#64;<!-- -->' ;; [[:punct:]]) printf -v c '&#%d;' "'$c" ;; esac; o+="$c"; done; printf '%s' "$o"; }
           md_code() { printf '<code>%s</code>' "$(md_enc "$1")"; }
           md_pre() { local line; printf '<pre>'; while IFS= read -r line; do md_enc "${line%$'\r'}"; printf '\n'; done <<< "$1"; printf '</pre>\n'; }
           {

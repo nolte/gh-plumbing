@@ -282,7 +282,7 @@ def test_the_summary_encodes_settings_and_api_text(stub):
     result = audit.audit_repo(REPO + HOSTILE, BRANCH, {}, "t")
     assert any(HOSTILE in n for n in result["notes"]), "a note quotes a context"
 
-    markdown = audit.render([result])
+    markdown = audit.render([result]).replace("&#64;<!-- -->", "&#64;")
     rest = re.sub(r"<code>[^<]*</code>", "", markdown)
     for fragment in ("[x](", "<img", "@user", "#1", "|b|", "`c`"):
         assert fragment not in rest, fragment

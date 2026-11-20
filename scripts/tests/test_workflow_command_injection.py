@@ -768,11 +768,14 @@ def test_publish_lists_draft_tag_names_with_v1_commands_masked(run, given):
 # outside the <code>/<pre> elements the helper writes, none of the value's
 # Markdown survives, and that inside them only entities stand for punctuation.
 
-MD_HOSTILE = "[x](https://example.com) <img src=x> @octocat #1 |c| `d` **e**"
-MD_FRAGMENTS = ("[x](", "<img", "@octocat", "#1", "|c|", "`d`", "**e**", "https://")
+MD_HOSTILE = "[x](https://example.com) <img src=x> @octocat #1 |c| `d` **e** a@b.co"
+MD_FRAGMENTS = ("[x](", "<img", "@octocat", "#1", "|c|", "`d`", "**e**", "https://", "a@b.co")
 
 
 def assert_inert(summary: str, allowed: tuple[str, ...] = ()) -> None:
+    # The encoder writes `@` as `&#64;<!-- -->`; that comment is the only tag
+    # it emits inside an element.
+    summary = summary.replace("&#64;<!-- -->", "&#64;")
     rest = re.sub(r"(?s)<code>[^<]*</code>|<pre>[^<]*</pre>", "", summary)
     for fragment in MD_FRAGMENTS:
         if fragment not in allowed:

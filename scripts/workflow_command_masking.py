@@ -71,9 +71,10 @@ reaches it -- a statement redirected or `tee`d there, a line of a
 (`cat`, or a Python or Node heredoc whose stdout goes there; their stderr
 prints stay log lines) -- may interpolate only names that are:
 
-  * encoded and wrapped at the print by the canonical helper, which turns
-    control characters into `?` and every ASCII punctuation character into
-    its numeric HTML entity, inside `<code>` or `<pre>`: `$(md_code "$name")`,
+  * encoded and wrapped at the print by the canonical helper, which turns a
+    control character into a question mark and every ASCII punctuation
+    character into its numeric HTML entity -- `@` followed by an empty HTML
+    comment -- inside `<code>` or `<pre>`: `$(md_code "$name")`,
     or `md_code "$name"` / `md_pre "$name"` as a statement of their own, in
     shell; `md_code(...)` / `md_pre(...)` in Python, `mdCode(...)` /
     `mdPre(...)` in Node -- and only where the body or heredoc defines all of
@@ -206,29 +207,43 @@ SEAM_NAME = "<mask seam>"
 SEAM = re.compile(r"""#["']*\$\(shown "|\$\(shown "[^"]*"\)["']*(?:[#\[]|\$\(shown ")""")
 
 # The step summary is Markdown, rendered by GitHub (#506). Its canonical
-# helpers encode, then wrap: control characters become '?', every ASCII
-# punctuation character its numeric HTML entity (`&#NN;`), and the result sits
-# inside <code>...</code> (one line) or <pre>...</pre> (line ends kept, a
-# CR before one dropped). Encoded text holds no character Markdown, HTML or an
-# autolink reads, and inside <code>/<pre> GitHub links no `@name` or `#1`
-# either. md_enc alone is not a mask: unwrapped, `@name` and `#1` still link.
+# helpers encode, then wrap. A control character -- C0, DEL, C1, U+2028 or
+# U+2029, matched as bytes in bash so the runner's locale doesn't matter --
+# becomes a question mark, which is punctuation and so written `&#63;`. Every
+# ASCII punctuation character becomes its numeric HTML entity (`&#NN;`); `@`
+# becomes `&#64;<!-- -->`, because GitHub autolinks an e-mail address inside
+# <code> even with its `@` and `.` as entities, and the empty comment splits
+# it. The result sits inside <code>...</code> (one line) or <pre>...</pre>
+# (line ends kept, a CR before one dropped). Encoded text holds no character
+# Markdown, HTML or an autolink reads, and inside <code>/<pre> GitHub links no
+# `@name` or `#1` either; measured on the /markdown endpoint (gfm), not on a
+# rendered summary. md_enc alone is not a mask: unwrapped, `@name` and `#1`
+# still link. What passes all three helpers unchanged: bidi controls and
+# zero-width characters (they can make a value inside <code> read differently,
+# not add Markdown), and, in bash only, bytes that are not valid UTF-8 (Node
+# and Python see decoded strings).
 SHELL_MD = (
-    """md_enc() { local s="${1//[[:cntrl:]]/?}" o="" c i; local LC_ALL=C; for ((i = 0; i < ${#s}; i++)); do """
-    """c="${s:i:1}"; [[ "$c" == [[:punct:]] ]] && printf -v c '&#%d;' "'$c"; o+="$c"; done; printf '%s' "$o"; }""",
+    """md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" o="" c i; """
+    """s="${s//$'\\xc2'[$'\\x80'-$'\\x9f']/?}"; s="${s//$'\\xe2\\x80'[$'\\xa8\\xa9']/?}"; """
+    """for ((i = 0; i < ${#s}; i++)); do c="${s:i:1}"; """
+    """case "$c" in @) c='&#64;<!-- -->' ;; [[:punct:]]) printf -v c '&#%d;' "'$c" ;; esac; """
+    """o+="$c"; done; printf '%s' "$o"; }""",
     """md_code() { printf '<code>%s</code>' "$(md_enc "$1")"; }""",
     """md_pre() { local line; printf '<pre>'; while IFS= read -r line; do md_enc "${line%$'\\r'}"; printf '\\n'; """
     """done <<< "$1"; printf '</pre>\\n'; }""",
 )
 JS_MD = (
-    "const mdEnc = (value) => String(value).replace(/[\\u0000-\\u001f\\u007f-\\u009f]/g, '?')"
-    ".replace(/[\\x21-\\x2f\\x3a-\\x40\\x5b-\\x60\\x7b-\\x7e]/g, (c) => `&#${c.charCodeAt(0)};`);",
+    "const mdEnc = (value) => String(value).replace(/[\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]/g, '?')"
+    ".replace(/[\\x21-\\x2f\\x3a-\\x40\\x5b-\\x60\\x7b-\\x7e]/g, "
+    "(c) => (c === '@' ? '&#64;<!-- -->' : `&#${c.charCodeAt(0)};`));",
     "const mdCode = (value) => `<code>${mdEnc(value)}</code>`;",
     "const mdPre = (value) => `<pre>${String(value).replace(/\\r\\n/g, '\\n').split('\\n').map(mdEnc).join('\\n')}"
     "\\n</pre>`;",
 )
 PY_MD = '''def md_enc(value):
-    return re.sub(r"[\\x21-\\x2f\\x3a-\\x40\\x5b-\\x60\\x7b-\\x7e]", lambda m: f"&#{ord(m.group())};",
-                  re.sub(r"[\\x00-\\x1f\\x7f-\\x9f]", "?", str(value)))
+    return re.sub(r"[\\x21-\\x2f\\x3a-\\x40\\x5b-\\x60\\x7b-\\x7e]",
+                  lambda m: "&#64;<!-- -->" if m.group() == "@" else f"&#{ord(m.group())};",
+                  re.sub(r"[\\x00-\\x1f\\x7f-\\x9f\\u2028\\u2029]", "?", str(value)))
 
 
 def md_code(value):
