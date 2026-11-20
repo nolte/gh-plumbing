@@ -637,8 +637,10 @@ jobs:
             if ! git push origin HEAD:develop; then
               msg="Primary-path push of 'chore(release): $TAG' to develop was rejected (the App may not be a permitted bypass actor for direct pushes to develop). Falling back to the operator path: open a 'chore(release): $TAG' PR aligning every version-bearing file (spec/project/release-automation/ §Fallback path), then re-run release-publish."
               echo "::warning::$msg"
-              # The log line above masks msg; the summary writes the same text
-              # with the tag encoded (#506).
+              # The log line above prints msg unmasked: its only value is TAG,
+              # which Resolve draft refused for a control character or '##['
+              # (#492). Neither touches Markdown, so the summary writes the same
+              # text with the tag encoded (#506).
               subject="chore(release): $TAG"
               {
                 echo
