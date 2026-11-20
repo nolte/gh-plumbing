@@ -831,14 +831,23 @@ def test_archive_dry_run_encodes_the_asset_names(run, tmp_path):
     assert summary == f"### Release archive (dry run)\n- {md_code(hostile)}\n"
 
 
-def test_python_coverage_writes_the_report_as_one_pre_block(run):
-    stub = "#!/usr/bin/env bash\n" + 'printf \'%s\\n\' "Name    Stmts" "' + MD_HOSTILE + '.py  3" "</pre>"\n'
+@pytest.mark.parametrize("status", [0, 2])
+def test_python_coverage_writes_the_report_as_one_pre_block(run, tmp_path, status):
+    # Exit 2 stands for coverage's own fail_under: the report must still reach
+    # the summary and the log, and the step must keep coverage's status.
+    report = tmp_path / "report.txt"
+    report.write_text(f"Name    Stmts\n{MD_HOSTILE}.py  3\n</pre>\nx\r::warning::injected ##[warning]y\n",
+                      encoding="utf-8")
+    stub = f'#!/usr/bin/env bash\ncat "$STUB_REPORT"\nexit {status}\n'
     proc, _, summary = run("reusable-python-coverage.yaml", "Render coverage into the job summary",
-                           stubs_extra={"coverage": stub})
-    assert proc.returncode == 0, proc.stderr
+                           {"STUB_REPORT": str(report)}, stubs_extra={"coverage": stub})
+    assert proc.returncode == status, proc.stderr
     assert_inert(summary)
     assert summary.startswith("## Test coverage\n\n<pre>Name    Stmts\n")
     assert summary.count("<pre>") == 1 and summary.endswith("</pre>\n")
+    assert "coverage | Name    Stmts" in proc.stdout
+    assert f"coverage | {MD_HOSTILE}.py  3" in proc.stdout
+    assert commands(proc) == [], "the log copy is masked (#492)"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
