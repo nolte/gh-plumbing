@@ -135,3 +135,4 @@ none
 ## Dispatch log
 
 2026-11-20 P1 dispatched to nolte-engineering:code-security-reviewer — H1 refuted (16 shell writes complete; two Python scripts also write the summary), H2 confirmed; per-value origin table returned. Sweep total: 18 write sites (16 shell lines in 5 workflows + 2 scripts reached from 3 workflows). `scripts/required_check_triggers.py:515` writes too but no workflow calls it.
+2026-11-20 P2 dispatched to nolte-engineering:fullstack-developer — hypothesis confirmed; commits ee41837, 888dcdb, 28a2a3b, fc6482b, 7a3f5a2; helpers `md_enc`/`md_code`/`md_pre` per language, guard carries the summary sink; two findings fixed directly (`head -c 800` cuts a UTF-8 character; stale comment at refresh-master:172-174). Gate re-run by the orchestrator at 7a3f5a2: guard exit 0, `471 passed`, pre-commit passed; actionlint without ShellCheck (shim has no version).
