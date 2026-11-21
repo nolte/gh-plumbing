@@ -32,12 +32,24 @@ variable "app_private_key" {
 }
 
 variable "app_slug" {
-  description = "Slug of the portfolio GitHub App (the part of the App URL after /apps/, e.g. 'nolte-portfolio-bot'). Used to declare the App as a branch-protection bypass actor when enable_branch_bypass is true (organisation mode only)."
+  description = "Slug of the portfolio GitHub App (the part of the App URL after /apps/, e.g. 'nolte-portfolio-bot'). Optional. The module no longer reads this input: the branch-protection bypass names the App by var.app_node_id instead. The input stays so that existing module calls that set it keep working."
   type        = string
+  default     = ""
 
   validation {
-    condition     = can(regex("^[a-z0-9-]+$", var.app_slug))
-    error_message = "app_slug must be lowercase letters, digits, and hyphens only."
+    condition     = var.app_slug == "" || can(regex("^[a-z0-9-]+$", var.app_slug))
+    error_message = "app_slug must be empty or lowercase letters, digits, and hyphens only."
+  }
+}
+
+variable "app_node_id" {
+  description = "GraphQL node ID of the portfolio GitHub App (starts with 'A_' or 'MDM6QXBw'). Used as the push-restriction (bypass) actor when enable_branch_bypass is true (organisation mode only); required in that case. Not the App slug and not the node ID of the '<slug>[bot]' user ('BOT_...'). The module README section \"Find the App node identifier\" shows how to look it up."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.app_node_id == "" || can(regex("^(A_|MDM6QXBw)[A-Za-z0-9_=+/-]+$", var.app_node_id))
+    error_message = "app_node_id must be empty or the App's node ID, which starts with 'A_' or 'MDM6QXBw'. A Bot user ID ('BOT_...') or an App slug isn't an App node ID. See the module README section \"Find the App node identifier\"."
   }
 }
 
@@ -52,7 +64,7 @@ variable "consumer_repositories" {
 }
 
 variable "enable_branch_bypass" {
-  description = "When true, configure branch protection on var.protected_branches for every consumer repository with var.app_slug declared as a push-restriction (bypass) actor. This is Phase 2 of issue #330. Default off so Phase 0 (credentials + selection) can land independently. Organisation mode only: GitHub documents push restrictions for users, teams and apps as available only on organisation-owned repositories, so the module fails at plan time when var.user is set and this is true."
+  description = "When true, configure branch protection on var.protected_branches for every consumer repository with the App (var.app_node_id) declared as a push-restriction (bypass) actor. Needs var.app_node_id; the module fails at plan time when this is true and var.app_node_id is empty. This is Phase 2 of issue #330. Default off so Phase 0 (credentials + selection) can land independently. Organisation mode only: GitHub documents push restrictions for users, teams and apps as available only on organisation-owned repositories, so the module fails at plan time when var.user is set and this is true."
   type        = bool
   default     = false
 }

@@ -41,8 +41,10 @@ module "portfolio_app" {
 
   # Phase 0: leave bypass off until every consumer in the list above
   # has the App installed AND its wrappers updated. Flip to true in a
-  # follow-up apply once both are confirmed.
+  # follow-up apply once both are confirmed. The bypass then needs the
+  # App node ID; see "Find the App node identifier" in the module README.
   enable_branch_bypass = false
+  # app_node_id        = "A_kwDO..."
 }
 
 output "configured" {

@@ -1,5 +1,5 @@
-# Plan-time checks of the owner-mode preconditions in
-# terraform_data.owner_check. The mocked provider needs no GitHub
+# Plan-time checks of the owner-mode and bypass preconditions in
+# terraform_data.owner_check and of the app_node_id input. The mocked provider needs no GitHub
 # credentials and makes no API calls.
 #
 # Because of `mock_provider`, init, validate and test in this directory
@@ -39,6 +39,7 @@ run "organization_mode_allows_branch_bypass" {
   variables {
     organization         = "example-org"
     enable_branch_bypass = true
+    app_node_id          = "A_kwDOexample"
   }
 
   assert {
@@ -112,5 +113,85 @@ run "user_mode_without_branch_bypass" {
   assert {
     condition     = length(github_actions_organization_secret_repositories.portfolio_app_private_key) == 0
     error_message = "Expected no organisation secret repository access in user mode."
+  }
+}
+
+# The bypass names the App by its node ID. The provider would resolve a
+# "/<slug>" entry as a user login, which an App slug isn't (issue #501).
+run "branch_bypass_uses_app_node_id" {
+  command = plan
+
+  variables {
+    organization         = "example-org"
+    enable_branch_bypass = true
+    app_node_id          = "A_kwDOexample"
+  }
+
+  assert {
+    condition = alltrue([
+      for k in ["example-repo::develop", "example-repo::master"] :
+      one(github_branch_protection.bypass[k].restrict_pushes[0].push_allowances) == "A_kwDOexample"
+    ])
+    error_message = "Expected the App node ID as the only push allowance on every bypass entry."
+  }
+}
+
+run "branch_bypass_needs_app_node_id" {
+  command = plan
+
+  variables {
+    organization         = "example-org"
+    enable_branch_bypass = true
+    app_node_id          = ""
+  }
+
+  expect_failures = [
+    terraform_data.owner_check,
+  ]
+}
+
+# A node ID of the `<slug>[bot]` user isn't the App's node ID.
+run "app_node_id_refuses_bot_user_id" {
+  command = plan
+
+  variables {
+    organization         = "example-org"
+    enable_branch_bypass = true
+    app_node_id          = "BOT_kgDOERMNrQ"
+  }
+
+  expect_failures = [
+    var.app_node_id,
+  ]
+}
+
+run "app_node_id_refuses_slug" {
+  command = plan
+
+  variables {
+    organization         = "example-org"
+    enable_branch_bypass = true
+    app_node_id          = "example-portfolio-bot"
+  }
+
+  expect_failures = [
+    var.app_node_id,
+  ]
+}
+
+# app_slug is optional and no longer read by the module.
+run "app_slug_is_optional" {
+  command = plan
+
+  variables {
+    organization         = "example-org"
+    app_slug             = ""
+    enable_branch_bypass = true
+    app_node_id          = "MDM6QXBwMTIzNDU2Nw=="
+  }
+
+  assert {
+    condition     = length(github_branch_protection.bypass) == 2
+    error_message = "Expected the bypass to plan without app_slug."
   }
 }
