@@ -27,10 +27,16 @@ Predicate: EVERY line of a `run:` body that
   * prints to the log: a shell `echo`/`printf` statement whose output is not
     piped or redirected to a file, a Python `print(...)`, `raise SystemExit(...)`
     or `sys.stdout/stderr.write(...)`, a Node `console.*(...)` or
-    `process.stdout/stderr.write(...)` -- stdout counting only when the
-    heredoc's own stdout is not redirected --
+    `process.stdout/stderr.write(...)` -- stdout counting when the heredoc's
+    own stdout is not redirected, and when it is redirected (`>`, `>>`,
+    `>|`) or `tee`d to one of the env files above, directly or as part of
+    a `{ ...; }` group redirected there (#507); a stdout print into a plain
+    file or a pipe is not read --
 
-and interpolates a value. Each interpolated name must be one of:
+and interpolates a value. Each interpolated name must be one of the list
+below -- the same list for a log line and an env-file write, in shell and in
+a Python or Node heredoc alike, since what an env file must not get from a
+value is a line end, and the mask turns every one into `?`:
 
   * masked at the print by the canonical helper, which turns control
     characters into `?` and every `##[` into `#?[`: `$(shown "$name")` in
@@ -203,8 +209,16 @@ Not covered (each would need a parser this script doesn't have):
   * `: "${x:=$V}"`, `printf -v`, `eval`, `${!n}`, `declare -n`, an alias or a
     variable holding `$GITHUB_OUTPUT` or `$GITHUB_STEP_SUMMARY`, a command
     prefix held in a variable, `node -e` / `python -c` one-liners;
-  * the stdout of a Python or Node heredoc written to an env file
-    (`node <<'X' >> "$GITHUB_OUTPUT"`): only its stderr prints are read;
+  * a Python or Node heredoc that opens an env file itself
+    (`open(os.environ["GITHUB_OUTPUT"], "a")`, `fs.appendFileSync`) instead
+    of printing to a redirected stdout: its writes are not read;
+  * an env-file entry in the multi-line form (`name<<DELIM`, value lines,
+    `DELIM`): a masked value has no line end, but a value line that equals
+    the delimiter ends the entry early, so the lines after it become entries
+    of their own. The guard doesn't check that the delimiter is one a value
+    can't guess (the one step that writes such an entry today, in
+    reusable-release-archive.yml, ends it with a kernel UUID), in shell or
+    in a heredoc;
   * an array literal that spans lines (`kw=(` ... `)`): its words on the
     later lines read as statements, so a keyword there opens or closes a
     group (one closed on its own line is blanked);
@@ -1105,6 +1119,17 @@ def blocks_of(units: list[Logical]) -> Blocks:
     return Blocks(segments_by, paths_by, enclosing, kinds, spans, ok)
 
 
+def stdout_print(unit: Logical) -> bool | None:
+    """Whether the first print of a Python or Node line goes to stdout; None: no print."""
+    if unit.lang == "py":
+        m = PY_PRINT.search(unit.text)
+        return None if m is None else m.group(1) in ("print", "sys.stdout.write") and "file=sys.stderr" not in unit.text
+    if unit.lang == "js":
+        m = JS_PRINT.search(unit.text)
+        return None if m is None else m.group(1) in ("console.log", "console.info", "process.stdout.write")
+    return None
+
+
 def sink_units(units: list[Logical]) -> set[int]:
     """Indices of units that emit a command, write an env file or print to the log."""
     redirected, sinks, _ = redirected_groups(units)
@@ -1124,18 +1149,11 @@ def sink_units(units: list[Logical]) -> set[int]:
         elif unit.lang == "sh-heredoc":
             if unit.dest in ("envfile", "log"):
                 sinks.add(k)
-        elif unit.lang == "py":
-            m = PY_PRINT.search(text)
-            if m:
-                to_stdout = m.group(1) in ("print", "sys.stdout.write") and "file=sys.stderr" not in text
-                if not to_stdout or unit.dest == "log":
-                    sinks.add(k)
-        elif unit.lang == "js":
-            m = JS_PRINT.search(text)
-            if m:
-                to_stdout = m.group(1) in ("console.log", "console.info", "process.stdout.write")
-                if not to_stdout or unit.dest == "log":
-                    sinks.add(k)
+        elif unit.lang in ("py", "js") and stdout_print(unit) is not None:
+            # stderr is the log; stdout counts where the heredoc sends it to
+            # the log or to an env file (#507), the same rule either way.
+            if not stdout_print(unit) or unit.dest in ("log", "envfile"):
+                sinks.add(k)
     return sinks
 
 
@@ -1837,6 +1855,8 @@ def leading_value(unit: Logical) -> bool:
         m = (PY_PRINT if unit.lang == "py" else JS_PRINT).search(text)
         if not m or COMMAND.search(text):
             return False
+        if unit.dest == "envfile" and stdout_print(unit):
+            return False  # an env-file entry, not a log line: as for a shell write there
         args = call_args(text, m.end())
         if not args:
             return False

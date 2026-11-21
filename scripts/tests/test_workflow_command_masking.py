@@ -422,6 +422,63 @@ def test_node_stdout_into_the_summary_is_not_a_log_line(tmp_path):
     assert finding["message"].startswith("`p` reaches a step-summary write unencoded")
 
 
+ISSUE_507_GAP_2 = "node <<'NODE' >> \"$GITHUB_OUTPUT\"\nconst p = process.env.P;\nconsole.log(`v=${p}`);\nNODE"
+PY_ENV_FILE = "python3 - <<'PY' >> \"$GITHUB_OUTPUT\"\nimport os\np = os.environ['P']\nprint(f\"v={p}\")\nPY"
+
+
+def test_issue_507_node_stdout_into_an_env_file_is_read(tmp_path):
+    assert check(tmp_path, ISSUE_507_GAP_2) == ["p"]
+
+
+def test_python_stdout_into_an_env_file_is_read(tmp_path):
+    assert check(tmp_path, PY_ENV_FILE) == ["p"]
+
+
+@pytest.mark.parametrize("target", [
+    '>> "$GITHUB_OUTPUT"', '> "$GITHUB_OUTPUT"', '>| "$GITHUB_OUTPUT"', ">> $GITHUB_OUTPUT",
+    '>> "${GITHUB_ENV}"', '>> "$GITHUB_PATH"', '>> "$GITHUB_STATE"', '| tee -a "$GITHUB_OUTPUT"',
+])
+@pytest.mark.parametrize("lang", ["node", "python"])
+def test_heredoc_stdout_into_any_env_file_is_read(tmp_path, target, lang):
+    run = (ISSUE_507_GAP_2 if lang == "node" else PY_ENV_FILE).replace('>> "$GITHUB_OUTPUT"', target)
+    assert check(tmp_path, run) == ["p"]
+
+
+@pytest.mark.parametrize("run", [
+    (f"node <<'NODE' >> \"$GITHUB_OUTPUT\"\n{guard.JS_SHOWN}\nconst p = process.env.P;\n"
+     "console.log(`v=${shown(p)}`);\nprocess.stdout.write(`w=${shown(p)}\\n`);\nconsole.log(shown(p));\nNODE"),
+    (f"python3 - <<'PY' >> \"$GITHUB_OUTPUT\"\nimport os, re\n{PY_HELPER}p = os.environ['P']\n"
+     "print(f\"v={shown(p)}\")\nprint('w=' + 'x', len(p))\nprint(shown(p))\nPY"),
+])
+def test_a_masked_heredoc_print_into_an_env_file_is_fine(tmp_path, run):
+    # shown() turns every line end into '?', so the value can't add an entry;
+    # an env-file entry is not a log line, so a leading value is no finding
+    # there (as for a shell write to an env file).
+    assert check(tmp_path, run) == []
+
+
+def test_shown_into_an_env_file_needs_the_canonical_definition(tmp_path):
+    run = ("node <<'NODE' >> \"$GITHUB_OUTPUT\"\nconst shown = (v) => v;\n"
+           "console.log(`v=${shown(process.env.P)}`);\nNODE")
+    assert check(tmp_path, run) == ["shown"]
+
+
+def test_a_heredoc_inside_an_env_file_group_is_read_as_well(tmp_path):
+    # Its stdout is the group's: read with the log rule's check, which is the
+    # env-file write's check too.
+    run = ("{\n  echo a=fixed\n  node <<'NODE'\nconst p = process.env.P;\nconsole.log(`v=${p}`);\nNODE\n"
+           "} >> \"$GITHUB_OUTPUT\"")
+    assert check(tmp_path, run) == ["p"]
+    shutil.rmtree(tmp_path / ".github")
+    masked = run.replace("const p", f"{guard.JS_SHOWN}\nconst p").replace("${p}", "${shown(p)}")
+    assert check(tmp_path, masked) == []
+
+
+@pytest.mark.parametrize("target", ["> vbf.json", ">> out.txt", "| jq ."])
+def test_heredoc_stdout_into_a_plain_file_or_pipe_stays_unread(tmp_path, target):
+    assert check(tmp_path, ISSUE_507_GAP_2.replace('>> "$GITHUB_OUTPUT"', target)) == []
+
+
 def test_quoted_data_heredoc_is_not_shell(tmp_path):
     assert check(tmp_path, "cat > f.py <<'PY'\nprint('::error::$VALUE')\nPY") == []
 
