@@ -55,6 +55,21 @@ run "organization_mode_allows_branch_bypass" {
     condition     = length(github_actions_organization_secret_repositories.portfolio_app_private_key) == 1
     error_message = "Expected the secret's repository access as a separate resource in organisation mode."
   }
+
+  assert {
+    condition     = github_actions_organization_secret_repositories.portfolio_app_private_key[0].secret_name == "PORTFOLIO_APP_PRIVATE_KEY"
+    error_message = "Expected the repository access to target PORTFOLIO_APP_PRIVATE_KEY."
+  }
+
+  assert {
+    condition     = length(github_actions_organization_secret_repositories.portfolio_app_private_key[0].selected_repository_ids) == length(var.consumer_repositories)
+    error_message = "Expected one selected repository ID per consumer repository."
+  }
+
+  assert {
+    condition     = github_actions_organization_secret.portfolio_app_private_key[0].selected_repository_ids == null
+    error_message = "The deprecated selected_repository_ids argument must not return to the secret; repository access belongs to github_actions_organization_secret_repositories."
+  }
 }
 
 # Both owners set: the plan fails on terraform_data.owner_check.
