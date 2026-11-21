@@ -33,6 +33,21 @@ the configuration sets both or neither.
 |---|---|---|
 | `github_actions_organization_variable.portfolio_app_id` | organisation-wide, `visibility = "selected"` | Holds the App ID under the name `PORTFOLIO_APP_ID`. Wrappers read it from `vars.PORTFOLIO_APP_ID`. |
 | `github_actions_organization_secret.portfolio_app_private_key` | organisation-wide, `visibility = "selected"` | Holds the private key under the name `PORTFOLIO_APP_PRIVATE_KEY`. Wrappers read it from `secrets.PORTFOLIO_APP_PRIVATE_KEY`. |
+| `github_actions_organization_secret_repositories.portfolio_app_private_key` | the organisation secret's repository access | Grants the repositories in `consumer_repositories` access to `PORTFOLIO_APP_PRIVATE_KEY`. A separate resource because provider 6.12.0 deprecated `selected_repository_ids` on the secret. |
+
+Updating the secret, for example after rotating `app_private_key`,
+sends no repository list. This module hasn't confirmed that GitHub
+keeps the existing selection in that case, and the access resource
+plans no change in that apply. After the first organisation-mode
+apply and after each key rotation, check the selection:
+
+```sh
+gh api orgs/<org>/actions/secrets/PORTFOLIO_APP_PRIVATE_KEY/repositories \
+  --jq '.repositories[].full_name'
+```
+
+If a consumer repository is missing, a second `terraform apply`
+restores the list.
 
 ### User mode
 

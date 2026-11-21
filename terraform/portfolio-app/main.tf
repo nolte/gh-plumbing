@@ -45,9 +45,11 @@ data "github_repository" "consumers" {
 # --- Organisation mode ------------------------------------------------
 #
 # One org-level Actions variable + secret with visibility=selected
-# scoped to the consumer-repositories list. New consumers join by
-# extending consumer_repositories; the variable + secret cover them
-# automatically.
+# scoped to the consumer-repositories list. The variable carries its
+# repository list itself; the secret's list lives in a separate
+# github_actions_organization_secret_repositories resource. New
+# consumers join by extending consumer_repositories; the variable +
+# secret cover them automatically.
 
 # Org-level Actions variable holding the App ID.
 #
@@ -74,9 +76,23 @@ resource "github_actions_organization_variable" "portfolio_app_id" {
 resource "github_actions_organization_secret" "portfolio_app_private_key" {
   count = local.is_org ? 1 : 0
 
-  secret_name     = "PORTFOLIO_APP_PRIVATE_KEY"
-  visibility      = "selected"
-  plaintext_value = var.app_private_key
+  secret_name = "PORTFOLIO_APP_PRIVATE_KEY"
+  visibility  = "selected"
+  value       = var.app_private_key
+}
+
+# Repository access for the org-level secret above.
+#
+# The provider deprecated `selected_repository_ids` on
+# github_actions_organization_secret in 6.12.0, so the list of consumer
+# repositories that may read PORTFOLIO_APP_PRIVATE_KEY lives here. The
+# resource sends the full list on every apply and empties it on
+# destroy. Referencing the secret's name makes Terraform create the
+# secret first.
+resource "github_actions_organization_secret_repositories" "portfolio_app_private_key" {
+  count = local.is_org ? 1 : 0
+
+  secret_name = github_actions_organization_secret.portfolio_app_private_key[0].secret_name
   selected_repository_ids = [
     for r in data.github_repository.consumers : r.repo_id
   ]
@@ -101,9 +117,9 @@ resource "github_actions_variable" "portfolio_app_id" {
 resource "github_actions_secret" "portfolio_app_private_key" {
   for_each = local.user_repo_set
 
-  repository      = each.value
-  secret_name     = "PORTFOLIO_APP_PRIVATE_KEY"
-  plaintext_value = var.app_private_key
+  repository  = each.value
+  secret_name = "PORTFOLIO_APP_PRIVATE_KEY"
+  value       = var.app_private_key
 }
 
 # --- Phase 2 (opt-in, organisation mode only): branch-protection bypass -
