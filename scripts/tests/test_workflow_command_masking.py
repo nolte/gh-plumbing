@@ -170,6 +170,141 @@ def test_an_append_keeps_the_name_unclean(tmp_path):
     assert check(tmp_path, f'{HELPER}\nx=$(shown "$VALUE")\nx+="$VALUE"\necho "::error::$x"') == ["x"]
 
 
+# --- a masked assignment counts only where its block encloses the print (#507) ---
+
+ISSUE_507_GAP_1 = f'{HELPER}\nx="$VALUE"\nif false; then\n  x=$(shown "$VALUE")\nfi\necho "::error::$x"'
+
+
+def test_issue_507_a_mask_in_a_branch_that_does_not_run_is_a_finding(tmp_path):
+    assert check(tmp_path, ISSUE_507_GAP_1) == ["x"]
+
+
+@pytest.mark.parametrize("run", [
+    # raw, then masked, at the print's own level
+    f'{HELPER}\nx="$VALUE"\nx=$(shown "$x")\necho "::error::$x"\necho "v=$x" >> "$GITHUB_OUTPUT"',
+    # raw, then masked in an outer block, the print in an inner one
+    f'{HELPER}\nx="$VALUE"\nx=$(shown "$x")\nif true; then\n  for v in a; do\n    echo "::error::$x"\n  done\nfi',
+    f'{HELPER}\nf() {{\n  local m="$1"\n  m=$(shown "$m")\n  if true; then\n    echo "x $m"\n  fi\n}}\nf "$VALUE"',
+    # both inside the same branch, loop body, case arm, subshell, group
+    f'{HELPER}\nif true; then\n  x=$(shown "$VALUE")\n  echo "::error::$x"\nfi',
+    f'{HELPER}\nfor v in a; do\n  x=$(shown "$VALUE")\n  echo "::error::$x"\ndone',
+    f'{HELPER}\ncase "$VALUE" in\n  a)\n    x=$(shown "$VALUE")\n    echo "::error::$x"\n    ;;\nesac',
+    f'{HELPER}\n(\n  x=$(shown "$VALUE")\n  echo "::error::$x"\n)',
+    # a later masked assignment that doesn't dominate is passed over
+    f'{HELPER}\nx=$(shown "$VALUE")\nif true; then\n  x=$(shown "$OTHER")\nfi\necho "::error::$x"',
+    # the mask may be followed by `&&` or `||`: it ran
+    f'{HELPER}\nx=$(shown "$VALUE") || exit 1\necho "::error::$x"',
+    # a heredoc into an env file, masked before it
+    f'{HELPER}\nx=$(shown "$VALUE")\ncat >> "$GITHUB_OUTPUT" <<EOF\nv=$x\nEOF',
+])
+def test_a_dominating_mask_covers_the_print(tmp_path, run):
+    assert check(tmp_path, run, env="          VALUE: ${{ inputs.value }}\n          OTHER: ${{ inputs.o }}\n") == []
+
+
+@pytest.mark.parametrize("block", [
+    'if true; then\n  x=$(shown "$x")\nfi',
+    'if false; then\n  :\nelif true; then\n  x=$(shown "$x")\nfi',
+    'if false; then\n  :\nelse\n  x=$(shown "$x")\nfi',
+    'if false; then x=$(shown "$x"); fi',
+    'for v in a; do\n  x=$(shown "$x")\ndone',
+    'while false; do\n  x=$(shown "$x")\ndone',
+    'case "$VALUE" in\n  a) x=$(shown "$x") ;;\nesac',
+    '(\n  x=$(shown "$x")\n)',
+    '( x=$(shown "$x") )',
+    '{\n  x=$(shown "$x")\n}',
+    '{ x=$(shown "$x"); }',
+    'f() {\n  x=$(shown "$x")\n}\nf',
+    'true && x=$(shown "$x")',
+    'false || x=$(shown "$x")',
+    'x=$(shown "$x") true',
+    'x=$(shown "$x") | cat',
+    'x=$(shown "$x") &',
+])
+def test_a_mask_whose_block_does_not_enclose_the_print_is_a_finding(tmp_path, block):
+    assert check(tmp_path, f'{HELPER}\nx="$VALUE"\n{block}\necho "::error::$x"') == ["x"]
+
+
+def test_a_mask_in_one_case_arm_does_not_cover_another(tmp_path):
+    run = (f'{HELPER}\nx="$VALUE"\ncase "$VALUE" in\n  a)\n    x=$(shown "$x")\n    ;;\n'
+           '  b)\n    echo "::error::$x"\n    ;;\nesac')
+    assert check(tmp_path, run) == ["x"]
+
+
+def test_a_mask_in_one_branch_does_not_cover_the_else_branch(tmp_path):
+    run = f'{HELPER}\nx="$VALUE"\nif true; then\n  x=$(shown "$x")\nelse\n  echo "::error::$x"\nfi'
+    assert check(tmp_path, run) == ["x"]
+
+
+@pytest.mark.parametrize("run", [
+    # a raw assignment after the dominating mask, before the print
+    f'{HELPER}\nx=$(shown "$VALUE")\nif true; then\n  x="$VALUE"\nfi\necho "::error::$x"',
+    f'{HELPER}\nx=$(shown "$VALUE")\nread -r x < f\necho "::error::$x"',
+    # on the print's own line
+    f'{HELPER}\nx=$(shown "$VALUE")\nx="$VALUE"; echo "::error::$x"',
+    # on the mask's own line, after it
+    f'{HELPER}\nx=$(shown "$VALUE"); x="$VALUE"\necho "::error::$x"',
+    # after the print, inside a loop the mask is outside of: the next pass prints it
+    f'{HELPER}\nx=$(shown "$VALUE")\nwhile true; do\n  echo "::error::$x"\n  x="$VALUE"\ndone',
+    # a print in a function body, the mask outside: the body runs where it is called
+    f'{HELPER}\nx=$(shown "$VALUE")\nf() {{\n  echo "::error::$x"\n}}\nx="$VALUE"\nf',
+    # a raw assignment in a function body, called between the mask and the print
+    f'{HELPER}\ng() {{ x="$VALUE"; }}\nx=$(shown "$VALUE")\ng\necho "::error::$x"',
+    f'{HELPER}\ng() {{\n  x="$VALUE"\n}}\nx=$(shown "$VALUE")\ng\necho "::error::$x"',
+])
+def test_a_raw_value_that_can_reach_the_print_past_the_mask_is_a_finding(tmp_path, run):
+    # A command line counts whole, so `x="$VALUE"; echo "::error::$x"` names VALUE too.
+    found = check(tmp_path, run)
+    assert "x" in found and set(found) <= {"x", "VALUE"}, found
+
+
+@pytest.mark.parametrize("run", [
+    'x=lit\n{ x="$VALUE"; }\necho "::error::$x"',
+    'x=lit\nif true; then { x="$VALUE"; }; fi\necho "::error::$x"',
+])
+def test_an_assignment_after_a_group_brace_is_an_assignment(tmp_path, run):
+    # Before #507 `{ x=...` read as no assignment, so x passed as a constant.
+    assert check(tmp_path, run) == ["x"]
+
+
+def test_a_mask_in_a_loop_re_applied_before_the_print_is_fine(tmp_path):
+    run = f'{HELPER}\nwhile true; do\n  x=$(shown "$VALUE")\n  echo "::error::$x"\n  x="$VALUE"\ndone'
+    assert check(tmp_path, run) == []
+
+
+@pytest.mark.parametrize("unbalanced", [
+    'v="$(\n  cat f\n)"',        # a substitution over lines: its `)` reads as a closer
+    "jq '\n  if . then 1 else 2 end\n' f",  # a quoted string over lines, its words read as keywords
+    "fi",                        # a closer without an opener
+    "if true; then",             # an opener without a closer
+])
+def test_a_body_whose_blocks_cannot_be_attributed_gets_no_mask(tmp_path, unbalanced):
+    # Errs towards a finding: the straight-line form is refused there too.
+    run = f'{HELPER}\n{unbalanced}\nx="$VALUE"\nx=$(shown "$x")\necho "::error::$x"'
+    assert "x" in check(tmp_path, run)
+
+
+def test_setup_vale_finish_is_covered_by_its_dominating_mask():
+    # actions/setup-vale/setup-vale.sh as shipped: `local ... message="$3"`,
+    # then `message=$(shown "$message")` at the function's own level, then the
+    # prints in the if/else below it.
+    rel = "actions/setup-vale/setup-vale.sh"
+    [body] = guard.bodies_of(REPO_ROOT, REPO_ROOT / rel)
+    checker = guard.Checker(body, [body], guard.ALLOWED, set())
+    prints = [k for k, u in enumerate(checker.units)
+              if u.lang == "sh" and not guard.is_comment(u.text) and "echo" in u.text and "message" in u.text]
+    assert len(prints) == 2
+    assert all(checker.masked_before("message", k) for k in prints)
+    assert not any(f["message"].startswith("`message`") for f in guard.audit_body(body))
+
+
+def test_undoing_setup_vale_s_mask_dominance_is_seen(tmp_path):
+    rel = "actions/setup-vale/setup-vale.sh"
+    root = copy_with(tmp_path, rel, '  message=$(shown "$message")\n',
+                     '  if [[ -n "$message" ]]; then\n    message=$(shown "$message")\n  fi\n')
+    findings, _ = guard.audit(root)
+    assert {(f["path"], f["message"].split("`")[1]) for f in findings} == {(rel, "message")}
+
+
 # --- refusals ------------------------------------------------------------------
 
 

@@ -37,7 +37,30 @@ and interpolates a value. Each interpolated name must be one of:
     shell, `shown(...)` in a Python or Node heredoc -- and only where the body
     or heredoc defines `shown` exactly that way (SHELL_SHOWN, PY_SHOWN_RETURN,
     JS_SHOWN);
-  * assigned, last before the print, from such a masked expansion;
+  * assigned from such a masked expansion (`x=$(shown "$x")`) by a
+    statement that dominates the print (#507): the block holding the
+    assignment -- an `if` branch, a loop body, a `case` arm, a `{ ...; }`
+    group, a `( ... )` subshell, a function body, or the body itself --
+    also encloses the print, and walking back from the print to it meets no
+    assignment to the name that isn't masked (one on the print's own line
+    counts as met). A masked assignment in a block that doesn't enclose the
+    print is passed over, not counted. The assignment must be a statement of
+    its own, run unconditionally where it stands: not after `&&` or `||`,
+    not in a pipeline or in the background, not a prefix of a command
+    (`x=$(shown "$x") cmd` sets x for cmd only), and the last assignment to
+    the name on its line. Since a function body runs where the function is
+    called, not where it stands, a print inside one the mask is outside of
+    is not covered, and an unmasked assignment to the name inside a function
+    body the print is outside of voids every mask of the name for that print
+    (a `local` one included). Nor is a print covered that an unmasked
+    assignment follows inside a loop enclosing the print but not the mask
+    (the next pass prints it). Blocks are read statement by statement from their
+    keywords (`if`/`then`/`elif`/`else`/`fi`, `for`/`while`/`until`/`select`
+    ... `done`, `case`/`;;`/`esac`, `{`/`}`, `(`/`)`); where a closer has no
+    matching opener or a block stays open -- a `$(...)` or a quoted string
+    over several lines reads that way -- no block is attributed in that
+    body and no masked assignment covers anything there (errs towards a
+    finding);
   * refused earlier in the same body by the canonical check
     `if [[ "$name" == *[[:cntrl:]]* || "$name" == *'##['* ]]; then`, whose
     then-branch holds an `exit` statement at its own level (not in a comment,
@@ -151,12 +174,17 @@ Not covered (each would need a parser this script doesn't have):
   * `unset -f shown` or a later weak redefinition of `shown` after the
     canonical one, and a canonical `shown` that is defined only after its
     first use (the guard checks that the body defines it, not where);
-  * on a log line, a masked assignment in a branch that doesn't run: the
-    last assignment by line counts there (`x="$V"`, then `x=$(shown "$x")`
-    inside `if false`), because reading control flow is out of proportion and
-    the straight-line form -- raw, then masked -- is in use
-    (actions/setup-vale/setup-vale.sh, finish()); the summary rule reads
-    every assignment instead;
+  * on a log line, what block dominance doesn't read (#507): an assignment
+    the guard doesn't see as one -- through `eval`, `source`, a `trap`,
+    `printf -v`, `: "${x:=$V}"` or a nameref (`declare -n`) -- doesn't stop
+    the walk back from the print, and a command run between the mask and
+    the print that reassigns the name some other way (a script `source`d
+    from a file) isn't read. Blocks are told by keywords at the
+    start of a statement, not by a parser: a keyword at the start of a
+    line inside a quoted string or a `$(...)` over lines can open or close
+    one (a body left unbalanced by it refuses, see above; one that happens
+    to balance is read with the wrong blocks). The summary rule reads every
+    assignment instead;
   * `shell: python` steps and other non-bash `shell:` values;
   * in the step summary: a bare name passed to a Node or Python print on a
     continuation line of the call (an f-string or template part there is
@@ -186,6 +214,17 @@ Not covered (each would need a parser this script doesn't have):
   * `actions/**/*.bash` and extension-less scripts;
   * `${{ ... }}` expressions in a `run:` body (a neighbouring class), and the
     non-reusable workflows.
+
+Refused although harmless (the log rule's block dominance errs towards a
+finding, #507):
+
+  * a mask that runs before the print without enclosing it: in a function
+    called before the print, in a `{ ...; }` group, in an `if` or `while`
+    condition with the print after the compound, on the print's own line
+    (`x=$(shown "$V"); echo "x $x"`) or on the line that opens a heredoc
+    the value is printed in -- mask on a line of its own, in a block that
+    encloses the print, instead;
+  * every masked assignment in a body whose blocks the guard can't attribute.
 
 Refused although harmless (the summary rule errs towards a finding):
 
@@ -237,7 +276,8 @@ REFUSAL = re.compile(
     r"""^\s*if\s+\[\[\s+"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?"\s+==\s+\*\[\[:cntrl:\]\]\*\s+\|\|\s+"""
     r""""\$\{?\1\}?"\s+==\s+\*'##\['\*\s+\]\];\s*then\s*$""")
 EXIT_STATEMENT = re.compile(r"^exit(?:\s+[0-9]+)?\s*$")
-STATEMENT_START = r"(?:^|[;&|]\s*|\b(?:then|do|else|if|!)\s+)"
+# Also after a group's `{ ` or a subshell's `(` (`{ x="$v"; }` assigns x).
+STATEMENT_START = r"(?:^|[;&|]\s*|\b(?:then|do|else|if|!)\s+|(?<!\$)\{\s+|(?<![$<>])\(\s*)"
 ASSIGNMENT = re.compile(
     STATEMENT_START
     + r"""(?:(?:local|readonly|export|declare)(?:\s+-\w+)*\s+)?([A-Za-z_][A-Za-z0-9_]*)(\+?)=("(?:[^"\\]|\\.)*"|'[^']*'|\$\((?:[^()]|\([^()]*\))*\)|[^\s;]*)"""
@@ -936,6 +976,135 @@ def unattributed_summary_closers(units: list[Logical]) -> list[int]:
     return out
 
 
+# `f() {`, `function f {`, `function f() {`: the `{` on this line opens a body.
+FUNCTION_OPENER = re.compile(
+    r"^\s*(?:function\s+[A-Za-z_][A-Za-z0-9_:.-]*(?:\s*\(\s*\))?|[A-Za-z_][A-Za-z0-9_:.-]*\s*\(\s*\))\s*\{")
+# `#` at the start of a word, outside quotes: the rest of the line is a comment.
+LINE_COMMENT = re.compile(r"(?:^|(?<=\s))#")
+
+
+@dataclass
+class Blocks:
+    """Which blocks enclose each shell statement of a body (#507).
+
+    A block is an `if` compound, one of its branches (`then`, `elif ...
+    then`, `else`), a loop (`for`/`while`/`until`/`select` to `done`), a
+    `case` compound, one of its arms, a `{ ... }` group, a function body or a
+    `( ... )` subshell. `segments[k]` holds the statements of shell unit k,
+    as `statements_of` splits them, and `paths[k]` the blocks open at each --
+    a closer's statement counts inside the block it closes. `enclosing[k]`
+    holds the blocks that enclose every statement of unit k. `ok` is False
+    when a closer has no matching opener or a block stays open: then no block
+    is attributed, and nothing may rest on one.
+    """
+
+    segments: dict[int, list[tuple[str, str, str]]]
+    paths: dict[int, list[tuple[int, ...]]]
+    enclosing: dict[int, set[int]]
+    kinds: dict[int, str]
+    spans: dict[int, tuple[int, int]]
+    ok: bool
+
+
+def code_of(text: str) -> str:
+    """A shell line without its trailing comment."""
+    m = LINE_COMMENT.search(unquoted(text))
+    return text[:m.start()] if m else text
+
+
+def blocks_of(units: list[Logical]) -> Blocks:
+    """Read the block structure of a body's shell lines, statement by statement."""
+    kinds: dict[int, str] = {}
+    starts: dict[int, int] = {}
+    spans: dict[int, tuple[int, int]] = {}
+    stack: list[int] = []
+    segments_by: dict[int, list[tuple[str, str, str]]] = {}
+    paths_by: dict[int, list[tuple[int, ...]]] = {}
+    ok = True
+    k = 0
+
+    def push(kind: str) -> None:
+        rid = len(kinds)
+        kinds[rid] = kind
+        starts[rid] = k
+        stack.append(rid)
+
+    def pop(*expected: str) -> None:
+        nonlocal ok
+        if stack and kinds[stack[-1]] in expected:
+            rid = stack.pop()
+            spans[rid] = (starts[rid], k)
+        else:
+            ok = False
+
+    for k, unit in enumerate(units):
+        if unit.lang != "sh" or is_comment(unit.text):
+            continue
+        text = code_of(unit.text)
+        function_line = FUNCTION_OPENER.match(unquoted(text)) is not None
+        segments = statements_of(text)
+        paths: list[tuple[int, ...]] = []
+        for i, (_, bare, separator) in enumerate(segments):
+            words = bare.split()
+            path: tuple[int, ...] | None = None
+            while words:
+                word = words.pop(0)
+                if word in ("!", "do"):
+                    continue
+                if word == "if":
+                    push("if")
+                elif word == "then":
+                    push("branch")
+                elif word == "elif":
+                    pop("branch")
+                elif word == "else":
+                    pop("branch")
+                    push("branch")
+                elif word in ("for", "while", "until", "select"):
+                    push("loop")
+                elif word == "case":
+                    push("case")
+                    push("arm")
+                elif word == "{" or (word == "function" and "{" in words[:2]):
+                    if word == "function":
+                        words = words[words.index("{") + 1:]
+                    push("function" if function_line else "group")
+                    function_line = False
+                elif word in ("fi", "done", "esac", "}"):
+                    # A closer's statement belongs to the block it closes.
+                    path = tuple(stack) if path is None else path
+                    if word == "fi":
+                        pop("branch")
+                        pop("if")
+                    elif word == "done":
+                        pop("loop")
+                    elif word == "esac":
+                        pop("arm")
+                        pop("case")
+                    else:
+                        pop("group", "function")
+                else:
+                    break
+            paths.append(tuple(stack) if path is None else path)
+            if separator == "(":
+                push("subshell")
+            elif separator == ")":
+                # Outside a subshell, `)` ends a case pattern.
+                if not (stack and kinds[stack[-1]] in ("arm", "case")):
+                    pop("subshell")
+            elif separator == ";" and i + 1 < len(segments) and not segments[i + 1][1].strip() \
+                    and segments[i + 1][2] in (";", "&"):
+                # `;;`, `;&`, `;;&`: the arm ends, the next one starts.
+                pop("arm")
+                push("arm")
+        segments_by[k] = segments
+        paths_by[k] = paths
+    if stack:
+        ok = False
+    enclosing = {k: set(p[0]).intersection(*p[1:]) for k, p in paths_by.items()}
+    return Blocks(segments_by, paths_by, enclosing, kinds, spans, ok)
+
+
 def sink_units(units: list[Logical]) -> set[int]:
     """Indices of units that emit a command, write an env file or print to the log."""
     redirected, sinks, _ = redirected_groups(units)
@@ -1158,6 +1327,7 @@ class Checker:
             for name, rhs in assignments(unit):
                 self.assigned.setdefault(name, []).append((j, rhs))
         self.shell_shown = any(u.lang == "sh" and u.text.strip() == SHELL_SHOWN for u in self.units)
+        self.blocks = blocks_of(self.units)
         # Which Python/Node heredoc defines `shown` the canonical way.
         self.shown: dict[int, bool] = {}
         for k, unit in enumerate(self.units):
@@ -1251,11 +1421,96 @@ class Checker:
                 return True
         return False
 
+    @staticmethod
+    def _is_mask(rhs: str | None) -> bool:
+        return MASKED_ASSIGNMENT.match((rhs or "").strip()) is not None
+
+    def mask_statement(self, name: str, j: int) -> tuple[int, ...] | None:
+        """The blocks around the masked assignment to `name` on unit j, if it always runs there.
+
+        The assignment must be a statement of its own -- not a `cond && x=...`,
+        `cond || x=...`, a pipeline element, a background job or a prefix of a
+        command (`x=$(shown "$x") cmd` sets x for cmd only) -- and the last
+        assignment to the name on its line.
+        """
+        segments = self.blocks.segments.get(j)
+        if segments is None:
+            return None
+        found: tuple[int, ...] | None = None
+        for i, (text, _, separator) in enumerate(segments):
+            statement = text.strip()
+            while True:
+                words = statement.split(None, 1)
+                if not words or words[0] not in ("then", "else", "elif", "do", "if", "while", "until", "!", "{"):
+                    break
+                statement = words[1] if len(words) > 1 else ""
+            own = [rhs for n, rhs in assignments(Logical(j, statement, "sh")) if n == name]
+            if not own:
+                continue
+            found = None
+            whole = ASSIGNMENT.match(statement)
+            before = segments[i - 1][2] if i else ""
+            if (len(own) == 1 and self._is_mask(own[0]) and whole and whole.group(1) == name
+                    and whole.end() == len(statement) and before not in ("&&", "||", "|", "&")
+                    and separator not in ("|", "&")):
+                found = self.blocks.paths[j][i]
+        return found
+
+    def masked_before(self, name: str, k: int) -> bool:
+        """A masked assignment to `name` dominates the print on unit k (#507).
+
+        Walking back from the print, every assignment to the name must be
+        masked, and the first one met whose block encloses the print -- so it
+        runs whenever the print does -- covers it. A masked assignment in a
+        block that doesn't enclose the print (a branch, a loop body, a case
+        arm, a group, a subshell, a function body) is passed over, a raw one
+        stops the walk. Beyond that the print must not sit in a function body
+        the mask is outside of (the body runs when it is called, not where it
+        stands), no unmasked assignment to the name may stand in a function
+        body the print is outside of (a call can run it between the two), and
+        no unmasked assignment may follow the print inside a loop that
+        encloses the print but not the mask (the next pass would print it).
+        When the guard can't attribute the body's blocks, nothing covers.
+        """
+        if not self.shell_shown or not self.blocks.ok:
+            return False
+        unit = self.units[k]
+        at = unit.origin if unit.lang == "sh-heredoc" else k
+        here = self.blocks.enclosing.get(at)
+        if here is None:
+            return False
+        events = self.assigned.get(name, [])
+        if any(j == at and not self._is_mask(rhs) for j, rhs in events):
+            return False  # an assignment on the print's own line: order unknown
+        functions = [span for b, span in self.blocks.spans.items()
+                     if self.blocks.kinds[b] == "function" and b not in here]
+        if any(not self._is_mask(rhs) and any(start <= j <= end for start, end in functions) for j, rhs in events):
+            # A function body runs where it is called, so a raw assignment in
+            # one the print is outside of can run between the mask and it.
+            return False
+        for j, rhs in reversed([(j, rhs) for j, rhs in events if j < at]):
+            if not self._is_mask(rhs):
+                return False
+            path = self.mask_statement(name, j)
+            if path is None or not set(path) <= here:
+                continue
+            outside = here - set(path)
+            if any(self.blocks.kinds[b] == "function" for b in outside):
+                return False
+            for b in outside:
+                if self.blocks.kinds[b] != "loop":
+                    continue
+                end = self.blocks.spans[b][1]
+                if any(at <= a <= end and not self._is_mask(r) for a, r in events):
+                    return False
+            return True
+        return False
+
     def clean_shell(self, name: str, k: int, depth: int = 0) -> bool:
         before = [(j, rhs) for j, rhs in self.assigned.get(name, []) if j < k]
         if self.refused_before(name, k):
             return True
-        if before and self.shell_shown and MASKED_ASSIGNMENT.match((before[-1][1] or "").strip()):
+        if before and self.masked_before(name, k):
             return True
         if self.allowed(name, k, shell=True):
             return True
