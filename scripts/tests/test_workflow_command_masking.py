@@ -305,6 +305,254 @@ def test_undoing_setup_vale_s_mask_dominance_is_seen(tmp_path):
     assert {(f["path"], f["message"].split("`")[1]) for f in findings} == {(rel, "message")}
 
 
+# --- #507 review: forms block dominance and the env-file reading missed ------------
+
+@pytest.mark.parametrize("definition", [
+    'f() { echo "::error::$x"; }',
+    'f() { echo "::error::$x"\n}',
+    'function f() { echo "::error::$x"; }',
+    'function f { echo "::error::$x"; }',
+    'f () {\n  echo "::error::$x"\n}',
+    'f()\n{\n  echo "::error::$x"\n}',
+    'function f\n{\n  echo "::error::$x"\n}',
+    'f() ( echo "::error::$x" )',
+    'f() if true; then echo "::error::$x"; fi',
+    'f() for i in 1; do echo "::error::$x"; done',
+    'f() while true; do echo "::error::$x"; break; done',
+    'f() case a in a) echo "::error::$x";; esac',
+])
+def test_a_print_in_a_function_body_is_seen_wherever_the_body_opens(tmp_path, definition):
+    # The print sits in the body, though the line's `f` doesn't; the body runs
+    # at the call, after the raw assignment.
+    run = f'{HELPER}\nx=$(shown "$VALUE")\n{definition}\nx="$VALUE"\nf'
+    assert check(tmp_path, run) == ["x"]
+
+
+@pytest.mark.parametrize("definition", [
+    'g() { x="$VALUE"; }',
+    'g()\n{\n  x="$VALUE"\n}',
+    'function g\n{\n  x="$VALUE"\n}',
+    'g() ( x="$VALUE" )',
+    'g() if true; then x="$VALUE"; fi',
+    'g() case a in a) x="$VALUE";; esac',
+])
+def test_a_raw_assignment_in_a_function_body_is_seen_wherever_the_body_opens(tmp_path, definition):
+    run = f'{HELPER}\n{definition}\nx=$(shown "$VALUE")\ng\necho "::error::$x"'
+    assert check(tmp_path, run) == ["x"]
+
+
+@pytest.mark.parametrize("run", [
+    # the mask and the print in the same body, however it opens
+    f'{HELPER}\nf()\n{{\n  local m="$1"\n  m=$(shown "$m")\n  echo "x $m"\n}}\nf "$VALUE"',
+    f'{HELPER}\nfunction f {{\n  local m="$1"\n  m=$(shown "$m")\n  echo "x $m"\n}}\nf "$VALUE"',
+    # a mask before a one-line function that prints, nothing raw after it
+    f'{HELPER}\nx="$VALUE"\nx=$(shown "$x")\nwhile :; do echo "::error::$x"; [[ -n $z ]] && break; z=1; done',
+    f'{HELPER}\nx=$(shown "$VALUE")\ntrue; if true; then echo "::error::$x"; fi; true',
+])
+def test_a_dominating_mask_still_covers_a_print_deeper_on_its_line(tmp_path, run):
+    assert check(tmp_path, run) == []
+
+
+@pytest.mark.parametrize("loop", [
+    'true; while [[ -z $d ]]; do echo "::error::$x"\n  x="$VALUE"\n  [[ -n $e ]] && d=1; e=1\ndone',
+    ': ; for i in 1 2; do echo "::error::$x"\nx="$VALUE"; done',
+    'f() { :; }; for i in 1 2; do echo "::error::$x"\nx="$VALUE"; done',
+    'arr=(a b); while :; do echo "::error::$x"\nx="$VALUE"; [[ -n $z ]] && break; z=1; done',
+    '[[ a ]] && { while :; do echo "::error::$x"\nx="$VALUE"; [[ -n $z ]] && break; z=1; done; }',
+    'if true; then for i in 1 2; do\n  echo "::error::$x"\n  x="$VALUE"\ndone; fi',
+])
+def test_a_print_in_a_loop_opened_after_another_statement_is_in_the_loop(tmp_path, loop):
+    # Before the review fix, the line's other statement put the print at body
+    # level, so the raw assignment later in the loop body went unseen.
+    assert check(tmp_path, f'{HELPER}\nx=$(shown "$VALUE")\n{loop}') == ["x"]
+
+
+@pytest.mark.parametrize("condition", [
+    '[[ -n "$Q" ]] &&', '[[ -n "$Q" ]] ||', 'echo hi |', 'false &&\n# a comment', 'false &&\n', 'true && # why\n',
+])
+def test_a_mask_continuing_a_list_from_the_line_before_is_conditional(tmp_path, condition):
+    run = f'{HELPER}\nx="$VALUE"\n{condition}\n  x=$(shown "$x")\necho "::error::$x"'
+    assert check(tmp_path, run) == ["x"]
+
+
+def test_a_mask_after_a_line_that_ends_its_list_still_covers(tmp_path):
+    run = f'{HELPER}\nx="$VALUE"\ntrue && true\nx=$(shown "$x")\necho "::error::$x"'
+    assert check(tmp_path, run) == []
+
+
+@pytest.mark.parametrize("raw", [
+    'case a in\n  a) x="$VALUE" ;;\nesac',
+    'case a in a) x="$VALUE";; esac',
+    'case a in (a) x="$VALUE";; esac',
+    'a=1 x="$VALUE"',
+    'typeset x="$VALUE"',
+    'time x="$VALUE"',
+    '! x="$VALUE"',
+    'x[0]="$VALUE"',
+    'if false; then :; elif x="$VALUE"; then :; fi',
+    'while x="$VALUE"; [[ -z $d ]]; do d=1; done',
+    'read -r a x <<<"q $VALUE"',
+    'read -d \'\' -r -a q x <<<"$VALUE" || true',
+    'read -p "q" x <<<"$VALUE"',
+    'IFS=, read -r x <<<"$VALUE"',
+    'select x in "$VALUE"; do break; done',
+    'readarray -t x <<<"$VALUE"',
+    'mapfile -d \'\' x < f',
+    'getopts ab x',
+    'let x=1',
+])
+def test_a_raw_assignment_the_reader_used_to_miss_voids_the_mask(tmp_path, raw):
+    assert check(tmp_path, f'{HELPER}\nx=$(shown "$VALUE")\n{raw}\necho "::error::$x"') == ["x"]
+
+
+@pytest.mark.parametrize("raw", [
+    'case a in\n  a) x="$VALUE" ;;\nesac',
+    'a=1 x="$VALUE"',
+    'read -r a x < f',
+])
+def test_a_raw_assignment_the_reader_used_to_miss_voids_the_constant_rule(tmp_path, raw):
+    # Before the review fix, `case a in a) x="$VALUE" ;; esac` left x constant
+    # on develop as well.
+    assert check(tmp_path, f'x=lit\n{raw}\necho "::error::$x"') == ["x"]
+
+
+@pytest.mark.parametrize("pseudo", [
+    'if (( GITHUB_HEAD_REF==1 )); then :; fi',
+    '( GITHUB_HEAD_REF=lit )',
+    '( GITHUB_HEAD_REF=lit; true )',
+    '(\n  GITHUB_HEAD_REF=lit\n)',
+    'case a in (GITHUB_HEAD_REF=lit) :;; esac',
+    'GITHUB_HEAD_REF=lit true',
+    'a=1 GITHUB_HEAD_REF=lit true',
+])
+def test_an_assignment_that_does_not_reach_the_print_makes_no_name_constant(tmp_path, pseudo):
+    # Arithmetic, a subshell, a case pattern, a command's environment: the
+    # runner's value is what the print shows. `origin/develop` reported the
+    # first four; the change under review made them constant.
+    assert check(tmp_path, f'{pseudo}\necho "::error::$GITHUB_HEAD_REF"', env="          X: y\n") == ["GITHUB_HEAD_REF"]
+
+
+def test_a_subshell_literal_in_a_function_makes_no_name_constant(tmp_path):
+    run = 'f() {\n  ( m=lit )\n  echo "::error::$m"\n}\nf "$VALUE"'
+    assert check(tmp_path, run) == ["m"]
+
+
+def test_a_raw_assignment_in_a_subshell_still_counts(tmp_path):
+    # Harmless in bash (the subshell's x doesn't reach the print), refused all
+    # the same: the guard errs towards a finding. A `{ ...; }` group's
+    # assignment is real and refused too (see above).
+    assert check(tmp_path, 'x=lit; ( x="$VALUE" ); echo "::error::$x"') == ["VALUE", "x"]
+    shutil.rmtree(tmp_path / ".github")
+    assert check(tmp_path, 'x=lit\n( x="$VALUE" )\necho "::error::$x"') == ["x"]
+
+
+def test_a_quoted_hash_right_after_a_quote_starts_no_comment(tmp_path):
+    # `echo "a"#; fi; ...` prints `a#`; the rest of the line is code. Read as
+    # a comment, the `fi` went unseen and the blocks shifted.
+    run = (f'{HELPER}\nx="$VALUE"\nif false; then\n  x=$(shown "$x")\n  echo "a"#; fi; if true; then\n'
+           '  echo "::error::$x"\nfi')
+    assert check(tmp_path, run) == ["x"]
+
+
+def test_a_hash_after_a_separator_starts_a_comment(tmp_path):
+    run = f'{HELPER}\nx="$VALUE"\nx=$(shown "$x");# fi\necho "::error::$x"'
+    assert check(tmp_path, run) == []
+
+
+PY_PRINTS = "python3 - <<'PY' >> \"$GITHUB_OUTPUT\"\nimport os\np = os.environ['P']\n{}\nPY"
+
+
+@pytest.mark.parametrize("print_", [
+    'print("v=" + p)',
+    'print("v=%s" % p)',
+    'print("v={}".format(p))',
+    'print("\\n".join([p]))',
+    'print (p)',
+    'print("a=1"); print(p)',
+    'print("v=1", end=p)',
+    'print("a", sep=p)',
+    'print(\n    f"v={p}"\n)',
+    'print(\n    p\n)',
+    'print("v=", p, flush=True)',
+])
+def test_a_python_print_into_an_env_file_is_read_strictly(tmp_path, print_):
+    found = check(tmp_path, PY_PRINTS.format(print_))
+    assert found and all("p" in name for name in found), found
+
+
+@pytest.mark.parametrize("print_", [
+    'console.log("v=" + p);',
+    'console.dir(p);',
+    'console .log(p);',
+    'console.log("a=1"); console.log(p);',
+    'process.stdout.write(\n  `v=${p}\\n`);',
+])
+def test_a_node_print_into_an_env_file_is_read_strictly(tmp_path, print_):
+    run = f"node <<'NODE' >> \"$GITHUB_OUTPUT\"\nconst p = process.env.P;\n{print_}\nNODE"
+    found = check(tmp_path, run)
+    assert found and all("p" in name for name in found), found
+
+
+@pytest.mark.parametrize("print_", [
+    'print(f"v={shown(p)}", end="\\n")',
+    'print("a=1"); print(shown(p))',
+    'print(\n    f"v={shown(p)}"\n)',
+    'print("x", shown(p), file=sys.stderr)',
+])
+def test_a_masked_python_print_into_an_env_file_passes_the_strict_reading(tmp_path, print_):
+    run = f"python3 - <<'PY' >> \"$GITHUB_OUTPUT\"\nimport os, re, sys\n{PY_HELPER}p = os.environ['P']\n{print_}\nPY"
+    assert check(tmp_path, run) == []
+
+
+def test_the_strict_reading_refuses_shown_inside_a_concatenation(tmp_path):
+    # Harmless, but not one literal and not the helper call: refused, as on a
+    # summary line.
+    run = (f"python3 - <<'PY' >> \"$GITHUB_OUTPUT\"\nimport os, re\n{PY_HELPER}p = os.environ['P']\n"
+           "print('v=' + shown(p))\nPY")
+    assert check(tmp_path, run) == ["'v=' + shown(p)"]
+
+
+def test_a_stderr_print_in_an_env_file_heredoc_stays_a_log_line(tmp_path):
+    run = PY_PRINTS.format("import sys\nprint(p, file=sys.stderr)")
+    assert check(tmp_path, run) == ["p", "<leading value>"]
+
+
+def test_a_heredoc_inside_an_env_file_group_is_read_strictly(tmp_path):
+    run = ("{\n  echo a=fixed\n  python3 - <<'PY'\nimport os\np = os.environ['P']\nprint(\"v=\" + p)\nPY\n"
+           "} >> \"$GITHUB_OUTPUT\"")
+    assert check(tmp_path, run) == ['"v=" + p']
+
+
+@pytest.mark.parametrize("opener", [
+    "python3 - <<'PY-END' >> \"$GITHUB_OUTPUT\"", "python3 - <<\\PY-END >> \"$GITHUB_OUTPUT\"",
+    "python3 - <<\"PY.END\" >> \"$GITHUB_OUTPUT\"", "pypy3 - <<'PY-END' >> \"$GITHUB_OUTPUT\"",
+])
+def test_a_python_heredoc_with_another_delimiter_or_interpreter_is_read(tmp_path, opener):
+    delimiter = "PY.END" if "PY.END" in opener else "PY-END"
+    assert check(tmp_path, f"{opener}\nprint(f\"v={{p}}\")\n{delimiter}") == ["p"]
+
+
+def test_a_deno_heredoc_is_read_as_javascript(tmp_path):
+    assert check(tmp_path, "deno run - <<'JS' >> \"$GITHUB_OUTPUT\"\nconsole.log(`v=${p}`);\nJS") == ["p"]
+
+
+@pytest.mark.parametrize("line", [
+    'echo "v=$VALUE" | tee --append "$GITHUB_OUTPUT"',
+    'echo "v=$VALUE" | tee -a /dev/null "$GITHUB_OUTPUT"',
+    'echo "v=$VALUE" | dd of="$GITHUB_OUTPUT" oflag=append conv=notrunc',
+])
+def test_a_shell_line_teed_to_an_env_file_with_other_options_is_read(tmp_path, line):
+    assert check(tmp_path, line) == ["VALUE"]
+
+
+@pytest.mark.parametrize("line", [
+    'echo "x $VALUE" | tee --append "$GITHUB_STEP_SUMMARY"',
+    'echo "x $VALUE" | dd of="$GITHUB_STEP_SUMMARY" oflag=append conv=notrunc',
+])
+def test_a_shell_line_teed_to_the_summary_with_other_options_is_read(tmp_path, line):
+    assert "VALUE" in check(tmp_path, line)
+
+
 # --- refusals ------------------------------------------------------------------
 
 
@@ -437,6 +685,9 @@ def test_python_stdout_into_an_env_file_is_read(tmp_path):
 @pytest.mark.parametrize("target", [
     '>> "$GITHUB_OUTPUT"', '> "$GITHUB_OUTPUT"', '>| "$GITHUB_OUTPUT"', ">> $GITHUB_OUTPUT",
     '>> "${GITHUB_ENV}"', '>> "$GITHUB_PATH"', '>> "$GITHUB_STATE"', '| tee -a "$GITHUB_OUTPUT"',
+    # tee with other options or files before the env file, and dd (#507 review)
+    '| tee --append "$GITHUB_OUTPUT"', '| tee -ai -- "$GITHUB_OUTPUT"', '| tee -a /dev/null "$GITHUB_OUTPUT"',
+    '| dd of="$GITHUB_OUTPUT" oflag=append conv=notrunc',
 ])
 @pytest.mark.parametrize("lang", ["node", "python"])
 def test_heredoc_stdout_into_any_env_file_is_read(tmp_path, target, lang):
@@ -448,7 +699,7 @@ def test_heredoc_stdout_into_any_env_file_is_read(tmp_path, target, lang):
     (f"node <<'NODE' >> \"$GITHUB_OUTPUT\"\n{guard.JS_SHOWN}\nconst p = process.env.P;\n"
      "console.log(`v=${shown(p)}`);\nprocess.stdout.write(`w=${shown(p)}\\n`);\nconsole.log(shown(p));\nNODE"),
     (f"python3 - <<'PY' >> \"$GITHUB_OUTPUT\"\nimport os, re\n{PY_HELPER}p = os.environ['P']\n"
-     "print(f\"v={shown(p)}\")\nprint('w=' + 'x', len(p))\nprint(shown(p))\nPY"),
+     "print(f\"v={shown(p)}\")\nprint('w=x', len(p))\nprint(shown(p))\nPY"),
 ])
 def test_a_masked_heredoc_print_into_an_env_file_is_fine(tmp_path, run):
     # shown() turns every line end into '?', so the value can't add an entry;
