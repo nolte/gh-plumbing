@@ -5,7 +5,7 @@ issue: "507"
 classification: "bug"
 secondary-classes: ["security"]
 route: "direct"
-status: draft
+status: approved
 created: "2026-11-21"
 ---
 
