@@ -400,6 +400,8 @@ def test_a_mask_after_a_line_that_ends_its_list_still_covers(tmp_path):
     'mapfile -d \'\' x < f',
     'getopts ab x',
     'let x=1',
+    'set -- "$VALUE"; for x; do :; done',
+    'set -- "$VALUE"\nfor x do :; done',
 ])
 def test_a_raw_assignment_the_reader_used_to_miss_voids_the_mask(tmp_path, raw):
     assert check(tmp_path, f'{HELPER}\nx=$(shown "$VALUE")\n{raw}\necho "::error::$x"') == ["x"]
