@@ -102,12 +102,22 @@ jobs:
             console.error(`::error::Could not read the coverage summary at ${shown(path)}: ${shown(err.message)}`);
             process.exit(1);
           }
-          const rows = ['lines', 'statements', 'functions', 'branches']
-            .map((k) => `| ${k} | ${total[k].pct}% | ${total[k].covered}/${total[k].total} |`)
-            .join('\n');
-          process.stdout.write(
-            `## Test coverage\n\n| Metric | % | Covered / Total |\n| --- | --- | --- |\n${rows}\n`
-          );
+          // The figures come from the caller's test output, which a string can
+          // stand in for: encoded, then wrapped, before they reach the summary's
+          // Markdown (#506) -- a control character becomes a question mark and
+          // an ASCII punctuation character its numeric HTML entity (`@` also gets
+          // an empty comment after it, so no e-mail autolink forms), inside
+          // <code>.
+          const mdEnc = (value) => String(value).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, '?').replace(/[\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e]/g, (c) => (c === '@' ? '&#64;<!-- -->' : `&#${c.charCodeAt(0)};`));
+          const mdCode = (value) => `<code>${mdEnc(value)}</code>`;
+          const mdPre = (value) => `<pre>${String(value).replace(/\r\n/g, '\n').split('\n').map(mdEnc).join('\n')}\n</pre>`;
+          console.log('## Test coverage');
+          console.log('');
+          console.log('| Metric | % | Covered / Total |');
+          console.log('| --- | --- | --- |');
+          for (const k of ['lines', 'statements', 'functions', 'branches']) {
+            console.log(`| ${mdCode(k)} | ${mdCode(total[k].pct)}% | ${mdCode(total[k].covered)}/${mdCode(total[k].total)} |`);
+          }
           NODE
 
       - name: Enforce coverage threshold

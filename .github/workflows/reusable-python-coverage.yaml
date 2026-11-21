@@ -76,11 +76,35 @@ jobs:
       - name: Render coverage into the job summary
         if: ${{ !cancelled() }}
         run: |
+          # Encode, then wrap, for the step summary (#506): a control character
+          # becomes a question mark and an ASCII punctuation character its
+          # numeric HTML entity (`@` also gets an empty comment after it, so no
+          # e-mail autolink forms), inside <code> (md_code) or <pre> (md_pre,
+          # line ends kept). Caller and repository text then renders as
+          # text and links nothing.
+          md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" c n x; s="${s//$'\xc2'[$'\x80'-$'\x9f']/?}"; s="${s//$'\xe2\x80'[$'\xa8\xa9']/?}"; for n in {33..47} {58..64} {91..96} {123..126}; do printf -v x '%x' "$n"; printf -v c '%b' "\\x$x"; s=${s//"$c"/$'\x01'$n$'\x02'}; done; s=${s//$'\x01'64$'\x02'/$'\x01'64$'\x02\x03'}; s=${s//$'\x01'/'&#'}; s=${s//$'\x02'/';'}; s=${s//$'\x03'/'<!-- -->'}; printf '%s' "$s"; }
+          md_code() { printf '<code>%s</code>' "$(md_enc "$1")"; }
+          md_pre() { local line; printf '<pre>'; while IFS= read -r line; do md_enc "${line%$'\r'}"; printf '\n'; done <<< "$1"; printf '</pre>\n'; }
+          # Masks $1 for a log line (#492): control characters become '?' and
+          # '##[' becomes '#?[', so the value can neither end the line nor open
+          # the runner's older '##[command]' syntax in the middle of one.
+          shown() { local v="${1//[[:cntrl:]]/?}"; printf '%s' "${v//\#\#\[/#?[}"; }
+          # The report quotes the consumer's file names: captured as plain
+          # text and written as one <pre> block, not appended as Markdown.
+          # A non-zero exit -- the consumer's own fail_under, say -- must not
+          # lose it: the report reaches the summary and the log first, then
+          # the step exits with coverage's own status, as before.
+          status=0
+          report=$(coverage report --format=text) || status=$?
           {
             echo "## Test coverage"
             echo
-            coverage report --format=markdown
+            md_pre "$report"
           } >> "$GITHUB_STEP_SUMMARY"
+          while IFS= read -r line; do
+            echo "coverage | $(shown "$line")"
+          done <<< "$report"
+          exit "$status"
 
       - name: Enforce coverage threshold
         if: ${{ inputs.fail-under > 0 }}

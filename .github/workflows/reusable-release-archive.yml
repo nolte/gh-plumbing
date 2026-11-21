@@ -343,11 +343,23 @@ jobs:
           # '##[' becomes '#?[', so the value can neither end the line nor open
           # the runner's older '##[command]' syntax in the middle of one.
           shown() { local v="${1//[[:cntrl:]]/?}"; printf '%s' "${v//\#\#\[/#?[}"; }
+          # Encode, then wrap, for the step summary (#506): a control character
+          # becomes a question mark and an ASCII punctuation character its
+          # numeric HTML entity (`@` also gets an empty comment after it, so no
+          # e-mail autolink forms), inside <code> (md_code) or <pre> (md_pre,
+          # line ends kept). Caller and repository text then renders as
+          # text and links nothing.
+          md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" c n x; s="${s//$'\xc2'[$'\x80'-$'\x9f']/?}"; s="${s//$'\xe2\x80'[$'\xa8\xa9']/?}"; for n in {33..47} {58..64} {91..96} {123..126}; do printf -v x '%x' "$n"; printf -v c '%b' "\\x$x"; s=${s//"$c"/$'\x01'$n$'\x02'}; done; s=${s//$'\x01'64$'\x02'/$'\x01'64$'\x02\x03'}; s=${s//$'\x01'/'&#'}; s=${s//$'\x02'/';'}; s=${s//$'\x03'/'<!-- -->'}; printf '%s' "$s"; }
+          md_code() { printf '<code>%s</code>' "$(md_enc "$1")"; }
+          md_pre() { local line; printf '<pre>'; while IFS= read -r line; do md_enc "${line%$'\r'}"; printf '\n'; done <<< "$1"; printf '</pre>\n'; }
           mapfile -t files < <(find release-archive -maxdepth 1 -type f | sort)
           delimiter="EOF_$(cat /proc/sys/kernel/random/uuid)"
           if [[ "$DRY_RUN" == "true" ]]; then
             echo "::notice::Dry run: built and attested ${#files[@]} asset(s), uploaded nothing to '$TAG'."
-            { echo "### Release archive (dry run)"; printf -- "- \`%s\`\n" "${files[@]##*/}"; } >> "$GITHUB_STEP_SUMMARY"
+            {
+              echo "### Release archive (dry run)"
+              for name in "${files[@]##*/}"; do echo "- $(md_code "$name")"; done
+            } >> "$GITHUB_STEP_SUMMARY"
             echo "uploaded=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -386,4 +398,9 @@ jobs:
             printf '%s\n' "${files[@]##*/}"
             echo "$delimiter"
           } >> "$GITHUB_OUTPUT"
-          { echo "### Release archive"; echo; echo "Attached to draft \`$TAG\` before publish:"; printf -- "- \`%s\`\n" "${files[@]##*/}"; } >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "### Release archive"
+            echo
+            echo "Attached to draft $(md_code "$TAG") before publish:"
+            for name in "${files[@]##*/}"; do echo "- $(md_code "$name")"; done
+          } >> "$GITHUB_STEP_SUMMARY"

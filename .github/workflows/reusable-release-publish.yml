@@ -321,6 +321,15 @@ jobs:
           # '##[' becomes '#?[', so the value can neither end the line nor open
           # the runner's older '##[command]' syntax in the middle of one.
           shown() { local v="${1//[[:cntrl:]]/?}"; printf '%s' "${v//\#\#\[/#?[}"; }
+          # Encode, then wrap, for the step summary (#506): a control character
+          # becomes a question mark and an ASCII punctuation character its
+          # numeric HTML entity (`@` also gets an empty comment after it, so no
+          # e-mail autolink forms), inside <code> (md_code) or <pre> (md_pre,
+          # line ends kept). Draft, caller and repository text then renders as
+          # text and links nothing.
+          md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" c n x; s="${s//$'\xc2'[$'\x80'-$'\x9f']/?}"; s="${s//$'\xe2\x80'[$'\xa8\xa9']/?}"; for n in {33..47} {58..64} {91..96} {123..126}; do printf -v x '%x' "$n"; printf -v c '%b' "\\x$x"; s=${s//"$c"/$'\x01'$n$'\x02'}; done; s=${s//$'\x01'64$'\x02'/$'\x01'64$'\x02\x03'}; s=${s//$'\x01'/'&#'}; s=${s//$'\x02'/';'}; s=${s//$'\x03'/'<!-- -->'}; printf '%s' "$s"; }
+          md_code() { printf '<code>%s</code>' "$(md_enc "$1")"; }
+          md_pre() { local line; printf '<pre>'; while IFS= read -r line; do md_enc "${line%$'\r'}"; printf '\n'; done <<< "$1"; printf '</pre>\n'; }
           expected="${EXPECTED_TARGET_SHA,,}"
           if [[ ! "$expected" =~ ^[0-9a-f]{40}$ ]]; then
             # Printed exactly when it failed the check, so it is the caller's
@@ -345,7 +354,7 @@ jobs:
           fi
 
           echo "Draft '$TAG' target $actual matches the expected commit."
-          { echo; echo "- Draft target \`$actual\` matches the archived commit (expected-target-sha)."; } >> "$GITHUB_STEP_SUMMARY"
+          { echo; echo "- Draft target $(md_code "$actual") matches the archived commit (expected-target-sha)."; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Detect project type and load version-bearing files
         id: vbf
@@ -506,6 +515,15 @@ jobs:
           APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: |
           set -euo pipefail
+          # Encode, then wrap, for the step summary (#506): a control character
+          # becomes a question mark and an ASCII punctuation character its
+          # numeric HTML entity (`@` also gets an empty comment after it, so no
+          # e-mail autolink forms), inside <code> (md_code) or <pre> (md_pre,
+          # line ends kept). Draft, caller and repository text then renders as
+          # text and links nothing.
+          md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" c n x; s="${s//$'\xc2'[$'\x80'-$'\x9f']/?}"; s="${s//$'\xe2\x80'[$'\xa8\xa9']/?}"; for n in {33..47} {58..64} {91..96} {123..126}; do printf -v x '%x' "$n"; printf -v c '%b' "\\x$x"; s=${s//"$c"/$'\x01'$n$'\x02'}; done; s=${s//$'\x01'64$'\x02'/$'\x01'64$'\x02\x03'}; s=${s//$'\x01'/'&#'}; s=${s//$'\x02'/';'}; s=${s//$'\x03'/'<!-- -->'}; printf '%s' "$s"; }
+          md_code() { printf '<code>%s</code>' "$(md_enc "$1")"; }
+          md_pre() { local line; printf '<pre>'; while IFS= read -r line; do md_enc "${line%$'\r'}"; printf '\n'; done <<< "$1"; printf '</pre>\n'; }
           # Edit every version-bearing file in the checked-out develop tree to the
           # target tag, honouring each file's existing v-prefix convention and
           # every selector match (incl. array wildcards). Format-preserving:
@@ -597,7 +615,9 @@ jobs:
             # the aligned tree via `git show`, but never push or realign the draft.
             echo "target_sha=$new_sha" >> "$GITHUB_OUTPUT"
             echo "::notice::Dry run — aligned locally at ${new_sha:0:8}; not pushing to develop or realigning the draft."
-            { echo; echo "### Alignment (dry run)"; echo; echo "- Would commit/push \`chore(release): $TAG\` and realign the draft to \`${new_sha:0:8}\`."; } >> "$GITHUB_STEP_SUMMARY"
+            subject="chore(release): $TAG"
+            short_sha="${new_sha:0:8}"
+            { echo; echo "### Alignment (dry run)"; echo; echo "- Would commit/push $(md_code "$subject") and realign the draft to $(md_code "$short_sha")."; } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
@@ -617,7 +637,17 @@ jobs:
             if ! git push origin HEAD:develop; then
               msg="Primary-path push of 'chore(release): $TAG' to develop was rejected (the App may not be a permitted bypass actor for direct pushes to develop). Falling back to the operator path: open a 'chore(release): $TAG' PR aligning every version-bearing file (spec/project/release-automation/ §Fallback path), then re-run release-publish."
               echo "::warning::$msg"
-              { echo; echo "### ⚠️ Alignment push rejected (operator fallback)"; echo; echo "$msg"; } >> "$GITHUB_STEP_SUMMARY"
+              # The log line above prints msg unmasked: its only value is TAG,
+              # which Resolve draft refused for a control character or '##['
+              # (#492). Neither touches Markdown, so the summary writes the same
+              # text with the tag encoded (#506).
+              subject="chore(release): $TAG"
+              {
+                echo
+                echo "### ⚠️ Alignment push rejected (operator fallback)"
+                echo
+                echo "Primary-path push of $(md_code "$subject") to develop was rejected (the App may not be a permitted bypass actor for direct pushes to develop). Falling back to the operator path: open a $(md_code "$subject") PR aligning every version-bearing file (spec/project/release-automation/ §Fallback path), then re-run release-publish."
+              } >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
             echo "::notice::Pushed alignment commit to develop."
@@ -630,7 +660,8 @@ jobs:
           echo "target_sha=$new_sha" >> "$GITHUB_OUTPUT"
           gh release edit "$TAG" --target "$new_sha"
           echo "::notice::Realigned draft '$TAG' target to ${new_sha:0:8}."
-          { echo; echo "### Alignment"; echo; echo "- Aligned version-bearing files and set draft '$TAG' target to \`${new_sha:0:8}\`."; } >> "$GITHUB_STEP_SUMMARY"
+          short_sha="${new_sha:0:8}"
+          { echo; echo "### Alignment"; echo; echo "- Aligned version-bearing files and set draft $(md_code "$TAG") target to $(md_code "$short_sha")."; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Verify version-bearing-file alignment
         if: steps.vbf.outputs.count != '0'
@@ -722,33 +753,46 @@ jobs:
           VBF_COUNT: ${{ steps.vbf.outputs.count }}
         run: |
           set -euo pipefail
+          # Encode, then wrap, for the step summary (#506): a control character
+          # becomes a question mark and an ASCII punctuation character its
+          # numeric HTML entity (`@` also gets an empty comment after it, so no
+          # e-mail autolink forms), inside <code> (md_code) or <pre> (md_pre,
+          # line ends kept). Draft, caller and repository text then renders as
+          # text and links nothing.
+          md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" c n x; s="${s//$'\xc2'[$'\x80'-$'\x9f']/?}"; s="${s//$'\xe2\x80'[$'\xa8\xa9']/?}"; for n in {33..47} {58..64} {91..96} {123..126}; do printf -v x '%x' "$n"; printf -v c '%b' "\\x$x"; s=${s//"$c"/$'\x01'$n$'\x02'}; done; s=${s//$'\x01'64$'\x02'/$'\x01'64$'\x02\x03'}; s=${s//$'\x01'/'&#'}; s=${s//$'\x02'/';'}; s=${s//$'\x03'/'<!-- -->'}; printf '%s' "$s"; }
+          md_code() { printf '<code>%s</code>' "$(md_enc "$1")"; }
+          md_pre() { local line; printf '<pre>'; while IFS= read -r line; do md_enc "${line%$'\r'}"; printf '\n'; done <<< "$1"; printf '</pre>\n'; }
           created_at=$(gh release view "$TAG" --json createdAt --jq .createdAt)
           # The release title, which the operational contract requires the
           # summary to disclose. A draft's title and its tag are set
           # independently, so a wrong title is invisible when only the tag is
           # shown -- and the title is what readers of the release see first.
           title=$(gh release view "$TAG" --json name --jq .name)
-          body_head=$(gh release view "$TAG" --json body --jq .body | head -c 800)
+          # The first 800 characters, cut by jq: `head -c` counts bytes and
+          # can split a multi-byte character.
+          body_head=$(gh release view "$TAG" --json body --jq '(.body // "")[0:800]')
+          title_cell="_(empty)_"
+          if [[ -n "$title" ]]; then
+            title_cell=$(md_code "$title")
+          fi
 
           {
-            echo "## Release publish: \`$TAG\`"
+            echo "## Release publish: $(md_code "$TAG")"
             echo
             echo "| Field | Value |"
             echo "|---|---|"
-            echo "| Tag | \`$TAG\` |"
-            echo "| Title | ${title:-_(empty)_} |"
-            echo "| Target SHA | \`$TARGET_SHA\` |"
-            echo "| Draft created | $created_at |"
+            echo "| Tag | $(md_code "$TAG") |"
+            echo "| Title | $title_cell |"
+            echo "| Target SHA | $(md_code "$TARGET_SHA") |"
+            echo "| Draft created | $(md_code "$created_at") |"
             echo "| Triggerer | @${GITHUB_TRIGGERING_ACTOR:-$GITHUB_ACTOR} |"
             echo "| Run URL | $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID |"
-            echo "| Project type | $VBF_SOURCE ($VBF_COUNT file(s)) |"
-            echo "| Dry run | $DRY_RUN |"
+            echo "| Project type | $(md_code "$VBF_SOURCE") ($(md_code "$VBF_COUNT") file(s)) |"
+            echo "| Dry run | $(md_code "$DRY_RUN") |"
             echo
             echo "### Body preview"
             echo
-            echo '```markdown'
-            echo "$body_head"
-            echo '```'
+            md_pre "$body_head"
           } >> "$GITHUB_STEP_SUMMARY"
 
       # HACS zip-release asset (spec/ha/hacs-release §ZIP release distribution).
@@ -777,6 +821,15 @@ jobs:
           # '##[' becomes '#?[', so the value can neither end the line nor open
           # the runner's older '##[command]' syntax in the middle of one.
           shown() { local v="${1//[[:cntrl:]]/?}"; printf '%s' "${v//\#\#\[/#?[}"; }
+          # Encode, then wrap, for the step summary (#506): a control character
+          # becomes a question mark and an ASCII punctuation character its
+          # numeric HTML entity (`@` also gets an empty comment after it, so no
+          # e-mail autolink forms), inside <code> (md_code) or <pre> (md_pre,
+          # line ends kept). Draft, caller and repository text then renders as
+          # text and links nothing.
+          md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" c n x; s="${s//$'\xc2'[$'\x80'-$'\x9f']/?}"; s="${s//$'\xe2\x80'[$'\xa8\xa9']/?}"; for n in {33..47} {58..64} {91..96} {123..126}; do printf -v x '%x' "$n"; printf -v c '%b' "\\x$x"; s=${s//"$c"/$'\x01'$n$'\x02'}; done; s=${s//$'\x01'64$'\x02'/$'\x01'64$'\x02\x03'}; s=${s//$'\x01'/'&#'}; s=${s//$'\x02'/';'}; s=${s//$'\x03'/'<!-- -->'}; printf '%s' "$s"; }
+          md_code() { printf '<code>%s</code>' "$(md_enc "$1")"; }
+          md_pre() { local line; printf '<pre>'; while IFS= read -r line; do md_enc "${line%$'\r'}"; printf '\n'; done <<< "$1"; printf '</pre>\n'; }
 
           # Domain from the first detected manifest path: custom_components/<domain>/manifest.json
           domain=$(jq -r '.entries[0].path' vbf.json \
@@ -840,7 +893,7 @@ jobs:
 
           if [[ "$DRY_RUN" == "true" ]]; then
             echo "::notice::Dry run — built '$shown_filename' but not uploading to draft '$TAG'."
-            { echo; echo "### HACS asset"; echo; echo "- Built \`$shown_filename\` (dry run, not uploaded)."; } >> "$GITHUB_STEP_SUMMARY"
+            { echo; echo "### HACS asset"; echo; echo "- Built $(md_code "$filename") (dry run, not uploaded)."; } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
@@ -848,7 +901,7 @@ jobs:
           # the next step flips draft=false. --clobber makes re-runs idempotent.
           gh release upload "$TAG" "$out" --clobber
           echo "::notice::Attached '$shown_filename' to draft '$TAG'."
-          { echo; echo "### HACS asset"; echo; echo "- Attached \`$shown_filename\` to the release before publish."; } >> "$GITHUB_STEP_SUMMARY"
+          { echo; echo "### HACS asset"; echo; echo "- Attached $(md_code "$filename") to the release before publish."; } >> "$GITHUB_STEP_SUMMARY"
 
       # Pre-publish, deliberately. The cascade check below this runs *after* the
       # flip, so it can only report a gap that already happened -- and a release
@@ -1047,6 +1100,15 @@ jobs:
           # '##[' becomes '#?[', so the value can neither end the line nor open
           # the runner's older '##[command]' syntax in the middle of one.
           shown() { local v="${1//[[:cntrl:]]/?}"; printf '%s' "${v//\#\#\[/#?[}"; }
+          # Encode, then wrap, for the step summary (#506): a control character
+          # becomes a question mark and an ASCII punctuation character its
+          # numeric HTML entity (`@` also gets an empty comment after it, so no
+          # e-mail autolink forms), inside <code> (md_code) or <pre> (md_pre,
+          # line ends kept). Draft, caller and repository text then renders as
+          # text and links nothing.
+          md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" c n x; s="${s//$'\xc2'[$'\x80'-$'\x9f']/?}"; s="${s//$'\xe2\x80'[$'\xa8\xa9']/?}"; for n in {33..47} {58..64} {91..96} {123..126}; do printf -v x '%x' "$n"; printf -v c '%b' "\\x$x"; s=${s//"$c"/$'\x01'$n$'\x02'}; done; s=${s//$'\x01'64$'\x02'/$'\x01'64$'\x02\x03'}; s=${s//$'\x01'/'&#'}; s=${s//$'\x02'/';'}; s=${s//$'\x03'/'<!-- -->'}; printf '%s' "$s"; }
+          md_code() { printf '<code>%s</code>' "$(md_enc "$1")"; }
+          md_pre() { local line; printf '<pre>'; while IFS= read -r line; do md_enc "${line%$'\r'}"; printf '\n'; done <<< "$1"; printf '</pre>\n'; }
           if [[ -n "$EXPECTED_TARGET_SHA" ]]; then
             expected="${EXPECTED_TARGET_SHA,,}"
             # Same resolution as the Resolve draft step above.
@@ -1087,7 +1149,7 @@ jobs:
             echo
             echo "### Published"
             echo
-            echo "- \`$TAG\` flipped to \`draft: false\` at $published_at."
+            echo "- $(md_code "$TAG") flipped to \`draft: false\` at $(md_code "$published_at")."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Dry-run summary
@@ -1095,11 +1157,20 @@ jobs:
         env:
           TAG: ${{ steps.draft.outputs.tag }}
         run: |
+          # Encode, then wrap, for the step summary (#506): a control character
+          # becomes a question mark and an ASCII punctuation character its
+          # numeric HTML entity (`@` also gets an empty comment after it, so no
+          # e-mail autolink forms), inside <code> (md_code) or <pre> (md_pre,
+          # line ends kept). Draft, caller and repository text then renders as
+          # text and links nothing.
+          md_enc() { local LC_ALL=C; local s="${1//[[:cntrl:]]/?}" c n x; s="${s//$'\xc2'[$'\x80'-$'\x9f']/?}"; s="${s//$'\xe2\x80'[$'\xa8\xa9']/?}"; for n in {33..47} {58..64} {91..96} {123..126}; do printf -v x '%x' "$n"; printf -v c '%b' "\\x$x"; s=${s//"$c"/$'\x01'$n$'\x02'}; done; s=${s//$'\x01'64$'\x02'/$'\x01'64$'\x02\x03'}; s=${s//$'\x01'/'&#'}; s=${s//$'\x02'/';'}; s=${s//$'\x03'/'<!-- -->'}; printf '%s' "$s"; }
+          md_code() { printf '<code>%s</code>' "$(md_enc "$1")"; }
+          md_pre() { local line; printf '<pre>'; while IFS= read -r line; do md_enc "${line%$'\r'}"; printf '\n'; done <<< "$1"; printf '</pre>\n'; }
           {
             echo
             echo "### Dry run"
             echo
-            echo "- All gates passed for \`$TAG\`."
+            echo "- All gates passed for $(md_code "$TAG")."
             echo "- \`gh release edit --draft=false\` was **not** called."
           } >> "$GITHUB_STEP_SUMMARY"
 

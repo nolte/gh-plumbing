@@ -88,7 +88,6 @@ def test_a_raw_input_in_a_sink_is_a_finding(tmp_path, line):
 
 
 @pytest.mark.parametrize("line", [
-    'echo "x=$VALUE" >> "$GITHUB_STEP_SUMMARY"',
     'echo "$VALUE" > file.txt',
     'echo "$VALUE" | jq .',
     "echo '::error::$VALUE'",
@@ -113,7 +112,17 @@ def test_a_group_write_counts_line_by_line(tmp_path):
 
 
 def test_a_group_into_a_file_is_not_a_log_line(tmp_path):
-    assert check(tmp_path, '{\n  echo "### $VALUE"\n} >> "$GITHUB_STEP_SUMMARY"') == []
+    assert check(tmp_path, '{\n  echo "### $VALUE"\n} >> out.md') == []
+
+
+def test_a_group_into_the_summary_counts_line_by_line(tmp_path):
+    # Successor of the case above for $GITHUB_STEP_SUMMARY, which is no longer
+    # outside the class (#506): Markdown, read by the summary rule.
+    write(tmp_path, REL, workflow('{\n  echo "### fixed"\n  echo "### $VALUE"\n} >> "$GITHUB_STEP_SUMMARY"'))
+    [finding] = guard.audit(tmp_path, ())[0]
+    assert finding["message"].startswith("`VALUE` reaches a step-summary write unencoded")
+    text = (tmp_path / REL).read_text().splitlines()
+    assert 'echo "### $VALUE"' in text[finding["line"] - 1], "the finding names the physical line"
 
 
 def test_a_heredoc_into_an_env_file_counts_line_by_line(tmp_path):
@@ -270,8 +279,12 @@ def test_node_template_and_plain_log_need_shown(tmp_path):
 
 
 def test_node_stdout_into_the_summary_is_not_a_log_line(tmp_path):
+    # Not a log line -- but the summary rule reads it (#506): raw, it is a
+    # step-summary finding, and only that.
     run = "node <<'NODE' >> \"$GITHUB_STEP_SUMMARY\"\nconst p = process.env.P;\nconsole.log(`${p}`);\nNODE"
-    assert check(tmp_path, run) == []
+    write(tmp_path, REL, workflow(run))
+    [finding] = guard.audit(tmp_path, ())[0]
+    assert finding["message"].startswith("`p` reaches a step-summary write unencoded")
 
 
 def test_quoted_data_heredoc_is_not_shell(tmp_path):
@@ -510,3 +523,370 @@ def test_the_seam_cases_really_re_form_the_prefix():
               'echo "id #$(shown "$a")"; echo "x $(shown "$b")[0]"; echo "x $(shown "$c")$(shown "$d")"\n')
     out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True).stdout
     assert out.splitlines() == ["id ##[x", "x ##[0]", "x x##[y"]
+
+
+# --- the step summary (#506) ------------------------------------------------------
+
+MD = "\n".join(guard.SHELL_MD)
+JS_MD = "\n".join(guard.JS_MD)
+SUMMARY = '>> "$GITHUB_STEP_SUMMARY"'
+
+
+def summary_names(tmp_path, run: str, entries=(), **kwargs) -> list[str]:
+    write(tmp_path, REL, workflow(run, **kwargs))
+    findings, _ = guard.audit(tmp_path, tuple(entries))
+    return [f["message"].split("`")[1] for f in findings]
+
+
+@pytest.mark.parametrize("line", [
+    f'echo "x=$VALUE" {SUMMARY}',
+    f'echo "| Tag | \\`$VALUE\\` |" {SUMMARY}',
+    f'printf -- "- %s\\n" "$VALUE" {SUMMARY}',
+    f'{{ echo; echo "- $VALUE"; }} {SUMMARY}',
+    'echo "x $VALUE" >> "${GITHUB_STEP_SUMMARY}"',
+    'echo "x $VALUE" >> $GITHUB_STEP_SUMMARY',
+])
+def test_a_raw_value_on_a_summary_line_is_a_finding(tmp_path, line):
+    # Successor of the summary write test_lines_outside_the_class_are_ignored
+    # used to list.
+    assert summary_names(tmp_path, line) == ["VALUE"]
+
+
+def test_the_log_mask_is_not_a_summary_mask(tmp_path):
+    run = f'{HELPER}\necho "- $(shown "$VALUE")" {SUMMARY}\nshown_v=$(shown "$VALUE")\necho "- $shown_v" {SUMMARY}'
+    assert summary_names(tmp_path, run) == ["VALUE", "shown_v"]
+
+
+def test_a_refusal_is_not_a_summary_mask(tmp_path):
+    assert summary_names(tmp_path, f'{HELPER}\n{REFUSAL}\necho "x $VALUE"\necho "x $VALUE" {SUMMARY}') == ["VALUE"]
+
+
+def test_a_log_entry_does_not_cover_the_summary_and_back(tmp_path):
+    run = f'echo "::notice::x $VALUE"\necho "x $VALUE" {SUMMARY}'
+    log = guard.Allowed(REL, "VALUE", step="Step", reason="checked upstream")
+    assert summary_names(tmp_path, run, [log]) == ["VALUE"]
+    summary = guard.Allowed(REL, "VALUE", step="Step", reason="checked upstream", sink="summary")
+    assert summary_names(tmp_path, run, [summary]) == ["VALUE"]
+    assert summary_names(tmp_path, run, [log, summary]) == []
+
+
+@pytest.mark.parametrize("line", [
+    f'coverage report --format=markdown {SUMMARY}',
+    f'{{\n  echo "## Coverage"\n  coverage report --format=markdown\n}} {SUMMARY}',
+    f'echo "x $(cat notes.md)" {SUMMARY}',
+    f'echo "x `cat notes.md`" {SUMMARY}',
+    f'jq -r .body r.json | head -n 5 {SUMMARY}',
+    'echo "fixed" | tee -a "$GITHUB_STEP_SUMMARY"',
+    f'jq -r . <<EOF {SUMMARY}\n{{}}\nEOF',
+    f'{MD}\nmd_pre "$(coverage report)" {SUMMARY}',
+])
+def test_command_output_appended_to_the_summary_is_a_finding(tmp_path, line):
+    assert summary_names(tmp_path, line) == [guard.OUTPUT_NAME]
+
+
+@pytest.mark.parametrize("line", [
+    f'echo "x $(md_code "$VALUE")" {SUMMARY}',
+    f'echo "x $(md_code "${{VALUE}}")" {SUMMARY}',
+    f'{{ echo "### Fixed"; echo; md_pre "$VALUE"; }} {SUMMARY}',
+    f'cell=$(md_code "$VALUE")\necho "| x | $cell |" {SUMMARY}',
+    f'cell="_(empty)_"\nif [[ -n "$VALUE" ]]; then\n  cell=$(md_code "$VALUE")\nfi\necho "| x | $cell |" {SUMMARY}',
+    f'{{\n  for v in a b; do echo "- $(md_code "$v")"; done\n  echo "n=${{#VALUE}}"\n}} {SUMMARY}',
+    f'report=$(coverage report)\n{{ echo "## Coverage"; md_pre "$report"; }} {SUMMARY}',
+    f'echo "- \\`gh release edit\\` was **not** called." {SUMMARY}',
+    f"cat {SUMMARY} <<'EOF'\n- $VALUE stays literal\nEOF",
+    f'{{\n  echo "x" >&2\n  echo "fixed" > out.md\n}} {SUMMARY}',
+    f'{{\n  while IFS= read -r v; do echo "- $(md_code "$v")"; done < list.txt\n  x="a b"\n}} {SUMMARY}',
+])
+def test_encoded_constant_or_redirected_elsewhere_is_fine(tmp_path, line):
+    assert summary_names(tmp_path, f"{MD}\n{line}") == []
+
+
+def test_an_env_file_write_inside_a_summary_group_stays_the_log_rule_s(tmp_path):
+    write(tmp_path, REL, workflow(f'{{\n  echo "v=$VALUE" >> "$GITHUB_OUTPUT"\n}} {SUMMARY}'))
+    [finding] = guard.audit(tmp_path, ())[0]
+    assert finding["message"].startswith("`VALUE` reaches a log line or env-file write unmasked")
+
+
+def test_the_summary_helpers_must_be_the_canonical_ones(tmp_path):
+    weak = 'md_code() { printf \'<code>%s</code>\' "$1"; }'
+    # `1`: the weak helper's own printf is a raw log print.
+    assert summary_names(tmp_path, f'{weak}\necho "x $(md_code "$VALUE")" {SUMMARY}') == ["1", "VALUE"]
+    shutil.rmtree(tmp_path / ".github")
+    # Every line of the block: md_code without the md_pre line is not enough.
+    partial = "\n".join(guard.SHELL_MD[:2])
+    assert summary_names(tmp_path, f'{partial}\necho "x $(md_code "$VALUE")" {SUMMARY}') == ["VALUE"]
+
+
+def test_the_bare_encoder_is_not_a_summary_mask(tmp_path):
+    # Unwrapped, `@name` and `#1` still link.
+    assert summary_names(tmp_path, f'{MD}\necho "x $(md_enc "$VALUE")" {SUMMARY}') == ["VALUE"]
+
+
+def test_an_unquoted_heredoc_into_the_summary_expands(tmp_path):
+    assert summary_names(tmp_path, f"cat {SUMMARY} <<EOF\n- '$VALUE'\nEOF") == ["VALUE"]
+    shutil.rmtree(tmp_path / ".github")
+    assert summary_names(tmp_path, f'{MD}\ncat {SUMMARY} <<EOF\n- $(md_code "$VALUE")\nEOF') == []
+
+
+def test_a_node_heredoc_into_the_summary_needs_md(tmp_path):
+    raw = ("node <<'NODE' >> \"$GITHUB_STEP_SUMMARY\"\nconst p = process.env.P;\n"
+           "const rows = [1].map((k) => `| ${k} | ${p} |`).join('\\n');\n"
+           "process.stdout.write(\n  `## T\\n${rows}\\n`\n);\nconsole.log(p);\nconsole.log('x' + p);\n"
+           "console.error(`::error::${shown(p)}`);\nNODE")
+    # `shown`: the log rule's finding for the stderr line, which it reads.
+    assert summary_names(tmp_path, raw) == ["shown", "k", "p", "rows", "p", "'x' + p"]
+    shutil.rmtree(tmp_path / ".github")
+    clean = (f"node <<'NODE' >> \"$GITHUB_STEP_SUMMARY\"\n{JS_MD}\nconst p = process.env.P;\n"
+             "console.log('## T');\nconsole.log(`| ${mdCode(p)} | ${mdCode(p.length)} |`);\n"
+             "process.stdout.write(mdPre(p));\nNODE")
+    assert summary_names(tmp_path, clean) == []
+    shutil.rmtree(tmp_path / ".github")
+    weak = clean.replace(guard.JS_MD[0], "const mdEnc = (value) => String(value);")
+    assert summary_names(tmp_path, weak) == ["mdCode", "mdPre"], "one finding per name and line"
+
+
+def test_a_python_heredoc_into_the_summary_needs_md(tmp_path):
+    raw = "python3 - <<'PY' >> \"$GITHUB_STEP_SUMMARY\"\nimport os\nv = os.environ['V']\nprint(f\"| {v} |\")\nprint(v)\nPY"
+    assert summary_names(tmp_path, raw) == ["v", "v"]
+    shutil.rmtree(tmp_path / ".github")
+    clean = ("python3 - <<'PY' >> \"$GITHUB_STEP_SUMMARY\"\nimport os, re\n" + guard.PY_MD
+             + "v = os.environ['V']\nprint(f\"| {md_code(v)} | {len(v)} |\")\nprint(md_pre(v))\nprint('fixed')\nPY")
+    assert summary_names(tmp_path, clean) == []
+
+
+def test_the_summary_entries_say_why_and_are_scoped():
+    summary = [e for e in guard.ALLOWED if e.sink == "summary"]
+    assert summary, "the triggerer, the run URL and REASON"
+    assert all(e.step is not None for e in summary)
+    assert {e.sink for e in guard.ALLOWED} == {"log", "summary"}
+
+
+def test_undoing_one_summary_encoding_is_seen(tmp_path):
+    root = copy_with(tmp_path, PUBLISH, 'echo "- All gates passed for $(md_code "$TAG")."',
+                     'echo "- All gates passed for \\`$TAG\\`."')
+    findings, _ = guard.audit(root)
+    assert [(f["step"], f["message"].split("`")[1]) for f in findings] == [("Dry-run summary", "TAG")]
+
+
+@pytest.mark.parametrize("rel, old, new", [
+    (".github/workflows/reusable-python-coverage.yaml", 'md_pre "$report"', "coverage report --format=markdown"),
+    (".github/workflows/reusable-nodejs-coverage.yaml", "${mdCode(total[k].pct)}%", "${total[k].pct}%"),
+    (".github/workflows/reusable-release-archive.yml", 'echo "Attached to draft $(md_code "$TAG") before publish:"',
+     'echo "Attached to draft \\`$TAG\\` before publish:"'),
+])
+def test_undoing_an_encoding_in_a_sibling_is_seen(tmp_path, rel, old, new):
+    root = copy_with(tmp_path, rel, old, new)
+    findings, _ = guard.audit(root)
+    assert [f["path"] for f in findings] == [rel]
+
+
+# --- review bypasses (#506): each closed, each a fixture -----------------------
+
+PY_SUMMARY = "python3 - <<'PY' >> \"$GITHUB_STEP_SUMMARY\"\nimport os, re, sys\n" + guard.PY_MD
+NODE_SUMMARY = f"node <<'NODE' >> \"$GITHUB_STEP_SUMMARY\"\n{JS_MD}\n"
+
+
+@pytest.mark.parametrize("run", [
+    # a compound command redirected as a whole
+    f'for v in a b; do\n  echo "x $VALUE"\ndone {SUMMARY}',
+    f'for v in a; do echo "x $VALUE"; done {SUMMARY}',
+    f'if true; then\n  echo "x $VALUE"\nfi {SUMMARY}',
+    f'while read -r line; do\n  echo "x $VALUE"\ndone < list.txt {SUMMARY}',
+    f'for v in a; do\n  if true; then\n    echo "x $VALUE"\n  fi\ndone {SUMMARY}',
+    # tee into the summary with its own stdout thrown away
+    'echo "x $VALUE" | tee -a "$GITHUB_STEP_SUMMARY" > /dev/null',
+    'echo "x $VALUE" > >(tee -a "$GITHUB_STEP_SUMMARY")',
+    # a second statement or redirect on the same line
+    f'echo "x $VALUE" {SUMMARY}; echo done >&2',
+    f'true > /dev/null; echo "x $VALUE" {SUMMARY}',
+    f'{{\n  echo "x $VALUE"; echo y > /dev/null\n}} {SUMMARY}',
+    f'{{\n  echo y > /dev/null; echo "x $VALUE"\n}} {SUMMARY}',
+    # a group whose `{` shares a line with its first statement
+    f'{{ echo "x $VALUE"\n  echo y\n}} {SUMMARY}',
+    f'{{ echo y\n  echo "x $VALUE"\n}} {SUMMARY}',
+    # the clobber operator
+    'echo "x $VALUE" >| "$GITHUB_STEP_SUMMARY"',
+])
+def test_a_raw_value_reaching_the_summary_another_way_is_a_finding(tmp_path, run):
+    found = summary_names(tmp_path, run)
+    assert "VALUE" in found, found
+    assert all(n in ("VALUE", guard.OUTPUT_NAME) for n in found), found
+
+
+def test_a_summary_finding_inside_a_compound_is_named_once_as_such(tmp_path):
+    write(tmp_path, REL, workflow(f'for v in a b; do\n  echo "x $VALUE"\ndone {SUMMARY}'))
+    [finding] = guard.audit(tmp_path, ())[0]
+    assert finding["message"].startswith("`VALUE` reaches a step-summary write unencoded")
+
+
+def test_encoded_values_in_compounds_are_fine(tmp_path):
+    run = (f'{MD}\nfor v in a b; do\n  echo "- $(md_code "$v")"\ndone {SUMMARY}\n'
+           f'{{ echo "### x"\n  echo "- $(md_code "$VALUE")"\n}} {SUMMARY}\n'
+           f'if true; then\n  md_pre "$VALUE"\nfi {SUMMARY}')
+    assert summary_names(tmp_path, run) == []
+
+
+def test_the_masked_assignment_must_hold_on_every_path(tmp_path):
+    run = f'{MD}\nx="$VALUE"; if false; then x=$(md_code "$VALUE"); fi; echo "$x" {SUMMARY}'
+    assert summary_names(tmp_path, run) == ["x"]
+    shutil.rmtree(tmp_path / ".github")
+    run = f'{MD}\nx="$VALUE"\nif false; then\n  x=$(md_code "$VALUE")\nfi\necho "$x" {SUMMARY}'
+    assert summary_names(tmp_path, run) == ["x"]
+
+
+@pytest.mark.parametrize("run", [
+    f'cat "$VALUE" - <<EOF {SUMMARY}\nfixed\nEOF',
+    f"cat notes.md <<'EOF' {SUMMARY}\nfixed\nEOF",
+])
+def test_cat_with_more_than_its_heredoc_prints_a_file(tmp_path, run):
+    assert guard.OUTPUT_NAME in summary_names(tmp_path, run)
+
+
+@pytest.mark.parametrize("line", [
+    'print(md_code("a"), end=os.environ["V"])',
+    'print(md_code("a"), sep=v)',
+    "print('a'); print(v)",
+    "print('x ' + v)  # file=sys.stderr",
+    "print('x', file=sys.stderr); print(v)",
+])
+def test_python_summary_prints_need_every_part_encoded(tmp_path, line):
+    run = PY_SUMMARY + f"v = os.environ['V']\n{line}\nPY"
+    assert summary_names(tmp_path, run) != [], line
+
+
+def test_python_stderr_and_literal_keywords_stay_fine(tmp_path):
+    run = PY_SUMMARY + ("v = os.environ['V']\nprint(md_code(v), end='')\nprint(md_code(v), sep=' ', flush=True)\n"
+                        "print(f'::error::{shown(v)}', file=sys.stderr) if False else None\nPY")
+    # the stderr line is the log rule's: shown is not defined here
+    assert summary_names(tmp_path, run) == ["shown"]
+
+
+@pytest.mark.parametrize("redefinition", [
+    'unset -f md_code; md_code() { cat <<< "$1"; }',
+    'md_code() { cat <<< "$1"; }',
+    'function md_enc { printf %s "$1"; }',
+    "alias md_code=echo",
+])
+def test_a_later_shell_redefinition_voids_the_helper(tmp_path, redefinition):
+    run = f'{MD}\n{redefinition}\necho "x $(md_code "$VALUE")" {SUMMARY}'
+    assert "VALUE" in summary_names(tmp_path, run)
+
+
+@pytest.mark.parametrize("redefinition", ["md_code = str", "from html import escape as md_code",
+                                          "def md_enc(value):\n    return value"])
+def test_a_later_python_redefinition_voids_the_helper(tmp_path, redefinition):
+    run = PY_SUMMARY + f"{redefinition}\nv = os.environ['V']\nprint(md_code(v))\nPY"
+    assert "md_code" in summary_names(tmp_path, run)
+
+
+@pytest.mark.parametrize("redefinition", ["{\n  const mdCode = (v) => v;\n  console.log(mdCode(p));\n}",
+                                          "let mdEnc = String;", "mdCode = (v) => v;"])
+def test_a_later_node_redefinition_voids_the_helper(tmp_path, redefinition):
+    run = NODE_SUMMARY + f"const p = process.env.P;\n{redefinition}\nconsole.log(mdCode(p));\nNODE"
+    assert "mdCode" in summary_names(tmp_path, run)
+
+
+def test_env_file_clobber_is_an_env_file_write(tmp_path):
+    # `>|` writes the env file just as `>` does; the #505 rule reads it now.
+    assert check(tmp_path, 'echo "v=$VALUE" >| "$GITHUB_OUTPUT"') == ["VALUE"]
+
+
+def test_an_env_file_loop_is_still_read_line_by_line(tmp_path):
+    run = 'for v in a; do\n  echo "v=$VALUE"\ndone >> "$GITHUB_OUTPUT"'
+    assert check(tmp_path, run) == ["VALUE"]
+
+
+@pytest.mark.parametrize("run", [
+    f'for v in a; do\n  echo "x $VALUE" >&2\ndone {SUMMARY}',
+    f'{{\n  echo "x $VALUE" >&2\n}} {SUMMARY}',
+    '{\n  echo "x $VALUE" >&2\n} > out.txt',
+])
+def test_a_stderr_line_inside_a_redirected_group_is_still_a_log_line(tmp_path, run):
+    write(tmp_path, REL, workflow(run))
+    messages = [f["message"] for f in guard.audit(tmp_path, ())[0]]
+    assert any(m.startswith("`VALUE` reaches a log line") for m in messages), messages
+
+
+# --- a closer anywhere on a line ends its group (#506 re-review) ------------------
+
+@pytest.mark.parametrize("run", [
+    # the 2b49da4-era form: the closer on the line of the last statement
+    f'{{\n  echo "### t"\n  echo "$VALUE"; }} {SUMMARY}',
+    f'for v in a; do\n  echo "x $VALUE"; done {SUMMARY}',
+    f'if true; then\n  echo "x $VALUE"; fi {SUMMARY}',
+    f'{{ for v in a; do\n  echo "x $VALUE"\ndone; }} {SUMMARY}',
+    f'{{ for v in a; do\n  echo "x $VALUE"; done; }} {SUMMARY}',
+    f'f() {{\n  echo "x $VALUE"\n}} {SUMMARY}\nf',
+    f'function f {{\n  echo "x $VALUE"\n}} {SUMMARY}\nf',
+    'for v in a; do\n  echo "x $VALUE"\ndone |\n  tee -a "$GITHUB_STEP_SUMMARY"',
+])
+def test_a_closer_after_a_statement_still_ends_the_group(tmp_path, run):
+    write(tmp_path, REL, workflow(run))
+    messages = [f["message"] for f in guard.audit(tmp_path, ())[0]]
+    assert any(m.startswith("`VALUE` reaches a step-summary write") for m in messages), messages
+
+
+def test_an_env_file_group_closed_after_a_statement_is_read_as_env_file(tmp_path):
+    write(tmp_path, REL, workflow('{\n  echo "a=fixed"\n  echo "b=$VALUE"; } >> "$GITHUB_OUTPUT"'))
+    findings = guard.audit(tmp_path, ())[0]
+    assert findings and {f["line"] for f in findings} == {14}, "only the line that writes b=$VALUE"
+    assert all(f["message"].startswith("`VALUE` reaches a log line or env-file write") for f in findings)
+
+
+def test_a_summary_closer_without_an_opener_fails_closed(tmp_path):
+    run = f"cat > g.sh <<'EOF'\n{{\nEOF\n  echo \"fixed\"; }} {SUMMARY}"
+    assert summary_names(tmp_path, run) == [guard.GROUP_NAME]
+
+
+def test_a_statement_before_a_group_on_its_line_stays_a_log_line(tmp_path):
+    write(tmp_path, REL, workflow(f'echo "x $VALUE"; {{ echo a\n  echo b\n}} {SUMMARY}'))
+    messages = [f["message"] for f in guard.audit(tmp_path, ())[0]]
+    assert any(m.startswith("`VALUE` reaches a log line") for m in messages), messages
+
+
+# --- a heredoc inside a redirected group, an array of keywords (#506, third pass) ---
+
+def summary_messages(tmp_path, run: str) -> list[str]:
+    write(tmp_path, REL, workflow(run))
+    return [f["message"] for f in guard.audit(tmp_path, ())[0]]
+
+
+@pytest.mark.parametrize("run", [
+    f'{HELPER}\n{{\n  cat <<EOF\nx $(shown "$VALUE")\nEOF\n}} {SUMMARY}',
+    f'{HELPER}\nfor v in a; do\n  cat <<EOF\nx $(shown "$VALUE")\nEOF\ndone {SUMMARY}',
+    (f"{{\n  node <<'NODE'\n{guard.JS_SHOWN}\nconst p = process.env.P;\nconsole.log(`x ${{shown(p)}}`);\nNODE\n}} "
+     f"{SUMMARY}"),
+])
+def test_a_heredoc_inside_a_summary_group_is_read_by_the_summary_rule(tmp_path, run):
+    messages = summary_messages(tmp_path, run)
+    assert messages and all("step-summary write" in m for m in messages), messages
+
+
+def test_a_raw_heredoc_value_inside_a_summary_group_gets_the_summary_message(tmp_path):
+    messages = summary_messages(tmp_path, f'{{\n  cat <<EOF\nx $VALUE\nEOF\n}} {SUMMARY}')
+    assert [m.split("`")[1] for m in messages] == ["VALUE"]
+    assert messages[0].startswith("`VALUE` reaches a step-summary write unencoded")
+
+
+def test_an_encoded_python_heredoc_inside_a_summary_group_is_fine(tmp_path):
+    run = ("{\n  python3 - <<'PY'\nimport os, re\n" + guard.PY_MD
+           + f"k = os.environ['K']\nprint(md_code(k))\nPY\n}} {SUMMARY}")
+    assert summary_messages(tmp_path, run) == []
+
+
+def test_a_heredoc_inside_an_env_file_group_stays_an_env_file_write(tmp_path):
+    messages = summary_messages(tmp_path, '{\n  cat <<EOF\nv=$VALUE\nEOF\n} >> "$GITHUB_OUTPUT"')
+    assert [m.split("`")[1] for m in messages] == ["VALUE"]
+    assert messages[0].startswith("`VALUE` reaches a log line or env-file write unmasked")
+
+
+def test_a_heredoc_redirected_elsewhere_inside_a_summary_group_is_not_summary(tmp_path):
+    run = f"{{\n  echo fixed\n  python3 - <<'PY' >&2\nimport os\nprint(os.environ['V'])\nPY\n}} {SUMMARY}"
+    messages = summary_messages(tmp_path, run)
+    assert messages and all("log line" in m for m in messages), messages
+
+
+def test_an_array_of_keywords_opens_nothing(tmp_path):
+    run = (f'{HELPER}\nfor x in 1; do\n  echo "x $(shown "$VALUE")"\n  kw=(if for while)\n  local -a k2=(do {{ case)\n'
+           f'done {SUMMARY}')
+    assert summary_names(tmp_path, run) == ["VALUE"]

@@ -229,7 +229,11 @@ def test_findings_are_rendered_and_summarised(repo, monkeypatch, tmp_path_factor
     captured = capsys.readouterr()
     assert "static / Static CI Tests" in captured.out
     assert "::error::1 required-check trigger finding(s)" in captured.err
-    assert "no-producer" in summary.read_text(encoding="utf-8")
+    # The summary is Markdown: context, kind and message encoded and wrapped (#506).
+    written = summary.read_text(encoding="utf-8")
+    assert "<code>no&#45;producer</code>" in written
+    assert "<code>static &#47; Static CI Tests</code>" in written
+    assert "static / Static CI Tests" not in written
 
 
 @pytest.mark.parametrize("branches, selected", [
