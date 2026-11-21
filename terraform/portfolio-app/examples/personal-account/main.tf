@@ -32,7 +32,7 @@ module "portfolio_app" {
   # User mode — set `user` instead of `organization`.
   user            = "octocat"
   app_id          = var.portfolio_app_id
-  app_slug        = "octocat-portfolio-bot"
+  app_slug        = "octocat-portfolio-bot" # optional, no longer read by the module
   app_private_key = var.portfolio_app_private_key
 
   consumer_repositories = [

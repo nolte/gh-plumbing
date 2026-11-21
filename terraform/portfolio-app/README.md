@@ -67,13 +67,17 @@ available only on organisation-owned repositories. The module
 therefore fails at plan time when the configuration sets `user`
 together with `enable_branch_bypass = true`. In user mode, leave the flag off.
 
+The bypass names the App by its node ID, set through `app_node_id`.
+The module fails at plan time when `enable_branch_bypass = true` and
+`app_node_id` is empty. See [Find the App node identifier](#find-the-app-node-identifier).
+
 ## What it doesn't provision
 
 - **The GitHub App itself.** GitHub exposes no public API to *create*
   an App. The App ID and private key come from the registration flow
   at `https://github.com/settings/apps/new`. Register the App
-  manually first, then feed the resulting App ID, slug, and private
-  key into this module.
+  manually first, then feed the resulting App ID, private key, and
+  (for the bypass) App node ID into this module.
 - **The App's per-repository installation.** Installing an App into a
   repository is a UI or account-owner action that the Terraform
   GitHub provider doesn't expose consistently. The module assumes the
@@ -106,8 +110,10 @@ Before `terraform apply`:
      (data lookup over the organisation's repository list).
    - **User mode:** `repo` (repository-level Actions variables and
      secrets). No `admin:org` needed.
-4. The App ID, App slug, and App private key live locally (typically
-   loaded from an external secret manager, not committed).
+4. The App private key lives locally, typically loaded from an
+   external secret manager and never committed.
+5. The App ID and, for the bypass, the App node ID are at hand. Both
+   are ordinary configuration values, not secrets.
 
 ## Inputs
 
@@ -117,10 +123,31 @@ Before `terraform apply`:
 | `user` | string | one of | `""` | GitHub user account that owns the consumer repositories. Mutually exclusive with `organization`. |
 | `app_id` | string | yes | n/a | Numeric App ID. |
 | `app_private_key` | string (sensitive) | yes | n/a | Private key in Privacy-Enhanced-Mail format. |
-| `app_slug` | string | yes | n/a | App slug (the path segment after `/apps/` in the App's web address). |
+| `app_slug` | string | no | `""` | App slug (the path segment after `/apps/` in the App's web address). Optional. The module no longer reads it; the bypass uses `app_node_id`. Kept so existing module calls keep working. |
+| `app_node_id` | string | when the bypass is on | `""` | Node ID of the App (starts with `A_` or `MDM6QXBw`). The push-restriction actor when `enable_branch_bypass = true`. See [Find the App node identifier](#find-the-app-node-identifier). |
 | `consumer_repositories` | list(string) | yes | n/a | Repositories that should see the variable and secret (and, in organisation mode, the bypass entry when enabled). |
 | `enable_branch_bypass` | `bool` | no | `false` | Phase 2 toggle, organisation mode only. With `user` and `true`, the module fails at plan time. Flip to `true` only after the App lives in every consumer repository and after a cross-repository security review. |
 | `protected_branches` | list(string) | no | `["develop", "master"]` | Branches that receive the bypass entry when Phase 2 is on (organisation mode only). |
+
+## Find the App node identifier
+
+The bypass needs the App's node ID, not its slug. The provider reads
+an entry that starts with `/` as a user login, and an App slug isn't
+a user login.
+
+If your token can see the App, ask the GitHub API:
+
+```sh
+gh api apps/<slug> --jq .node_id
+```
+
+If this call returns `404` (the token can't see a private App),
+authenticate as the App with a JSON Web Token (JWT) signed by its
+private key and call `GET /app`. The response carries the node ID in `.node_id`.
+
+The value starts with `A_` or `MDM6QXBw`. The `<slug>[bot]` user has
+its own node ID that starts with `BOT_`. That ID isn't the App node
+ID, and the module rejects it.
 
 ## Outputs
 
@@ -151,7 +178,6 @@ module "portfolio_app" {
 
   organization = "nolte"
   app_id       = var.portfolio_app_id
-  app_slug     = "nolte-portfolio-bot"
 
   # Loaded from your secret manager (environment variable, vault, sops, …).
   app_private_key = var.portfolio_app_private_key
@@ -163,8 +189,10 @@ module "portfolio_app" {
   ]
 
   # Default off. Flip once the App lives in every listed repository
-  # and the consumer wrappers carry the new pattern.
+  # and the consumer wrappers carry the new pattern. The bypass then
+  # needs the App node ID (see "Find the App node identifier").
   enable_branch_bypass = false
+  # app_node_id        = "A_kwDO..."
 }
 ```
 
@@ -177,7 +205,6 @@ module "portfolio_app" {
 
   user            = "octocat"
   app_id          = var.portfolio_app_id
-  app_slug        = "octocat-portfolio-bot"
   app_private_key = var.portfolio_app_private_key
 
   consumer_repositories = [

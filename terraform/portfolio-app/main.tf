@@ -8,8 +8,9 @@ locals {
   user_repo_set = local.is_user ? toset(var.consumer_repositories) : toset([])
 }
 
-# Hard-fail at plan time when both or neither owner inputs are set, and
-# when user mode asks for the branch-protection bypass. A terraform_data
+# Hard-fail at plan time when both or neither owner inputs are set,
+# when user mode asks for the branch-protection bypass, and when the
+# bypass is on without the App's node ID. A terraform_data
 # resource with preconditions keeps the error message close to the
 # actual misconfiguration and avoids confusing Terraform with two
 # branches that both look valid.
@@ -19,7 +20,8 @@ locals {
 # apps are available only on organisation-owned repositories (REST
 # "Update branch protection", `restrictions`). A variable validation
 # referencing another variable would need Terraform >= 1.9; this form
-# keeps the module's >= 1.6 floor.
+# keeps the module's >= 1.6 floor. The same holds for the third
+# precondition, which ties var.app_node_id to var.enable_branch_bypass.
 resource "terraform_data" "owner_check" {
   lifecycle {
     precondition {
@@ -30,6 +32,11 @@ resource "terraform_data" "owner_check" {
     precondition {
       condition     = !(var.user != "" && var.organization == "" && var.enable_branch_bypass)
       error_message = "`enable_branch_bypass = true` needs organisation mode. GitHub documents push restrictions for users, teams and apps as available only on organisation-owned repositories, so the branch-protection bypass isn't expected to apply to repositories owned by the user account `${var.user}`. This rests on GitHub's documentation and wasn't tested with an apply. Leave `enable_branch_bypass = false` in user mode, or set `organization` for repositories an organisation owns."
+    }
+
+    precondition {
+      condition     = !(var.enable_branch_bypass && var.app_node_id == "")
+      error_message = "`enable_branch_bypass = true` needs `app_node_id`. The branch-protection bypass names the App by its node ID, not by its slug. Set `app_node_id` to the App's node ID (it starts with `A_` or `MDM6QXBw`), or leave `enable_branch_bypass = false`. The module README section \"Find the App node identifier\" shows how to look it up."
     }
   }
 }
@@ -137,6 +144,12 @@ resource "github_actions_secret" "portfolio_app_private_key" {
 # review whether Terraform should own the rule or just augment it (the
 # integrations/github provider does not patch existing rules — it
 # replaces them on the keys it manages).
+#
+# `push_allowances` takes the App's node ID. The provider (v6.12.1,
+# getNodeIDv4) resolves an entry that starts with "/" through the
+# GraphQL `user(login:)` lookup. An App slug isn't a user login, so
+# "/<slug>" can't resolve to the App. An entry without "/" passes
+# through to GitHub as a node ID.
 resource "github_branch_protection" "bypass" {
   for_each = var.enable_branch_bypass ? {
     for pair in setproduct(var.consumer_repositories, var.protected_branches) :
@@ -151,6 +164,16 @@ resource "github_branch_protection" "bypass" {
   enforce_admins = true
 
   restrict_pushes {
-    push_allowances = ["/${var.app_slug}"]
+    push_allowances = [var.app_node_id]
+  }
+
+  # Second guard next to terraform_data.owner_check: an
+  # `apply -target` on this resource skips that check, and must still
+  # not send an empty push allowance to GitHub.
+  lifecycle {
+    precondition {
+      condition     = var.app_node_id != ""
+      error_message = "`enable_branch_bypass = true` needs `app_node_id`. The branch-protection bypass names the App by its node ID, not by its slug. Set `app_node_id` to the App's node ID, or leave `enable_branch_bypass = false`. The module README section \"Find the App node identifier\" shows how to look it up."
+    }
   }
 }
