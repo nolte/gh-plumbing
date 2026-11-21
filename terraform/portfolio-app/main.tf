@@ -74,9 +74,9 @@ resource "github_actions_organization_variable" "portfolio_app_id" {
 resource "github_actions_organization_secret" "portfolio_app_private_key" {
   count = local.is_org ? 1 : 0
 
-  secret_name     = "PORTFOLIO_APP_PRIVATE_KEY"
-  visibility      = "selected"
-  plaintext_value = var.app_private_key
+  secret_name = "PORTFOLIO_APP_PRIVATE_KEY"
+  visibility  = "selected"
+  value       = var.app_private_key
   selected_repository_ids = [
     for r in data.github_repository.consumers : r.repo_id
   ]
@@ -101,9 +101,9 @@ resource "github_actions_variable" "portfolio_app_id" {
 resource "github_actions_secret" "portfolio_app_private_key" {
   for_each = local.user_repo_set
 
-  repository      = each.value
-  secret_name     = "PORTFOLIO_APP_PRIVATE_KEY"
-  plaintext_value = var.app_private_key
+  repository  = each.value
+  secret_name = "PORTFOLIO_APP_PRIVATE_KEY"
+  value       = var.app_private_key
 }
 
 # --- Phase 2 (opt-in, organisation mode only): branch-protection bypass -
