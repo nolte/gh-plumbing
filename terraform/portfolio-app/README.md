@@ -110,8 +110,10 @@ Before `terraform apply`:
      (data lookup over the organisation's repository list).
    - **User mode:** `repo` (repository-level Actions variables and
      secrets). No `admin:org` needed.
-4. The App ID, App private key, and (for the bypass) App node ID live locally (typically
-   loaded from an external secret manager, not committed).
+4. The App private key lives locally, typically loaded from an
+   external secret manager and never committed.
+5. The App ID and, for the bypass, the App node ID are at hand. Both
+   are ordinary configuration values, not secrets.
 
 ## Inputs
 
@@ -139,9 +141,9 @@ If your token can see the App, ask the GitHub API:
 gh api apps/<slug> --jq .node_id
 ```
 
-For a private App this call returns `404`. Authenticate as the App
-with a JSON Web Token (JWT) signed by its private key and call
-`GET /app`. The response carries the node ID in `.node_id`.
+If this call returns `404` (the token can't see a private App),
+authenticate as the App with a JSON Web Token (JWT) signed by its
+private key and call `GET /app`. The response carries the node ID in `.node_id`.
 
 The value starts with `A_` or `MDM6QXBw`. The `<slug>[bot]` user has
 its own node ID that starts with `BOT_`. That ID isn't the App node

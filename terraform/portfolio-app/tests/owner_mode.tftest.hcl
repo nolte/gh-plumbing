@@ -1,5 +1,6 @@
 # Plan-time checks of the owner-mode and bypass preconditions in
-# terraform_data.owner_check and of the app_node_id input. The mocked provider needs no GitHub
+# terraform_data.owner_check and github_branch_protection.bypass, and
+# of the app_node_id input. The mocked provider needs no GitHub
 # credentials and makes no API calls.
 #
 # Because of `mock_provider`, init, validate and test in this directory
@@ -20,12 +21,14 @@ variables {
   consumer_repositories = ["example-repo"]
 }
 
+# app_node_id is set so that only the user-mode precondition can fail.
 run "user_mode_refuses_branch_bypass" {
   command = plan
 
   variables {
     user                 = "octocat"
     enable_branch_bypass = true
+    app_node_id          = "A_kwDOexample"
   }
 
   expect_failures = [
@@ -85,6 +88,7 @@ run "both_owners_with_branch_bypass" {
     organization         = "example-org"
     user                 = "octocat"
     enable_branch_bypass = true
+    app_node_id          = "A_kwDOexample"
   }
 
   expect_failures = [
@@ -136,6 +140,8 @@ run "branch_bypass_uses_app_node_id" {
   }
 }
 
+# Both guards fire: owner_check, and the precondition on the bypass
+# resource itself, which also covers `apply -target`.
 run "branch_bypass_needs_app_node_id" {
   command = plan
 
@@ -147,6 +153,7 @@ run "branch_bypass_needs_app_node_id" {
 
   expect_failures = [
     terraform_data.owner_check,
+    github_branch_protection.bypass,
   ]
 }
 

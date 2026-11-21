@@ -166,4 +166,14 @@ resource "github_branch_protection" "bypass" {
   restrict_pushes {
     push_allowances = [var.app_node_id]
   }
+
+  # Second guard next to terraform_data.owner_check: an
+  # `apply -target` on this resource skips that check, and must still
+  # not send an empty push allowance to GitHub.
+  lifecycle {
+    precondition {
+      condition     = var.app_node_id != ""
+      error_message = "`enable_branch_bypass = true` needs `app_node_id`. The branch-protection bypass names the App by its node ID, not by its slug. Set `app_node_id` to the App's node ID, or leave `enable_branch_bypass = false`. The module README section \"Find the App node identifier\" shows how to look it up."
+    }
+  }
 }

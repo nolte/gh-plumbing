@@ -32,7 +32,7 @@ module "portfolio_app" {
 
   organization    = "nolte"
   app_id          = var.portfolio_app_id
-  app_slug        = "nolte-portfolio-bot"
+  app_slug        = "nolte-portfolio-bot" # optional, no longer read by the module
   app_private_key = var.portfolio_app_private_key
 
   consumer_repositories = [
