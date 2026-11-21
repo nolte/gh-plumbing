@@ -109,5 +109,19 @@ none
 
 | Finding | Source | Outcome | Reproduction | Issue |
 |---|---|---|---|---|
+| B1 print or raw assignment in a function whose body isn't opened as `f() {` + newline passes | diff review @ 80e2194a7191fa055eba22619653cae5f80d80dc | fixed directly (6c46d8e) | fixtures A1, A2, A3: guard exit 0 at 80e2194, exit 1 at c5f19dd (re-run by orchestrator) | — |
+| B2 loop opened after another statement on its line: raw value after the print passes | diff review @ 80e2194 | fixed directly (6c46d8e) | fixture B: 0 → 1 | — |
+| B3 mask after a trailing `&&`, `\|\|` or `\|` on the line before counts as unconditional | diff review @ 80e2194 | fixed directly (6c46d8e) | fixture C: 0 → 1 | — |
+| B4 raw assignments unseen (case arm, `a=1 x=`, `typeset`, `read` names, `select`, `for x;` …); exists on develop | diff review @ 80e2194 | fixed directly (6c46d8e, c5f19dd) | fixtures D1, D2: 0 → 1 | — |
+| B5 regression: `(( N==1 ))`, `( N=lit )` make a name constant | diff review @ 80e2194 | fixed directly (6c46d8e) | fixtures R1, R2: develop 1, 80e2194 0, c5f19dd 1 | — |
+| B6 env-file heredoc prints read laxly (concatenation, second print, continuation, `end=`) | diff review @ 80e2194 | fixed directly (6c46d8e): strict reader shared with the summary rule | fixtures E1–E4: 0 → 1 | — |
+| N1 `"a"#` read as a comment; N2 `tee --append` / `dd of=`; N3 heredoc delimiters and interpreters | diff review @ 80e2194 | fixed directly (6c46d8e); rest named under "Not covered" | developer tests; not re-run one by one by the orchestrator | — |
+| Log-line Python/Node prints: only the first call on a line, no continuation lines, no `end=`/`sep=`; exists on develop | diff review @ 80e2194 (B6, log side) | named under "Not covered"; follow-up issue pending operator decision | reviewer observed on develop and head | pending |
 
 ## Dispatch log
+
+2026-11-21 P1 dispatched to nolte-engineering:fullstack-developer — committed 92a7d94; block reader `blocks_of` built new (orchestrator's assumption that the existing block model suffices: refuted)
+2026-11-21 P2 dispatched to nolte-engineering:fullstack-developer — committed 4363789
+2026-11-21 P3 dispatched to nolte-engineering:fullstack-developer — committed 80e2194; sweep: (a) 1 name with a masked and an unmasked assignment (`message`, actions/setup-vale/setup-vale.sh:51,54, accepted by the block rule), (b) 0 of 5 Python/Node heredocs write an env file; re-run by orchestrator
+2026-11-21 diff review @ 80e2194 by an independent read-only agent, security brief — 5 blocking, 1 blocking by documentation, 5 non-blocking; all 13 fixtures re-run by orchestrator
+2026-11-21 review findings dispatched to nolte-engineering:fullstack-developer — committed 6c46d8e, c5f19dd; orchestrator re-run at c5f19dd: 15 fixtures exit 1, tree exit 0, 717 passed
