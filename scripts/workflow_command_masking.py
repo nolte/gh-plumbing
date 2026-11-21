@@ -185,7 +185,12 @@ Not covered (each would need a parser this script doesn't have):
     `printf -v`, `: "${x:=$V}"` or a nameref (`declare -n`) -- doesn't stop
     the walk back from the print, and a command run between the mask and
     the print that reassigns the name some other way (a script `source`d
-    from a file) isn't read. Blocks are told by keywords at the
+    from a file) isn't read. A loop that runs zero times, a branch that
+    doesn't run or a function that is never called needs no path reading:
+    a mask in one covers only prints in the same block, which then don't
+    run either; but a mask that an `exit`, `return`, `break` or `continue`
+    skips is still read as run, which is harmless only because the same
+    jump skips every print it covers. Blocks are told by keywords at the
     start of a statement, not by a parser: a keyword at the start of a
     line inside a quoted string or a `$(...)` over lines can open or close
     one (a body left unbalanced by it refuses, see above; one that happens

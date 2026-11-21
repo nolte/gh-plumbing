@@ -631,6 +631,30 @@ def test_this_repository_prints_only_masked_or_constrained_values():
     assert stale == [], "an ALLOWED entry that matches nothing hides nothing and should go"
 
 
+def test_this_repository_s_masked_assignments_hold_by_block_dominance():
+    # The #507 sweep: every print of a name assigned from $(shown ...) in a
+    # reusable workflow or an action script is covered by a dominating mask --
+    # none passes through another rule -- so a misreading of these bodies'
+    # blocks fails here by name, not only as a finding somewhere.
+    covered = set()
+    for path in guard.candidate_files(REPO_ROOT):
+        bodies = guard.bodies_of(REPO_ROOT, path)
+        for body in bodies:
+            checker = guard.Checker(body, bodies, guard.ALLOWED, set())
+            masked = {n for n, events in checker.assigned.items() if any(checker._is_mask(r) for _, r in events)}
+            for k in guard.sink_units(checker.units):
+                if checker.units[k].lang not in ("sh", "sh-heredoc"):
+                    continue
+                for name, _, _ in guard.shell_refs(checker.printed_segment(checker.units[k])):
+                    if name in masked:
+                        assert checker.masked_before(name, k), (body.path, body.first_line + checker.units[k].index)
+                        covered.add((body.path, name))
+    assert covered == {
+        (PUBLISH, "shown_target"), (PUBLISH, "shown_domain"), (PUBLISH, "shown_hacs_filename"),
+        (PUBLISH, "shown_filename"), ("actions/setup-vale/setup-vale.sh", "message"),
+    }
+
+
 def copy_with(tmp_path: pathlib.Path, rel: str, old: str, new: str) -> pathlib.Path:
     root = tmp_path / "repo"
     shutil.copytree(REPO_ROOT / ".github" / "workflows", root / ".github" / "workflows")
