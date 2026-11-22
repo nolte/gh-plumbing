@@ -757,9 +757,15 @@ def test_a_heredoc_inside_an_env_file_group_is_read_as_well(tmp_path):
     assert check(tmp_path, masked) == []
 
 
-@pytest.mark.parametrize("target", ["> vbf.json", ">> out.txt", "| jq ."])
-def test_heredoc_stdout_into_a_plain_file_or_pipe_stays_unread(tmp_path, target):
+@pytest.mark.parametrize("target", ["> vbf.json", ">> out.txt"])
+def test_heredoc_stdout_into_a_plain_file_stays_unread(tmp_path, target):
     assert check(tmp_path, ISSUE_507_GAP_2.replace('>> "$GITHUB_OUTPUT"', target)) == []
+
+
+def test_heredoc_stdout_into_a_pipe_is_read_as_the_log(tmp_path):
+    # Fails closed (#511): the guard doesn't follow a pipeline's output, so
+    # `| jq .` is read like `| cat`, which prints the heredoc's stdout to the log.
+    assert check(tmp_path, ISSUE_507_GAP_2.replace('>> "$GITHUB_OUTPUT"', "| jq .")) == ["p"]
 
 
 def test_quoted_data_heredoc_is_not_shell(tmp_path):
@@ -794,8 +800,8 @@ STDERR_PY = "python3 - <<'PY' {}\nimport os, sys\np = os.environ['P']\n{}\nPY"
     ('|& tee -a "$GITHUB_OUTPUT"', 'print("v=" + p, file=sys.stderr)', '"v=" + p'),
 ])
 def test_stderr_routed_into_an_env_file_is_read_strictly(tmp_path, redirect, print_, expected):
-    # Its stderr prints are entries of the env file too: `"v=" + p` is no
-    # finding on a log line, but is one there.
+    # Its stderr prints are entries of the env file too, read as strictly as
+    # its stdout prints (and as a log line, #511).
     assert check(tmp_path, STDERR_PY.format(redirect, print_)) == [expected]
 
 
@@ -815,10 +821,17 @@ def test_masked_stderr_routed_into_an_env_file_is_fine(tmp_path, run):
     assert check(tmp_path, run) == []
 
 
-def test_stderr_kept_on_the_log_stays_a_log_line(tmp_path):
-    # Without a stderr redirect into the env file, the log reading holds.
-    run = STDERR_PY.format('>> "$GITHUB_OUTPUT"', 'print("v=" + p, file=sys.stderr)')
-    assert check(tmp_path, run) == []
+@pytest.mark.parametrize("print_, expected", [
+    # Read as a log line -- since #511 as strictly as an entry.
+    ('print("v=" + p, file=sys.stderr)', ['"v=" + p']),
+    ('print(f"v={shown(p)}", file=sys.stderr)', []),
+    ('print(shown(p), file=sys.stderr)', ["<leading value>"]),
+])
+def test_stderr_kept_on_the_log_stays_a_log_line(tmp_path, print_, expected):
+    # Without a stderr redirect into the env file, it is a log line only: the
+    # line-start rule holds for it, not for the stdout entries.
+    run = STDERR_PY.format('>> "$GITHUB_OUTPUT"', f"import re\n{PY_HELPER}{print_}\nprint(shown(p))")
+    assert check(tmp_path, run) == expected
 
 
 @pytest.mark.parametrize("run", [
@@ -898,9 +911,16 @@ def test_a_shell_write_through_ampersand_redirect_is_an_env_file(tmp_path):
 
 @pytest.mark.parametrize("redirect", ["2>&1", ">&2", "2>/dev/stdout", '>&2 2>> /tmp/log'])
 def test_stderr_or_stdout_kept_on_the_log_is_no_env_file(tmp_path, redirect):
-    # No env file on the line: the heredoc is a log heredoc, its stderr print a log line.
-    assert check(tmp_path, STDERR_PY.format(redirect, 'print("v=" + p, file=sys.stderr)')) == []
-    assert check(tmp_path, STDERR_PY.format(redirect, 'print("v=" + p)')) == []
+    # No env file on the line: the heredoc is a log heredoc, its prints log
+    # lines -- read as strictly as an entry (#511), but under the line-start
+    # rule, which an entry isn't.
+    helper = f"import re\n{PY_HELPER}"
+    assert check(tmp_path, STDERR_PY.format(redirect, 'print("v=" + p, file=sys.stderr)')) == ['"v=" + p']
+    assert check(tmp_path, STDERR_PY.format(redirect, f'{helper}print(f"v={{shown(p)}}", file=sys.stderr)')) == []
+    if "/tmp/log" not in redirect:
+        # (With `>&2 2>> /tmp/log` bash sends stdout to the log, but the guard
+        # reads the heredoc's stdout as a file: a known gap, not #511's.)
+        assert check(tmp_path, STDERR_PY.format(redirect, f'{helper}print(shown(p))')) == ["<leading value>"]
 
 
 # --- the allow-list ----------------------------------------------------------
@@ -1526,3 +1546,860 @@ def test_an_array_of_keywords_opens_nothing(tmp_path):
     run = (f'{HELPER}\nfor x in 1; do\n  echo "x $(shown "$VALUE")"\n  kw=(if for while)\n  local -a k2=(do {{ case)\n'
            f'done {SUMMARY}')
     assert summary_names(tmp_path, run) == ["VALUE"]
+
+
+# --- #511: Python and Node log prints, read as strictly as an env-file entry ---
+
+P_ENV = "          P: ${{ inputs.p }}\n"
+LOG_PY = "python3 - <<'PY'\nimport os, re, sys\np = os.environ[\"P\"]\n{}\nPY"
+LOG_PY_SHOWN = f"python3 - <<'PY'\nimport os, re, sys\n{PY_HELPER}p = os.environ[\"P\"]\n{{}}\nPY"
+LOG_JS = "node <<'JS'\nconst p = process.env.P;\n{}\nJS"
+LOG_JS_SHOWN = f"node <<'JS'\n{guard.JS_SHOWN}\nconst p = process.env.P;\n{{}}\nJS"
+
+
+@pytest.mark.parametrize("run, expected", [
+    # A second print call on the line (the issue's fixture).
+    (LOG_PY.format('print("ok"); print("::error::" + p)'), ['"::error::" + p']),
+    # The continuation line of a call.
+    (LOG_PY.format('print("ok",\n      "::error::" + p)'), ['"::error::" + p']),
+    # `end=` ends the line in a command; the next print fills it.
+    (LOG_PY.format('print("x", end="\\n::error::"); print(p)'), ["p", guard.LEADING]),
+    # A second Node print call on the line.
+    (LOG_JS.format('console.log("ok"); console.log("::error::" + p);'), ['"::error::" + p']),
+    # A single print, built by concatenation.
+    (LOG_PY.format('print("::error::" + p)'), ['"::error::" + p']),
+    # `sep=` was a finding already and stays one.
+    (LOG_PY.format('print("ok", p, sep="\\n::error::")'), ["p"]),
+])
+def test_the_measured_log_print_forms_are_findings(tmp_path, run, expected):
+    # Each exited 0 on develop before #511, as the only step of a reusable
+    # workflow reading a caller's input.
+    assert check(tmp_path, run, env=P_ENV) == expected
+    assert guard.main(["--root", str(tmp_path)]) == 1
+
+
+@pytest.mark.parametrize("print_", [
+    'print("x %s" % p)',
+    'print("x {}".format(p))',
+    'print("x", "y" + p)',
+    'print("x", file=sys.stderr); print("::error::" + p, file=sys.stderr)',
+    'sys.stderr.write("x " + p + "\\n")',
+    'raise SystemExit("::error::" + p)',
+    'print (f"x {p}")',
+    'print("x",\n      f"y {p}",\n      file=sys.stderr)',
+    'print("x", end=p)',
+])
+def test_python_log_prints_are_read_strictly(tmp_path, print_):
+    assert check(tmp_path, LOG_PY.format(print_), env=P_ENV) != []
+
+
+@pytest.mark.parametrize("print_", [
+    'console.error("::error::" + p);',
+    'console.log("ok"); console.error(`x ${p}`);',
+    'console.table(`x ${p}`);',
+    'console.dir("x " + p);',
+    'console . log("x " + p);',
+    'process.stderr.write("x " + p + "\\n");',
+    'console.log("ok",\n  "x " + p);',
+])
+def test_node_log_prints_are_read_strictly(tmp_path, print_):
+    assert check(tmp_path, LOG_JS.format(print_), env=P_ENV) != []
+
+
+@pytest.mark.parametrize("run", [
+    LOG_PY_SHOWN.format('print(f"::error::{shown(p)}")'),
+    LOG_PY_SHOWN.format('print("ok"); print(f"::error::x {shown(p)}", file=sys.stderr)'),
+    LOG_PY_SHOWN.format('print("ok",\n      f"x {shown(p)}", sep=" - ", end="\\n")'),
+    LOG_PY_SHOWN.format('print(f"n={len(p)}"); sys.stderr.write(f"x {shown(p)}\\n")'),
+    LOG_PY.format('print("ok"); print("::error::fixed", file=sys.stderr)'),
+    LOG_JS_SHOWN.format('console.log("ok"); console.error(`::error::${shown(p)}`);'),
+    LOG_JS.format('console.log("ok"); console.table("fixed");'),
+])
+def test_masked_or_literal_log_prints_stay_clean(tmp_path, run):
+    assert check(tmp_path, run, env=P_ENV) == []
+
+
+def test_only_the_log_prints_of_a_heredoc_redirected_elsewhere_are_read(tmp_path):
+    # Its stdout goes to a file: those prints aren't log lines; its stderr
+    # prints are, read strictly.
+    run = 'python3 - <<\'PY\' > out.txt\nimport os, sys\np = os.environ["P"]\nprint("x " + p)\nPY'
+    assert check(tmp_path, run, env=P_ENV) == []
+    shutil.rmtree(tmp_path / ".github")
+    run = ('python3 - <<\'PY\' > out.txt\nimport os, sys\np = os.environ["P"]\n'
+           'print("x " + p); print("y " + p, file=sys.stderr)\nPY')
+    assert check(tmp_path, run, env=P_ENV) == ['"y " + p']
+
+
+TOTAL_PY = ("python3 - <<'PY'\nimport os, re, sys\ntotal = len(os.environ[\"P\"])\np = os.environ[\"P\"]\n"
+            "{}\nPY")
+
+
+@pytest.mark.parametrize("line, expected", [
+    ('print("x", total, file=sys.stderr)', []),
+    ('print("x", total[0], int(total), file=sys.stderr)', ["int"]),
+    # A dotted name is named as written, as it always was.
+    ('print("x", total.real, file=sys.stderr)', ["total.real"]),
+    ('print(f"x {total}", file=sys.stderr)', []),
+    ('print("x", total + p, file=sys.stderr)', ["total + p"]),
+    ('print("x", total % p, file=sys.stderr)', ["total % p"]),
+    ('print("x", total or p, file=sys.stderr)', ["total or p"]),
+    ('print("x", total if p else 0, file=sys.stderr)', ["total if p else 0"]),
+    ('print("x", total == p, file=sys.stderr)', ["total == p"]),
+    ('print("x", total[0] | p, file=sys.stderr)', ["total[0] | p"]),
+    ('print(f"x {total + p}", file=sys.stderr)', ["total + p"]),
+    # A string prefix is no name: the f-string and what follows it are named whole.
+    ('print("x", f"{total}" + p, file=sys.stderr)', ['f"{total}" + p']),
+])
+def test_an_operator_expression_is_named_whole_not_by_its_first_name(tmp_path, line, expected):
+    # An entry for `total` covers `total` and accesses of it, not an
+    # expression it merely starts: `total + p` prints the unmasked `p` (#511 review).
+    entry = guard.Allowed(REL, "total", step="Step", reason="a number")
+    write(tmp_path, REL, workflow(TOTAL_PY.format(line), env=P_ENV))
+    assert [n for _, n in names(tmp_path, [entry])] == expected
+
+
+@pytest.mark.parametrize("expr, name", [
+    ("x", "x"),
+    ("a.b", "a.b"),
+    ("x[0]", "x"),
+    ("f(x)", "f"),
+    ("a.b(c)[1].d", "a.b"),
+    ("x + p", "x + p"),
+    ("x.y - p", "x.y - p"),
+    ('f"v" + x', 'f"v" + x'),
+    ('"{}".format(x)', '"{}".format(x)'),
+    ("not x", "not x"),
+    ("x(", "x("),
+])
+def test_expr_name(expr, name):
+    assert guard.expr_name(expr) == name
+
+
+def test_a_log_entry_names_a_bare_value_on_a_strict_line(tmp_path):
+    entry = guard.Allowed(REL, "p", reason="test")
+    run = LOG_PY.format('print("ok"); print("x", p)')
+    write(tmp_path, REL, workflow(run, env=P_ENV))
+    assert names(tmp_path, [entry]) == []
+    assert names(tmp_path) == [(15, "p")]
+
+
+@pytest.mark.parametrize("text, lang, leads", [
+    ('print(shown(p))', "py", True),
+    ('print(f"{shown(p)}")', "py", True),
+    ('print(f"  {shown(p)}")', "py", True),
+    ('print(f"ok\\n{shown(p)}")', "py", True),
+    ('print(f"ok\\x0a {shown(p)}")', "py", True),
+    ('print("ok\\n" + shown(p))', "py", True),
+    ('print("" + shown(p))', "py", True),
+    ('print("%s x" % shown(p))', "py", True),
+    ('print("{} x".format(shown(p)))', "py", True),
+    ('print("", shown(p))', "py", True),
+    ('print("ok", shown(p), sep="\\n")', "py", True),
+    ('sys.stderr.write(shown(p))', "py", True),
+    ('raise SystemExit(f"{shown(p)}")', "py", True),
+    ('console.log(shown(p))', "js", True),
+    ('console.log(`ok\\n${shown(p)}`)', "js", True),
+    ('console.log("%s", shown(p))', "js", True),
+    ('console.log("ok\\n" + shown(p))', "js", True),
+    ('print(f"x {shown(p)}")', "py", False),
+    ('print("x", shown(p))', "py", False),
+    ('print("x " + shown(p))', "py", False),
+    ('print("x %s" % shown(p))', "py", False),
+    ('print("x {}".format(shown(p)))', "py", False),
+    ('print(f"{{literal}} {shown(p)}")', "py", False),
+    ('print(r"x\\n" + shown(p))', "py", False),
+    ('print("ok", shown(p), sep=" - ")', "py", False),
+    ('print(f"ok\\n  - {shown(p)}")', "py", False),
+    ('print()', "py", False),
+    ('console.log(`x ${shown(p)}`)', "js", False),
+    ('console.log("x", shown(p))', "js", False),
+    ('console.log("x %s", shown(p))', "js", False),
+])
+def test_the_line_start_rule_reads_every_line_a_print_writes(text, lang, leads):
+    calls = guard.print_calls(text, lang)
+    assert len(calls) == 1
+    assert guard.leading_print(calls[0], lang) is leads
+
+
+@pytest.mark.parametrize("text, lang, leads", [
+    ('print(f"v\\U0000000D{shown(p)}")', "py", True),
+    ('print(f"v\\U0000000a{shown(p)}")', "py", True),
+    ('print("v\\N{line feed}", shown(p))', "py", True),
+    ('print("v\\N{Carriage Return}", shown(p))', "py", True),
+    ('print("v\\N{cr}" + shown(p))', "py", True),
+    ('print(f"v\\N{LINE FEED}{shown(p)}")', "py", True),
+    ('print("v\\N{BULLET}", shown(p))', "py", False),
+    ('print(f"v\\N{BULLET} {shown(p)}")', "py", False),
+    ('print("v\\N{NO SUCH NAME}", shown(p))', "py", False),
+    ('print(r"v\\N{LINE FEED}", shown(p))', "py", False),
+    ('print(r"v\\U0000000A", shown(p))', "py", False),
+    # Not escapes of JavaScript: `"\U0000000A"` is `U0000000A`.
+    ('console.log("v\\U0000000A", shown(p))', "js", False),
+    ('console.log("v\\N{LINE FEED}", shown(p))', "js", False),
+])
+def test_the_line_start_rule_reads_python_s_long_and_named_line_ends(text, lang, leads):
+    # Python resolves `\N{...}` in any case and by an alias; `\U0000000a`
+    # writes a line end as `\u000a` does (#511 review).
+    calls = guard.print_calls(text, lang)
+    assert len(calls) == 1
+    assert guard.leading_print(calls[0], lang) is leads
+
+
+@pytest.mark.parametrize("line", [
+    'print(f"v\\U0000000D{shown(p)}", file=sys.stderr)',
+    'print("v\\N{line feed}", shown(p))',
+    'print("v\\N{NEW LINE}", shown(p))',
+    'print("v\\N{EOL}", shown(p))',
+    'print("v\\N{END OF LINE}", shown(p))',
+    'print("v\\N{nl}", shown(p))',
+    'print("v\\N{carriage return}", shown(p))',
+    # The braces of a named character are no field: not a value `LINE`.
+    'print(f"v\\N{LINE FEED}{shown(p)}")',
+])
+def test_a_long_or_named_line_end_escape_starts_a_line(tmp_path, line):
+    assert check(tmp_path, LOG_PY_SHOWN.format(line), env=P_ENV) == [guard.LEADING]
+
+
+@pytest.mark.parametrize("line, expected", [
+    ('print(f"v {shown(p)}")', []),
+    ('print(f"v\\N{BULLET} {shown(p)}")', []),
+    ('print("v\\N{BULLET}", shown(p))', []),
+    # A literal built by concatenation is refused as before, whole.
+    ('print("v\\N{BULLET} " + "x")', ['"v\\N{BULLET} " + "x"']),
+    # A raw f-string's `\N{p}` is a field `p`, as is one after an escaped backslash.
+    ('print(rf"v \\N{p}")', ["p"]),
+    ('print(f"v \\\\N{p}")', ["p"]),
+])
+def test_a_named_character_that_is_no_line_end_is_no_finding(tmp_path, line, expected):
+    assert check(tmp_path, LOG_PY_SHOWN.format(line), env=P_ENV) == expected
+
+
+@pytest.mark.parametrize("text, exprs", [
+    ('f"v\\N{LINE FEED}{x}"', ["x"]),
+    ('f"v\\N{bullet} {x}"', ["x"]),
+    ('rf"v\\N{x}"', ["x"]),
+    ('f"v\\\\N{x}"', ["x"]),
+    ('"a\\N{LF}" + f"{x}"', ["x"]),
+])
+def test_template_exprs_skip_a_named_character(text, exprs):
+    assert guard.template_exprs(text, "py") == exprs
+
+
+@pytest.mark.parametrize("line", [
+    'print(b"\\N{", f"{p}")',
+    'print(b"\\N{", f"{p}", "}")',
+    'print(b"\\N{", f"x{p}x}")',
+    'print(B"\\N{", f"{p}")',
+    'print(rb"\\N{", f"{p}")',
+    'print(Rb"\\N{", f"{p}")',
+    # A quote before the `}` ends the literal: no named character.
+    'print("\\N{", f"{p}")',
+])
+def test_a_bytes_literal_s_backslash_n_brace_hides_no_field(tmp_path, line):
+    # `b"\N{"` is a backslash, an `N` and a `{` (bytes have no named
+    # characters), so the f-string after it is read; at runtime it prints p.
+    assert check(tmp_path, LOG_PY.format(line), env=P_ENV) != []
+
+
+@pytest.mark.parametrize("text, spans", [
+    ('b"\\N{" + f"{x}"', {}),
+    ('B"\\N{" + f"{x}"', {}),
+    ('rb"\\N{" + f"{x}"', {}),
+    ('br"\\N{" + f"{x}"', {}),
+    ('"\\N{" + f"{x}"', {}),
+    ('f"\\N{A\\"}{x}"', {}),
+    ('f"\\N{LINE FEED}" + f"{x}"', {4: 15}),
+])
+def test_a_named_character_ends_within_its_literal_and_not_in_bytes(text, spans):
+    # Where it is no escape its `{` is read as a field, so `x` is read.
+    assert guard.named_escapes(text) == spans
+    assert any("x" in e for e in guard.template_exprs(text, "py"))
+
+
+@pytest.mark.parametrize("field, expr", [
+    ("x=", "x"),
+    ("x = ", "x"),
+    ("x=!r", "x"),
+    ("x = !r", "x"),
+    ("x=:>8", "x"),
+    ("d['k']=", "d['k']"),
+    ("a == b", "a == b"),
+    ("a <= b", "a <= b"),
+    ("a >= b", "a >= b"),
+    ("a != b", "a != b"),
+    ("x!r", "x"),
+    ("x:>8", "x"),
+])
+def test_a_self_documenting_field_is_named_by_its_expression(field, expr):
+    assert guard.field_expr(field) == expr
+
+
+def test_an_allowed_name_covers_its_self_documenting_field(tmp_path):
+    run = LOG_PY.format('x = os.environ["X"]\nprint(f"{x=}", file=sys.stderr)')
+    write(tmp_path, REL, workflow(run, env=P_ENV))
+    entry = guard.Allowed(REL, "x", reason="a number")
+    # `{x=}` prints `x=` before the value: the line starts with text.
+    assert names(tmp_path, [entry]) == []
+    run = LOG_PY.format('x = os.environ["X"]\nprint(f"{x=}{p}")')
+    write(tmp_path, REL, workflow(run, env=P_ENV))
+    assert [n for _, n in names(tmp_path, [entry])] == ["p"]
+
+
+@pytest.mark.parametrize("text, lang, leads", [
+    ('print(p, b"ok\\N{LINE FEED}")', "py", True),
+    ('print(b"ok\\N{LINE FEED}", shown(p))', "py", False),
+    ('print(b"ok\\N{LINE FEED}" + shown(p))', "py", False),
+    ('print(B"ok\\N{CARRIAGE RETURN}", shown(p))', "py", False),
+    ('print("ok\\N{LINE FEED}", shown(p))', "py", True),
+    ('print(b"ok\\n", shown(p))', "py", True),
+])
+def test_a_bytes_literal_s_backslash_n_is_no_line_end(text, lang, leads):
+    # Bytes have no named characters: `b"\N{LINE FEED}"` is that text. A
+    # first value starts the line as ever (`print(p, ...)`).
+    calls = guard.print_calls(text, lang)
+    assert len(calls) == 1
+    assert guard.leading_print(calls[0], lang) is leads
+
+
+def test_a_bytes_named_character_starts_no_line_in_a_workflow(tmp_path):
+    assert check(tmp_path, LOG_PY_SHOWN.format('print(b"ok\\N{LINE FEED}", shown(p))'), env=P_ENV) == []
+    shutil.rmtree(tmp_path / ".github")
+    assert check(tmp_path, LOG_PY_SHOWN.format('print("ok\\N{LINE FEED}", shown(p))'), env=P_ENV) == [guard.LEADING]
+
+
+def test_the_line_start_rule_holds_for_every_print_on_a_line(tmp_path):
+    run = LOG_PY_SHOWN.format('print("ok"); print(shown(p))')
+    assert check(tmp_path, run, env=P_ENV) == [guard.LEADING]
+    shutil.rmtree(tmp_path / ".github")
+    run = LOG_JS_SHOWN.format('console.log("ok"); console.error(`${shown(p)}`);')
+    assert check(tmp_path, run, env=P_ENV) == [guard.LEADING]
+
+
+SHOWN_PY = f"python3 - <<'PY'{{}}\nimport os, re, sys\n{PY_HELPER}p = os.environ[\"P\"]\n{{}}\nPY"
+
+
+@pytest.mark.parametrize("opener", ["", " > /tmp/o", ' >> "$GITHUB_OUTPUT"'])
+@pytest.mark.parametrize("line", [
+    'def shown(v): print(f"x {p}", file=sys.stderr)',
+    'def shown(v): raise SystemExit(f"x {p}")',
+])
+def test_a_line_that_only_starts_like_the_helper_hides_no_print(tmp_path, opener, line):
+    # A line starting `def shown(` is not the helper's definition: the log
+    # prints on it are read (develop read them; #511's first cut skipped them).
+    assert check(tmp_path, SHOWN_PY.format(opener, line), env=P_ENV) == ["p"]
+
+
+@pytest.mark.parametrize("opener", ["", ' >> "$GITHUB_OUTPUT"'])
+def test_a_stdout_print_on_a_helper_like_line_is_read(tmp_path, opener):
+    assert check(tmp_path, SHOWN_PY.format(opener, 'def shown(v): print(f"x {p}")'), env=P_ENV) == ["p"]
+
+
+@pytest.mark.parametrize("opener", ["", " > /tmp/o", ' >> "$GITHUB_OUTPUT"', ' >> "$GITHUB_STEP_SUMMARY"'])
+def test_the_canonical_helper_definition_is_no_finding(tmp_path, opener):
+    assert check(tmp_path, SHOWN_PY.format(opener, "pass"), env=P_ENV) == []
+    shutil.rmtree(tmp_path / ".github")
+    # A definition other than the canonical one doesn't define the mask.
+    run = SHOWN_PY.format(opener, 'print(f"x {shown(p)}", file=sys.stderr)').replace(
+        "def shown(value):", "def shown(value):  # masked")
+    assert check(tmp_path, run, env=P_ENV) == ["shown"]
+
+
+UNKNOWN_FILES = [
+    "file=sys.stderr if p else sys.stdout",
+    "file=stderr",
+    "file=err",
+    "file=open(2, 'w')",
+    'file=open("/dev/stderr", "w")',
+    "file=open(os.environ['GITHUB_OUTPUT'], 'a')",
+]
+STREAM_PRELUDE = "from sys import stderr\nerr = sys.stderr\n"
+
+
+@pytest.mark.parametrize("opener", ["", ' >> "$GITHUB_OUTPUT"'])
+@pytest.mark.parametrize("file_", ["file=sys.__stderr__", "file=sys.__stdout__", "file=(sys.stderr)",
+                                   "file=( sys.stdout )", *UNKNOWN_FILES])
+def test_a_print_to_a_stream_the_guard_cant_rule_out_is_read(tmp_path, opener, file_):
+    # Fails closed (#511): no `file=` escapes the reading. Develop read every
+    # `file=` but sys.stderr as stdout; the first cut of #511 dropped every
+    # one but sys.stdout/sys.stderr.
+    line = f'{STREAM_PRELUDE}print(f"x {{p}}", {file_})'
+    assert check(tmp_path, SHOWN_PY.format(opener, line), env=P_ENV) == ["p"]
+
+
+@pytest.mark.parametrize("file_", UNKNOWN_FILES)
+def test_an_unknown_stream_of_an_env_file_heredoc_is_read_both_ways(tmp_path, file_):
+    # It may be the entry's stdout or the log's stderr: both readings take it.
+    run = SHOWN_PY.format(' >> "$GITHUB_OUTPUT"', f'{STREAM_PRELUDE}print(p, {file_})')
+    write(tmp_path, REL, workflow(run, env=P_ENV))
+    [body] = guard.bodies_of(tmp_path, tmp_path / REL)
+    checker = guard.Checker(body, [body], (), set())
+    [k] = [k for k, u in enumerate(checker.units) if u.text.startswith("print(")]
+    assert checker.envfile_template(k) == ["p"]
+    assert checker.log_template(k) == ["p"]
+    assert checker.leading_print(k)
+    assert [n for _, n in names(tmp_path)] == ["p", guard.LEADING]
+
+
+def test_an_unknown_stream_of_a_summary_heredoc_is_read_both_ways(tmp_path):
+    run = SHOWN_PY.format(' >> "$GITHUB_STEP_SUMMARY"', f'{STREAM_PRELUDE}print(f"x {{p}}", file=err)')
+    write(tmp_path, REL, workflow(run, env=P_ENV))
+    messages = [f["message"] for f in guard.audit(tmp_path, ())[0]]
+    assert len(messages) == 2
+    assert any("log line" in m for m in messages) and any("step-summary" in m for m in messages)
+
+
+OWN_FILE = 'open("/tmp/o", "w")'
+
+
+@pytest.mark.parametrize("opener", ["", " > /tmp/o", ' >> "$GITHUB_OUTPUT"'])
+@pytest.mark.parametrize("line", [
+    'print(f"x {p}", file=open("/tmp/f", "w"))',
+    'print(f"x {p}", file=io.open("/tmp/f", "w"))',
+    'f = open("/tmp/f", "w")\nprint(f"x {p}", file=f)',
+    'with open("/tmp/f", "w") as out:\n    print(f"x {p}", file=out)',
+    'with open("/tmp/a") as src, open("/tmp/f", "w") as out:\n    print(f"x {p}", file=out)',
+])
+def test_a_print_to_a_file_the_heredoc_opens_is_read(tmp_path, opener, line):
+    # Refused although harmless (#511): the guard can't tell a file of the
+    # heredoc's own from a standard stream, so it reads the print as both.
+    assert check(tmp_path, SHOWN_PY.format(opener, line), env=P_ENV) == ["p"]
+
+
+def test_a_print_to_a_file_the_heredoc_opens_is_a_summary_line_too(tmp_path):
+    line = f'print(f"x {{p}}", file={OWN_FILE})'
+    write(tmp_path, REL, workflow(SHOWN_PY.format(' >> "$GITHUB_STEP_SUMMARY"', line), env=P_ENV))
+    messages = [f["message"] for f in guard.audit(tmp_path, ())[0]]
+    assert len(messages) == 2
+    assert any("log line" in m for m in messages) and any("step-summary" in m for m in messages)
+
+
+@pytest.mark.parametrize("opener", ["", ' >> "$GITHUB_OUTPUT"'])
+@pytest.mark.parametrize("line", [
+    f'print(f"x {{shown(p)}}", file={OWN_FILE})',
+    f'f = {OWN_FILE}\nprint(f"x={{shown(p)}}", file=f)',
+    f'f = {OWN_FILE}\nf.write(shown(p))',
+])
+def test_a_masked_value_into_a_file_the_heredoc_opens_is_clean(tmp_path, opener, line):
+    assert check(tmp_path, SHOWN_PY.format(opener, line), env=P_ENV) == []
+
+
+@pytest.mark.parametrize("opener", ["", " > /tmp/o", ' >> "$GITHUB_OUTPUT"', ' >> "$GITHUB_STEP_SUMMARY"'])
+def test_a_write_to_a_file_the_heredoc_opens_is_not_read(tmp_path, opener):
+    # Not covered, as on develop: a write that isn't a named print isn't read.
+    assert check(tmp_path, SHOWN_PY.format(opener, f'f = {OWN_FILE}\nf.write(p)'), env=P_ENV) == []
+
+
+@pytest.mark.parametrize("line", [
+    # A path that names a standard stream after all.
+    'print(f"x {p}", file=open("//dev/stdout", "w"))',
+    'print(f"x {p}", file=open("/./dev/stderr", "w"))',
+    'print(f"x {p}", file=open("../../../../dev/stderr", "w"))',
+    'os.chdir("/")\nprint(f"x {p}", file=open("dev/stderr", "w"))',
+    'print(f"x {p}", file=open(rb"/dev/stderr", "w"))',
+    'print(f"x {p}", file=open("/\\x64ev/stderr", "w"))',
+    'print(f"x {p}", file=open("/tmp/o", "w", opener=lambda a, b: 2))',
+    # A name bound to a file, rebound to a stream.
+    f'f = {OWN_FILE}\nx = 1; f = sys.stderr\nprint(f"x {{p}}", file=f)',
+    f'f = {OWN_FILE}\ng = lambda f=sys.stderr: print(f"x {{p}}", file=f)\ng()',
+    f'f = {OWN_FILE}\nmatch sys.stderr:\n    case f:\n        print(f"x {{p}}", file=f)',
+    f'f = {OWN_FILE}\ndef g(\n    f,\n):\n    print(f"x {{p}}", file=f)\ng(sys.stderr)',
+    f'f = {OWN_FILE}\ndef g(\n    f=sys.stderr,\n):\n    print(f"x {{p}}", file=f)\ng()',
+    f'f = {OWN_FILE}\nexec("f = sys.stderr")\nprint(f"x {{p}}", file=f)',
+    f'f = {OWN_FILE}\nglobals().update(f=sys.stderr)\nprint(f"x {{p}}", file=f)',
+    f'f = {OWN_FILE}\nsetattr(sys.modules[__name__], "f", sys.stderr)\nprint(f"x {{p}}", file=f)',
+    # Names bound otherwise, as the first cut of #511 already refused.
+    f'f = {OWN_FILE}\nf = sys.stderr\nprint(f"x {{p}}", file=f)',
+    f'f = {OWN_FILE}\nif p:\n    f, g = sys.stderr, 1\nprint(f"x {{p}}", file=f)',
+    'from sys import stderr as out\nwith open("/tmp/f", "w") as out:\n    print(f"x {p}", file=out)',
+    'f = open(f"/dev/{p}", "w")\nprint(f"x {p}", file=f)',
+    'f = open("/proc/self/fd/2", "w")\nprint(f"x {p}", file=f)',
+])
+def test_a_file_that_may_be_a_stream_is_read(tmp_path, line):
+    # The bypasses of an "own file" exception (#511): every one reaches the log.
+    assert check(tmp_path, SHOWN_PY.format("", line), env=P_ENV) == ["p"]
+
+
+@pytest.mark.parametrize("line, name", [
+    (f'print(print("x", p), file={OWN_FILE})', "print"),
+    (f'print(sys.stderr.write(p), file={OWN_FILE})', "sys.stderr.write"),
+    (f'print(f"{{print(p)}}", file={OWN_FILE})', "print"),
+])
+def test_a_print_nested_in_a_print_to_a_file_is_read(tmp_path, line, name):
+    # The inner print reaches the log whatever the outer one's file is.
+    assert check(tmp_path, SHOWN_PY.format("", line), env=P_ENV) == [name, guard.LEADING]
+
+
+def test_a_print_to_a_stream_path_reaches_an_env_file_unmasked(tmp_path):
+    # `//dev/stdout` is the heredoc's stdout: the env file.
+    run = SHOWN_PY.format(' >> "$GITHUB_OUTPUT"', 'print(f"x={p}", file=open("//dev/stdout", "w"))')
+    assert check(tmp_path, run, env=P_ENV) == ["p"]
+
+
+@pytest.mark.parametrize("value, stream", [
+    ("sys.stdout", "stdout"), ("sys.__stdout__", "stdout"), ("( sys.stdout )", "stdout"),
+    ("sys.stderr", "stderr"), ("sys.__stderr__", "stderr"), ("((sys.stderr))", "stderr"),
+    ('open("out.txt", "w")', "unknown"), ("io.open('out.txt')", "unknown"), ("out", "unknown"),
+    ("err", "unknown"), ("stderr", "unknown"), ("sys.stderr if c else sys.stdout", "unknown"),
+    ("open(2, 'w')", "unknown"), ('open("/dev/stdout", "w")', "unknown"), ('open(path, "w")', "unknown"),
+    ('open("a").buffer', "unknown"), ("(sys.stderr).buffer", "unknown"),
+])
+def test_file_stream(value, stream):
+    assert guard.file_stream(value) == stream
+
+
+@pytest.mark.parametrize("opener", [" > /tmp/o", ' >> "$GITHUB_OUTPUT"', ' >> "$GITHUB_STEP_SUMMARY"'])
+@pytest.mark.parametrize("call", [
+    'print(\n    f"x {p}",\n    file=sys.stderr)',
+    'print("x",\n      p,\n      file=sys.stderr)',
+    'print("x", p,\n      end="\\n", file=sys.stderr)',
+    'print("x",\n      p,\n      file=sys.__stderr__)',
+    'print("x",\n      p,\n      file=err)',
+])
+def test_a_stderr_file_on_a_continuation_line_makes_the_call_a_log_line(tmp_path, opener, call):
+    # The stream is read from the joined call, not from its first line (#511):
+    # the call is a log line whatever the heredoc's stdout does.
+    run = SHOWN_PY.format(opener, f"err = sys.stderr\n{call}")
+    write(tmp_path, REL, workflow(run, env=P_ENV))
+    log = [f for f in guard.audit(tmp_path, ())[0] if "log line or env-file" in f["message"]]
+    [body] = guard.bodies_of(tmp_path, tmp_path / REL)
+    first = body.first_line + next(u.index for u in guard.Checker(body, [body], (), set()).units
+                                   if u.text.startswith("print("))
+    assert [(f["line"], f["message"].split("`")[1]) for f in log if f["line"] == first] == [(first, "p")]
+
+
+@pytest.mark.parametrize("opener", [" > /tmp/o", ' >> "$GITHUB_OUTPUT"'])
+def test_a_masked_stderr_call_over_lines_stays_clean(tmp_path, opener):
+    call = 'print("x",\n      shown(p),\n      file=sys.stderr)'
+    assert check(tmp_path, SHOWN_PY.format(opener, call), env=P_ENV) == []
+    shutil.rmtree(tmp_path / ".github")
+    # Its stdout twin into a file is no log line.
+    call = 'print("x",\n      p,\n      file=sys.stdout)'
+    assert check(tmp_path, SHOWN_PY.format(" > /tmp/o", call), env=P_ENV) == []
+
+
+def test_a_print_inside_a_string_literal_is_refused_although_harmless(tmp_path):
+    # Documented under "Refused although harmless": calls are found by name.
+    assert check(tmp_path, SHOWN_PY.format("", 'msg = "use print(p)"'), env=P_ENV) == ["p", guard.LEADING]
+
+
+TRIPLE_QUOTED_STDERR = [
+    "print(p, end='''it's''', file=sys.stderr)",
+    'print(p, end="""it"s""", file=sys.stderr)',
+    "print(p, sep='''it's''', file=sys.stderr)",
+    "print(p, end=f'''it's''', file=sys.stderr)",
+    "print(p, end=rb'''it's''', file=sys.stderr)",
+    "print(p, end='''it's\n''', file=sys.stderr)",
+]
+
+
+@pytest.mark.parametrize("opener", [" > f.txt", " | cat"])
+@pytest.mark.parametrize("line", TRIPLE_QUOTED_STDERR)
+def test_a_triple_quoted_argument_does_not_hide_a_stderr_file(tmp_path, opener, line):
+    # A quote inside a Python triple quote left the scan in an open quote
+    # (#511): the call read as unclosed, `file=sys.stderr` as part of `end=`,
+    # and the print as a stdout one into the heredoc's file. Develop read it.
+    assert check(tmp_path, LOG_PY.replace("<<'PY'", "<<'PY'" + opener).format(line), env=P_ENV)[0] == "p"
+
+
+@pytest.mark.parametrize("line, expected", [
+    ("print(f\"x {p}\", '''it's''', file=sys.stderr)", ["p"]),
+    ("print(shown(p), end='''it's''', file=sys.stderr)", [guard.LEADING]),
+])
+def test_a_triple_quoted_argument_keeps_its_call_a_stderr_print(tmp_path, line, expected):
+    assert check(tmp_path, SHOWN_PY.format(" > f.txt", line), env=P_ENV) == expected
+
+
+@pytest.mark.parametrize("opener", ["", " > f.txt", ' >> "$GITHUB_OUTPUT"'])
+@pytest.mark.parametrize("line", [
+    "print(f\"x {shown(p)}\", end='''it's''', file=sys.stderr)",
+    "print('''it's a \"quote\"''', file=sys.stderr)",
+    "print(f'''it's {shown(p)}''', file=sys.stderr)",
+    "print(\"x\", '''it's''', sep=\"\"\" \"\"\", file=sys.stderr)",
+])
+def test_a_masked_or_literal_triple_quoted_stderr_print_is_clean(tmp_path, opener, line):
+    assert check(tmp_path, SHOWN_PY.format(opener, line), env=P_ENV) == []
+
+
+def test_a_pure_triple_quoted_literal_log_print_is_clean(tmp_path):
+    assert check(tmp_path, LOG_PY.format("print(f'''it's''')"), env=P_ENV) == []
+
+
+@pytest.mark.parametrize("text, close", [
+    ("print(p, end='''it's''', file=sys.stderr) # x", 41),
+    ('print(p, end="""a"b""")', 23),
+    ("print(p, end='''it's", None),
+    ("print('''a)''')", 15),
+])
+def test_call_close_reads_triple_quotes(text, close):
+    assert guard.call_close(text, len("print(")) == close
+
+
+def test_call_args_reads_triple_quotes():
+    text = "print(p, end='''it's, (''', file=sys.stderr)"
+    assert guard.call_args(text, len("print(")) == ["p", "end='''it's, ('''", "file=sys.stderr"]
+    assert guard.bracket_state("print('''a\n", len("print(")) == (1, "'''")
+    # Carried over a continuation line: a lone `'` doesn't end it, `'''` does.
+    assert guard.bracket_state("it's\nb'''), x", 0, 1, "'''") == (0, None)
+
+
+UNCLOSED = "print(p,\n" + '      "x",\n' * (guard.JOINED_LINES + 1) + "      file=sys.stderr)"
+
+
+@pytest.mark.parametrize("opener", [" > f.txt", " | cat"])
+def test_a_print_not_closed_in_the_joined_text_reaches_the_log(tmp_path, opener):
+    # Fails closed (#511): its `file=` may sit past the lines joined, so it is
+    # read as both streams, never as a stdout print into the heredoc's file.
+    assert check(tmp_path, LOG_PY.replace("<<'PY'", "<<'PY'" + opener).format(UNCLOSED), env=P_ENV) == [
+        "p", guard.LEADING]
+
+
+def test_a_print_not_closed_in_the_joined_text_is_read_both_ways_in_an_env_file_heredoc(tmp_path):
+    run = SHOWN_PY.format(' >> "$GITHUB_OUTPUT"', UNCLOSED)
+    write(tmp_path, REL, workflow(run, env=P_ENV))
+    [body] = guard.bodies_of(tmp_path, tmp_path / REL)
+    checker = guard.Checker(body, [body], (), set())
+    k = next(k for k, u in enumerate(checker.units) if u.text.startswith("print("))
+    [call] = guard.print_calls(checker.joined(k), "py")
+    assert call.unknown and call.read_by(True, False) and call.read_by(False, True)
+    assert checker.envfile_template(k) == ["p"]
+    assert checker.log_template(k) == ["p"]
+
+
+@pytest.mark.parametrize("opener", [" > f.txt", " | cat", ' >> "$GITHUB_OUTPUT"'])
+@pytest.mark.parametrize("line", [
+    'print(p, **{"file": sys.stderr})',
+    'kw = {"file": sys.stderr}\nprint(p, **kw)',
+    'print(p,\n      **kw)',
+])
+def test_a_spread_keyword_argument_makes_the_stream_unknown(tmp_path, opener, line):
+    # Fails closed (#511): `**` may carry any `file=`, so the call reaches the
+    # log whatever the heredoc's stdout does.
+    run = LOG_PY.replace("<<'PY'", "<<'PY'" + opener).format(line)
+    write(tmp_path, REL, workflow(run, env=P_ENV))
+    [body] = guard.bodies_of(tmp_path, tmp_path / REL)
+    checker = guard.Checker(body, [body], (), set())
+    k = next(k for k, u in enumerate(checker.units) if u.text.startswith("print("))
+    [call] = guard.print_calls(checker.joined(k), "py")
+    assert call.unknown
+    assert "p" in checker.log_template(k)
+    assert guard.main(["--root", str(tmp_path)]) == 1
+
+
+@pytest.mark.parametrize("opener, line", [
+    (" > f.txt", 'print(f"{d[")"]}", p, file=sys.stderr)'),
+    (" > f.txt", "print(\"x\", f\"{'''\")'''}\", p, file=sys.stderr)"),
+    (" | cat", 'print("x", f"{")"}", p, file=sys.stderr)'),
+    (" > f.txt", 'print("x", f"{shown(")")}", p, file=sys.stderr)'),
+])
+def test_a_same_quote_f_string_field_makes_the_stream_unknown(tmp_path, opener, line):
+    # Fails closed (#511): since Python 3.12 (PEP 701) a replacement field may
+    # hold the f-string's own quote; the scan ends the f-string there, closes
+    # the call early and loses `file=sys.stderr`. Such a call reaches the log.
+    run = SHOWN_PY.format(opener, line)
+    write(tmp_path, REL, workflow(run, env=P_ENV))
+    [body] = guard.bodies_of(tmp_path, tmp_path / REL)
+    checker = guard.Checker(body, [body], (), set())
+    k = next(k for k, u in enumerate(checker.units) if u.text.startswith("print("))
+    [call] = guard.print_calls(checker.joined(k), "py")
+    assert call.unknown and call.read_by(True, False) and call.read_by(False, True)
+    assert checker.log_template(k)
+    assert guard.main(["--root", str(tmp_path)]) == 1
+
+
+@pytest.mark.parametrize("text, found", [
+    ('print(f"{d[")"]}", p)', True),
+    ("print(f'{d[')']}')", True),
+    ("print(f\"{'''\")'''}\")", True),
+    ("print(F\"{x}\", rf\"{d[\"k\"]}\")", True),
+    ('print(f"""{d[""\"k""\"]}""")', True),
+    ("print(f\"{d['k']}\")", False),
+    ('print(f"""{"a"}""")', False),
+    ('print(f"{{")', False),
+    ('print(f"{{)}}", p)', False),
+    ('print(f"x {shown(p)!r:>{9}}")', False),
+    ("print(f'x {shown(p)} \"q\"')", False),
+    ('print("{" + p + "}")', False),
+    ('print(b"{\\"}")', False),
+])
+def test_same_quote_field_finds_only_the_pep_701_form(text, found):
+    assert guard.same_quote_field(text, len("print("), len(text)) is found
+
+
+@pytest.mark.parametrize("text, found", [
+    ('print(t"{d[")"]}", p)', True),
+    ('print(rt"{d[")"]}", p)', True),
+    ('print(rf"\\{d[")"]}", p)', True),
+    ('print(Rf"\\{d[")"]}", p)', True),
+    ('print(f"\\{d[")"]}", p)', True),
+    ("print(t\"{d['k']}\")", False),
+    ('print(f"\\N{LINE FEED}", p)', False),
+    ('print(rb"\\{")', False),
+])
+def test_same_quote_field_reads_t_strings_and_a_backslash_before_a_field(text, found):
+    # PEP 750 t-strings take fields as f-strings do, and a `\{` opens one
+    # all the same, in a raw f-string too; `\N{...}` is a named escape.
+    assert guard.same_quote_field(text, len("print("), len(text)) is found
+
+
+@pytest.mark.parametrize("lines", [
+    ['d = {")": 1}', 'print(rf"\\{d[")"]}", p, file=sys.stderr)'],
+    ['d = {")": 1}', 'print(fr"x\\{d[")"]}", p, file=sys.stderr)'],
+    ['d = {")": 1}', 'print(Rf"\\{d[")"]}", p, file=sys.stderr)'],
+    ["d = {')': 1}", "print(rf'\\{d[')']}', p, file=sys.stderr)"],
+    ['d = {")": 1}', 'print(f"\\{d[")"]}", p, file=sys.stderr)'],
+    ['d = {")": 1}', 'print(t"{d[")"]}", p, file=sys.stderr)'],
+    ['d = {")": 1}', 'print(rt"{d[")"]}", p, file=sys.stderr)'],
+    ['d = {")": 1}', 'print(f"{1 # }', ' + d[")"]}", p, file=sys.stderr)'],
+    ['print("see stderr:", p)'],
+    ['print(p)  # file=sys.stderr'],
+    ['print(p, "stderr", file=sys.stdout)'],
+])
+def test_a_print_whose_text_names_stderr_or_file_reaches_the_log(tmp_path, lines):
+    # The text backstop (#511): where the parse loses `file=sys.stderr` -- a
+    # `\{` in a raw f-string, a t-string, a `}` in a comment inside a field
+    # -- or the text names `stderr` or `file=` beside a stdout call, the
+    # call is read as reaching the log, whatever the heredoc's stdout does.
+    # `print("see stderr:", p)` into a file is harmless, refused fail-closed.
+    run = SHOWN_PY.format(" > f.txt", "\n".join(lines))
+    assert check(tmp_path, run, env=P_ENV) != []
+    assert guard.main(["--root", str(tmp_path)]) == 1
+
+
+@pytest.mark.parametrize("line", [
+    'print(f"x {shown(p)}", file=sys.stderr)',
+    'print(t"x {shown(p)}", file=sys.stderr)',
+    'print("x", file=sys.stderr)',
+    'print(p)',
+    'print("no stderr here", end="")',
+    'print("see stderr")',
+    'print("a", p, file=sys.stdout)',
+    'print(p); print("x", file=sys.stderr)',
+    'stderr_note = 1\nprint(p, stderr_note)',
+])
+def test_the_text_backstop_leaves_clean_prints_clean(tmp_path, line):
+    # A stdout print into a file is not a log line; the backstop only reads
+    # text up to the next print after a `;`, and a literal stays clean.
+    assert check(tmp_path, SHOWN_PY.format(" > f.txt", line), env=P_ENV) == []
+
+
+def test_the_text_backstop_takes_the_text_past_a_misread_close_as_a_value():
+    text = 'print(f"{1 # }\n + d[")"]}", p, file=sys.stderr)'
+    [call] = guard.print_calls(text, "py")
+    assert call.unknown and call.end == len(text)
+    assert call.args[-1] == '"]}", p, file=sys.stderr)'
+
+
+@pytest.mark.parametrize("line", [
+    'kw = {"file": sys.stderr}\nprint(p, \\\n      **kw)',
+    "print(p, \\\n  file=sys.stderr)",
+])
+def test_a_keyword_on_a_continued_line_is_read(tmp_path, line):
+    # A backslash continuation left `\` and the line end in front of the
+    # argument (#511), so neither `**kw` nor `file=` was seen as such and the
+    # stderr print counted as a stdout one into the heredoc's file.
+    assert "p" in check(tmp_path, LOG_PY.replace("<<'PY'", "<<'PY' > f.txt").format(line), env=P_ENV)
+
+
+def test_call_args_reads_a_line_continuation_as_a_space():
+    text = 'print(p, \\\n  file=sys.stderr, \\\n  **kw, end="\\\n")'
+    assert guard.call_args(text, len("print(")) == ["p", "file=sys.stderr", "**kw", 'end="\\\n"']
+
+
+@pytest.mark.parametrize("opener", ["", " > f.txt"])
+@pytest.mark.parametrize("line", [
+    'print(f"x {shown(p)}", \\\n  file=sys.stderr)',
+    'print("a", \\\n  "b", file=sys.stderr)',
+    "print(f'x {shown(p)} \"q\"', file=sys.stderr)",
+    'print(f"{{)}}", file=sys.stderr)',
+])
+def test_a_masked_or_literal_continued_or_quoted_stderr_print_is_clean(tmp_path, opener, line):
+    assert check(tmp_path, SHOWN_PY.format(opener, line), env=P_ENV) == []
+
+
+def test_a_different_quote_f_string_field_keeps_its_reading(tmp_path):
+    line = 'd = {"k": 1}\nprint(f"{d[\'k\']}")'
+    assert check(tmp_path, LOG_PY.format(line), env=P_ENV) == ["d", guard.LEADING]
+    [call] = guard.print_calls("print(f\"{d['k']}\")", "py")
+    assert not call.unknown and not call.to_stderr
+
+
+# --- #511: a heredoc whose stdout is piped into a command -------------------
+
+PIPED = [" | cat", " |& cat", " | tee out.log", " | jq . > out.json"]
+
+
+@pytest.mark.parametrize("opener", PIPED)
+@pytest.mark.parametrize("line, expected", [
+    ('print(f"::warning::{p}")', ["p"]),
+    ('print(f"x {p}")', ["p"]),
+    ("print(p)", ["p", guard.LEADING]),
+    ('sys.stdout.write(f"x {p}\\n")', ["p"]),
+])
+def test_a_python_heredoc_piped_into_a_command_reads_its_stdout_as_the_log(tmp_path, opener, line, expected):
+    # Develop flagged `::warning::` through the literal command on the line;
+    # with the strict reading the pipe hid every stdout print. `cat` prints it
+    # to the log at runtime, so a pipe is read as the log, failing closed.
+    run = LOG_PY.replace("<<'PY'", "<<'PY'" + opener).format(line)
+    assert check(tmp_path, run, env=P_ENV) == expected
+
+
+@pytest.mark.parametrize("opener", [" | cat", " |& cat"])
+@pytest.mark.parametrize("line", ["console.log(`::warning::${p}`);", "console.log(`x ${p}`);",
+                                  "process.stdout.write(`x ${p}\\n`);"])
+def test_a_node_heredoc_piped_into_a_command_reads_its_stdout_as_the_log(tmp_path, opener, line):
+    run = LOG_JS.replace("<<'JS'", "<<'JS'" + opener).format(line)
+    assert check(tmp_path, run, env=P_ENV) == ["p"]
+
+
+@pytest.mark.parametrize("opener", PIPED)
+@pytest.mark.parametrize("line", [
+    'print(f"x {shown(p)}")',
+    'print("fixed")',
+    'print("::notice::fixed", end="")',
+    'sys.stdout.write("x\\n")',
+])
+def test_a_masked_or_literal_print_piped_into_a_command_is_clean(tmp_path, opener, line):
+    assert check(tmp_path, SHOWN_PY.format(opener, line), env=P_ENV) == []
+
+
+@pytest.mark.parametrize("opener", [" | cat", " |& cat"])
+@pytest.mark.parametrize("line", ["console.log(`x ${shown(p)}`);", "console.log('fixed');"])
+def test_a_masked_or_literal_node_print_piped_into_a_command_is_clean(tmp_path, opener, line):
+    run = LOG_JS_SHOWN.replace("<<'JS'", "<<'JS'" + opener).format(line)
+    assert check(tmp_path, run, env=P_ENV) == []
+
+
+TEE_ENV = ' | tee -a "$GITHUB_OUTPUT"'
+
+
+def test_a_heredoc_teed_into_an_env_file_is_read_as_the_log_as_well(tmp_path):
+    # `tee` writes the env file and its stdout, the log: the entry is read as
+    # one (`shown(p)` is clean there) and as a log line, which it begins.
+    run = SHOWN_PY.format(TEE_ENV, "print(shown(p))")
+    assert check(tmp_path, run, env=P_ENV) == [guard.LEADING]
+    write(tmp_path, REL, workflow(run, env=P_ENV))
+    [body] = guard.bodies_of(tmp_path, tmp_path / REL)
+    checker = guard.Checker(body, [body], (), set())
+    k = next(k for k, u in enumerate(checker.units) if u.text.startswith("print("))
+    unit = checker.units[k]
+    assert unit.dest == "envfile" and unit.piped and unit.stdout_logged()
+
+
+@pytest.mark.parametrize("line, expected", [
+    ('print(f"v={p}")', ["p"]),
+    ('print(f"v={shown(p)}")', []),
+])
+def test_a_raw_entry_teed_into_an_env_file_is_a_finding(tmp_path, line, expected):
+    assert check(tmp_path, SHOWN_PY.format(TEE_ENV, line), env=P_ENV) == expected
+
+
+def test_a_redirected_env_file_heredoc_does_not_read_stdout_as_the_log(tmp_path):
+    # The env-file reading alone: no pipe, so stdout isn't the log and a
+    # masked entry doesn't begin a log line.
+    assert check(tmp_path, SHOWN_PY.format(' >> "$GITHUB_OUTPUT"', "print(shown(p))"), env=P_ENV) == []
+
+
+def test_a_heredoc_teed_into_the_summary_is_read_as_the_log_as_well(tmp_path):
+    run = SHOWN_PY.format(' | tee -a "$GITHUB_STEP_SUMMARY"', 'print(f"x {p}")')
+    # Read by the summary rule and by the log rule both.
+    assert sorted(check(tmp_path, run, env=P_ENV)) == ["p", "p"]
