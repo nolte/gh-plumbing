@@ -116,13 +116,18 @@ none
 | B5 regression: `(( N==1 ))`, `( N=lit )` make a name constant | diff review @ 80e2194 | fixed directly (6c46d8e) | fixtures R1, R2: develop 1, 80e2194 0, c5f19dd 1 | — |
 | B6 env-file heredoc prints read laxly (concatenation, second print, continuation, `end=`) | diff review @ 80e2194 | fixed directly (6c46d8e): strict reader shared with the summary rule | fixtures E1–E4: 0 → 1 | — |
 | N1 `"a"#` read as a comment; N2 `tee --append` / `dd of=`; N3 heredoc delimiters and interpreters | diff review @ 80e2194 | fixed directly (6c46d8e); rest named under "Not covered" | developer tests; not re-run one by one by the orchestrator | — |
-| Log-line Python/Node prints: only the first call on a line, no continuation lines, no `end=`/`sep=`; exists on develop | diff review @ 80e2194 (B6, log side) | named under "Not covered"; follow-up issue pending operator decision | reviewer observed on develop and head | pending |
+| Log-line Python/Node prints: only the first call on a line, no continuation lines, no `end=`/`sep=`; exists on develop | diff review @ 80e2194 (B6, log side) | named under "Not covered"; follow-up issue pending operator decision | reviewer observed on develop and head; orchestrator fixture exit 0 on develop and branch | #511 |
 | R2-B1 function head with a name outside `FUNCTION_NAME` (`x@y()`, `a/b()`, `f+()`) bypasses both function rules | diff review @ a41de8a75ee000ae2f173084e8d29e0429deb26b | fixed directly (1cee6df) | orchestrator fixture: exit 0 at a41de8a, exit 1 at 1cee6df | — |
 | R2-N1 stderr of an env-file heredoc routed into the env file (`2>&1`, `2>>`, `&>>`) read only as log | diff review @ a41de8a | fixed directly (1cee6df); stderr via an enclosing group's redirect named under "Not covered" | 6 fixtures 0 → 1, masked forms 0 → 0 (re-run by orchestrator) | — |
 | R2-P1 Python/Node heredoc with unquoted delimiter: shell expansion unread; exists on develop | diff review @ a41de8a | fixed directly (1cee6df): `<unquoted heredoc>` finding, fail-closed | 5 fixtures 0 → 1, no-expansion control 0 (re-run by orchestrator) | — |
 | R2-N2 stdout under an alias (`sys.__stdout__`, `file=out`, `from sys import stdout`); R2-P2 mask line inside a multi-line string or backtick; R2-P4 literal in pipeline/background/uncalled function makes a name constant | diff review @ a41de8a | named under "Not covered" (1cee6df) | reviewer fixtures, exit 0 on develop and a41de8a | — |
 | R2-D1 docstring on case-arm literals wrong; R2-R2 `json.dumps`/`JSON.stringify` refused unlisted | diff review @ a41de8a | docstring corrected (1cee6df) | — | — |
 | R2-R1 unreadable blocks (multi-line `$( … )`, keyword-led string lines) refuse every mask in the body | diff review @ a41de8a | accepted: fails closed, already under "Refused although harmless"; no hit on the tree | reviewer fixtures r01, r05, r12 | — |
+| R3 heredoc ended on `  PY` / `PY ` (`.strip()`), later lines unread; exists on develop | diff review @ 0dd993b4bc371a0f307dc9291a7d3d7294a54803 | fixed directly (825510e): exact delimiter, tabs only for `<<-` | orchestrator fixture H06: 0 → 1; fixtures_r3.py all as expected | — |
+| R3 `>&` to an env file, `2>&01`, `2>/dev/stdout`, `/proc/self/fd/1` not read as env-file routing; exists on develop | diff review @ 0dd993b | fixed directly (825510e) | fixtures_r3.py (re-run by orchestrator) | — |
+| R3 `exec 2>>`, other-fd routing, process substitution, logging/warnings/raise, piped interpreter, redirect before command, `sys.stderr = sys.stdout`, `2>&1` into the summary | diff review @ 0dd993b | named under "Not covered" (825510e) | reviewer fixtures, exit 0 before and after | — |
+| R3 `<<P"Y"` read as delimiter `P`: harmless `$1` body refused | diff review @ 0dd993b | accepted, fails closed; under "Refused although harmless" | reviewer fixture f06 | — |
+| R4 env-file write inside `$(...)` in an unquoted shell heredoc body to a plain file; exists on develop | delta review @ 825510e27f334f58a6ea1c921c948c9b7647445f | named under "Not covered" (e2cf127) | reviewer fixture p06, exit 0 before and after | — |
 
 ## Dispatch log
 
@@ -133,3 +138,8 @@ none
 2026-11-21 review findings dispatched to nolte-engineering:fullstack-developer — committed 6c46d8e, c5f19dd; orchestrator re-run at c5f19dd: 15 fixtures exit 1, tree exit 0, 717 passed
 2026-11-22 diff review @ a41de8a by an independent read-only agent, security brief — 1 blocking (B1, reproduced by orchestrator), 2 non-blocking, 3 pre-existing, 2 regressions (1 documented, fail-closed); triage approved by operator
 2026-11-22 review-2 findings dispatched to nolte-engineering:fullstack-developer — committed 1cee6df; orchestrator re-run at 1cee6df: 22 fixtures as expected, tree exit 0, 747 passed
+2026-11-22 diff review @ 0dd993b (code commit 1cee6df) by an independent read-only agent, security brief — 0 blocking, 0 regressions, 9 pre-existing bypasses; H06 reproduced by orchestrator; triage approved by operator
+2026-11-22 review-3 findings dispatched to nolte-engineering:fullstack-developer — committed 825510e; orchestrator re-run: tree exit 0, 766 passed, fixtures_r3.py all as expected
+2026-11-22 delta review @ 825510e by an independent read-only agent — 0 blocking, 0 regressions, 1 pre-existing gap (R4)
+2026-11-22 R4 docstring dispatched to nolte-engineering:fullstack-developer — committed e2cf127 (docstring only)
+2026-11-22 follow-up issue #511 filed (operator approved): lax reading of Python/Node log prints
