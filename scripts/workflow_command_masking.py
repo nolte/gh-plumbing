@@ -32,7 +32,10 @@ Predicate: EVERY line of a `run:` body that
     or `sys.stdout/stderr.write(...)`, a Node `console.*(...)` or
     `process.stdout/stderr.write(...)` -- stdout counting when the heredoc's
     own stdout is not redirected; a stdout print into a plain file or a
-    pipe is not read --
+    pipe is not read. Such a print is read as strictly as an env-file line
+    (below, #511): every print call on the line, every argument that is not
+    one plain string literal, `end=`, `sep=` and the continuation lines of
+    the call --
   * is a line of a Python or Node heredoc whose stdout goes to one of the
     env files above (#507): redirected there (`>`, `>>`, `>|`, `>&`), piped into
     `tee` with the file among its arguments (`tee -a`, `tee --append`, `tee
@@ -47,7 +50,7 @@ Predicate: EVERY line of a `run:` body that
     stderr print must be `shown(...)` -- with the canonical definition in
     that heredoc -- or `len(...)`, or a name on ALLOWED. So `"v=" + p`,
     `"v=%s" % p` and `.format(p)` are findings there; its stderr prints are
-    log lines, read as below, unless the line that opens the heredoc sends
+    log lines, read as above, unless the line that opens the heredoc sends
     stderr into an env file as well (`2>>`, `&>`/`&>>` or `>&` there, or
     `2>&1`, `2>&01`, `2>/dev/stdout`, `2>/dev/fd/1`, `2>/proc/self/fd/1` or
     `|&` with stdout going there): then they are read as strictly as its
@@ -129,7 +132,13 @@ Two rules hold per line, whatever its names:
     leading whitespace before it looks for `::`, and no mask touches `::`. A
     literal with a non-space character must come first (`echo "x $v"`,
     `printf 'gh: %s'`, `print(f"  - {v}")`); the few lines that start with a
-    value are on ALLOWED under the name `<leading value>`, with the reason;
+    value are on ALLOWED under the name `<leading value>`, with the reason.
+    In a Python or Node heredoc this holds for every log print call on the
+    line (#511), each taken to start a line, and after every line end the
+    printed text holds: a line-end escape in a literal (`f"ok\\n{v}"`), a
+    `sep=` that holds one, a value joined by `+` to a literal that ends in
+    one; the parts formatted in by `%`, `.format(...)` or a Node `console`
+    `%s` count as values;
   * `$(shown "...")` must not sit directly next to a literal `#` or `[` or
     another `$(shown "...")`, quotes in between included -- `'#'` followed by
     a masked `#[x` re-forms `##[` (`<mask seam>`).
@@ -186,7 +195,7 @@ literal, Python's `end=` and `sep=`, and every f-string or template-literal
 part on the line outside a stderr print must be a call of the helper. Whether
 a print goes to stderr is read from its name or its `file=` argument, never
 from other text on the line. An env-file heredoc is read the same way, with
-`shown(...)` as the helper.
+`shown(...)` as the helper, and so are the log prints of any heredoc (#511).
 
 A name with no assignment in the body and no `env:` entry -- a runner
 variable, a positional parameter -- is a finding unless ALLOWED names it. An
@@ -256,7 +265,8 @@ Not covered (each would need a parser this script doesn't have):
   * `shell: python` steps and other non-bash `shell:` values;
   * in the step summary: a bare name passed to a Node or Python print on a
     continuation line of the call (an f-string or template part there is
-    read; an env-file heredoc joins the lines of such a call), a heredoc
+    read; an env-file heredoc and a log print join the lines of such a
+    call), a heredoc
     that opens the summary file itself (`fs.appendFileSync`,
     `open(os.environ["GITHUB_STEP_SUMMARY"], "a")`) instead of printing to a
     redirected stdout, and a summary written by a script run from a file --
@@ -266,23 +276,19 @@ Not covered (each would need a parser this script doesn't have):
     `eval` or `source` (shell), `exec` or an import machinery call (Python)
     or `require`/`eval` (Node); and a `case` compound redirected there (its
     arms read as commands, so that one errs towards a finding);
-  * on a log line -- a Python or Node print to stderr, or to a heredoc
-    stdout that isn't redirected -- only the first print call on a line is
-    read, and of it only f-strings, template literals and bare arguments on
-    that line: a second print call on the same line (`print("a"); print(p,
-    file=sys.stderr)`), the continuation lines of a call, Python's `end=`
-    and `sep=`, `print (` with a space, a `console` method other than `log`,
-    `info`, `warn`, `error` and `debug` (`console.dir`, `console.table`),
-    and Python string concatenation, `%`, `.format(...)` and `+` in Node
-    are not read (on a summary or env-file line each is refused);
+  * on a log line, a Python or Node heredoc whose stdout the guard reads as
+    going to a file though bash sends it to the log: `>&2 2>> f` sends stdout
+    to the log's stderr and only then stderr to f, but the `>>` reads as a
+    stdout redirect, so its stdout prints are not read (#511 found it);
   * a heredoc fed to an interpreter the guard doesn't name -- only
     `python*`, `pypy*`, `node`, `deno` and `bun` are read (`ruby`, `perl`,
     `php`, `uv run -` without the word `python`): with a quoted delimiter
     its lines are data, with an unquoted one shell text; nor a delimiter
     that starts with a digit or holds a character other than a letter, a
     digit, `_`, `-` or `.`;
-  * in an env-file heredoc, a bare name on a continuation line of a print
-    call more than JOINED_LINES lines below its start, and a stderr print in
+  * in an env-file heredoc or a log print, a bare name on a continuation
+    line of a print call more than JOINED_LINES lines below its start; in an
+    env-file heredoc, a stderr print in
     a heredoc whose stderr reaches the env file other than through a
     redirect on the line that opens it -- through a redirect of an enclosing
     group or compound (`{ ...; } >> "$GITHUB_OUTPUT" 2>&1`), an earlier
@@ -358,13 +364,19 @@ heredoc reading err towards a finding, #507):
     assignment in a subshell the print is outside of (`x=lit; ( x="$V" );
     echo "x $x"`) still stops the walk back and voids the constant rule,
     though it can't reach the print;
-  * in an env-file heredoc, a stdout print argument built from literals or
-    from `shown(...)` by concatenation, `%` or `.format(...)` (`"v=" +
-    shown(p)`) -- put `shown(...)` in an f-string or template literal
-    instead -- and an f-string or template part outside any print (`msg =
-    f"v={p}"`), as on a summary line; so is a value encoded for the entry,
+  * in an env-file heredoc, and in a log print of any heredoc (#511), a
+    print argument built from literals or from `shown(...)` by
+    concatenation, `%` or `.format(...)` (`"v=" + shown(p)`,
+    `"n=" + str(len(p))`) -- put `shown(...)` in an f-string or template
+    literal instead; the finding names the whole expression, not a value
+    an ALLOWED entry would name -- and an f-string or template part
+    outside any print on such a line (`msg = f"v={p}"`), as on a summary
+    line; in an env-file heredoc so is a value encoded for the entry,
     `print(f"matrix={json.dumps(m)}")` or ``console.log(`matrix=${JSON.stringify(m)}`)``,
     though JSON escapes every line end -- mask it as well, or add the name to ALLOWED;
+  * a log print that follows one on its line ending without a line end
+    (`print("x", end=""); print(shown(p))`): every print call is taken to
+    start a line, so a value first in it is a `<leading value>`;
   * a stderr print of a heredoc whose opener names `2>&1` or `|&` anywhere,
     also where stderr stays on the log (`2>&1 >> "$GITHUB_OUTPUT"`): read as
     an env-file entry and as a log line both;
