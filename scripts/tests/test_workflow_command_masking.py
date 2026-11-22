@@ -283,6 +283,15 @@ def test_a_masked_element_does_not_mask_the_array(tmp_path, run):
     assert check(tmp_path, run) == ["x"]
 
 
+def test_a_background_job_on_the_line_before_does_not_make_the_mask_conditional(tmp_path):
+    # Only `&&`, `||` and `|` continue a list onto the next line; `&` ends it.
+    run = f'{HELPER}\nx="$VALUE"\nsleep 1 &\nx=$(shown "$VALUE")\necho "::error::$x"'
+    assert check(tmp_path, run) == []
+    for tail in ("&&", "||", "|"):
+        shutil.rmtree(tmp_path / ".github")
+        assert check(tmp_path, run.replace("sleep 1 &", f"true {tail}")) == ["x"]
+
+
 @pytest.mark.parametrize("unbalanced", [
     'v="$(\n  cat f\n)"',        # a substitution over lines: its `)` reads as a closer
     "jq '\n  if . then 1 else 2 end\n' f",  # a quoted string over lines, its words read as keywords

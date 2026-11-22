@@ -1795,7 +1795,7 @@ class Checker:
         command (`x=$(shown "$x") cmd` sets x for cmd only) -- and the last
         assignment to the name on its line. A line that ends in `&&`, `||` or
         `|` continues its list on the next line, so a mask that starts a line
-        after one is conditional too.
+        after one is conditional too; one ending in `&` doesn't.
         """
         segments = self.blocks.segments.get(j)
         if segments is None:
@@ -1805,8 +1805,8 @@ class Checker:
             previous = self.blocks.segments.get(p)
             if previous is None or not any(seg[1].strip() or seg[2] for seg in previous):
                 continue  # not a shell statement line (heredoc text, comment, blank)
-            if len(previous) > 1 and not previous[-1][1].strip():
-                carried = previous[-2][2]
+            if len(previous) > 1 and not previous[-1][1].strip() and previous[-2][2] in ("&&", "||", "|"):
+                carried = previous[-2][2]  # `cmd &` ends its list: the next line runs anyway
             break
         found: tuple[int, ...] | None = None
         for i, (text, _, separator) in enumerate(segments):
