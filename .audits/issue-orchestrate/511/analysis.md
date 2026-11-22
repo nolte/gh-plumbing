@@ -96,5 +96,19 @@ none
 
 | Finding | Source | Outcome | Reproduction | Issue |
 |---|---|---|---|---|
+| A line starting `def shown(` hid its prints | diff review @ `0b6babc` | fixed directly (`ea1bd4c`) | `def shown(v): print(f"x {p}", file=sys.stderr)`: develop 1 / HEAD 0 | — |
+| Any `file=` not literally sys.stdout/stderr was treated as a file of its own (`sys.__stderr__`, `(sys.stderr)`, alias) | diff review @ `0b6babc` | fixed directly (`15e29c6`) | `print(f"x {p}", file=sys.__stderr__)`: 1/0 | — |
+| `file=sys.stderr` on a continuation line wasn't read | diff review @ `0b6babc` | fixed directly (`86fc6ee`) | multi-line print with `> /tmp/o`: 0/0 | — |
+| Own-file exception for `file=open(...)` bypassable (path forms, rebinding, nested prints; `//dev/stdout` into GITHUB_OUTPUT) | diff review @ `86fc6ee` | fixed directly by removing the exception (`51cb2ad`) | `print(f"x={p}", file=open("//dev/stdout","w"))` with `>> "$GITHUB_OUTPUT"`: 1/0 | — |
+| Triple quotes broke the quote scan, `file=sys.stderr` lost | diff review @ `51cb2ad` | fixed directly (`4cf4d9d`, also unclosed / `**` → unknown) | `print(p, end='''it's''', file=sys.stderr)` with `> f.txt`: 1/0 | — |
+| PEP 701 same-quote f-string field; `\`-continued `**kw` / `file=` | delta review @ `4cf4d9d` | fixed directly (`4bbb63e`) | `print(f"{d[")"]}", p, file=sys.stderr)`: 1/0 | — |
+| `\{` in raw f-strings, t-strings, `}` in a field comment | delta review @ `4bbb63e` | fixed directly by the text backstop (`f7c11aa`) | `print(rf"\{d[")"]}", p, file=sys.stderr)`: 1/0 | — |
+| A heredoc piped to a command (`\| cat`) wasn't read | matrix re-run @ `f7c11aa` | fixed directly (`e412bc2`, pipe = log) | `print(f"::warning::{p}")` with `\| cat`: 1/0 | — |
+| `> f.txt` with a literal `::cmd::` line no longer flagged | matrix re-run @ `e412bc2` | dismissed: output goes to the file, not the log; develop's flag was a false positive | `print(f"::warning::{p}")` with `> f.txt`: 1/0 | — |
+| Final review: no blocking findings | diff review @ `e412bc2` | no findings that block; ALLOWED-emptied sets develop = HEAD (107) | ~600 fixtures, 12 000 fuzz bodies | — |
+| `)` in a `#` comment ends the call early; multi-line summary print not joined; stdout to `/dev/stderr` read as a file; `piped` not inherited through `{ … } \| cat`; further stderr paths (logging, raise, assert, os.write, throw) | diff review @ `e412bc2` | filed (all 0/0 on develop) | `print(p,  # )` ⏎ `file=sys.stderr)` with `> f.txt`: 0/0 | #513 |
 
 ## Dispatch log
+
+- 2026-11-22 P1+P2 dispatched to nolte-engineering:fullstack-developer — strict log reader (`6b522fa`), docstring (`0b6babc`); sweep 5 heredocs / 17 log-print lines / 0 hits
+- 2026-11-22 review fixes dispatched to nolte-engineering:fullstack-developer — `ea1bd4c`, `15e29c6`, `86fc6ee`, `51cb2ad`, `4cf4d9d`, `4bbb63e`, `f7c11aa`, `e412bc2`; 1111 tests, tree exit 0
