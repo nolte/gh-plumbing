@@ -209,7 +209,11 @@ Not covered (each would need a parser this script doesn't have):
   * a summary write inside a command substitution: the body of `$(...)` is
     blanked before sinks are read, so `out=$(echo "$V" | tee -a
     "$GITHUB_STEP_SUMMARY")` and `x=$(echo "$V" >> "$GITHUB_STEP_SUMMARY")`
-    pass with a raw value;
+    pass with a raw value; likewise an env-file write inside a `$(...)` in
+    the body of an unquoted heredoc whose own destination is a plain file or
+    the log (`cat > f <<EOF` then `$(echo "v=$V" >> "$GITHUB_OUTPUT")`):
+    bash runs it, but a heredoc line is a sink only by the heredoc's own
+    destination, and redirects inside its `$(...)` aren't read;
   * a leading value the line-start rule can't see: an `echo` whose first word
     is built by a command substitution or a variable holding the whole
     message, and a call site of a helper such as fork-guard's or setup-vale's
