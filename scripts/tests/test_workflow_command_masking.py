@@ -2028,6 +2028,70 @@ def test_same_quote_field_finds_only_the_pep_701_form(text, found):
     assert guard.same_quote_field(text, len("print("), len(text)) is found
 
 
+@pytest.mark.parametrize("text, found", [
+    ('print(t"{d[")"]}", p)', True),
+    ('print(rt"{d[")"]}", p)', True),
+    ('print(rf"\\{d[")"]}", p)', True),
+    ('print(Rf"\\{d[")"]}", p)', True),
+    ('print(f"\\{d[")"]}", p)', True),
+    ("print(t\"{d['k']}\")", False),
+    ('print(f"\\N{LINE FEED}", p)', False),
+    ('print(rb"\\{")', False),
+])
+def test_same_quote_field_reads_t_strings_and_a_backslash_before_a_field(text, found):
+    # PEP 750 t-strings take fields as f-strings do, and a `\{` opens one
+    # all the same, in a raw f-string too; `\N{...}` is a named escape.
+    assert guard.same_quote_field(text, len("print("), len(text)) is found
+
+
+@pytest.mark.parametrize("lines", [
+    ['d = {")": 1}', 'print(rf"\\{d[")"]}", p, file=sys.stderr)'],
+    ['d = {")": 1}', 'print(fr"x\\{d[")"]}", p, file=sys.stderr)'],
+    ['d = {")": 1}', 'print(Rf"\\{d[")"]}", p, file=sys.stderr)'],
+    ["d = {')': 1}", "print(rf'\\{d[')']}', p, file=sys.stderr)"],
+    ['d = {")": 1}', 'print(f"\\{d[")"]}", p, file=sys.stderr)'],
+    ['d = {")": 1}', 'print(t"{d[")"]}", p, file=sys.stderr)'],
+    ['d = {")": 1}', 'print(rt"{d[")"]}", p, file=sys.stderr)'],
+    ['d = {")": 1}', 'print(f"{1 # }', ' + d[")"]}", p, file=sys.stderr)'],
+    ['print("see stderr:", p)'],
+    ['print(p)  # file=sys.stderr'],
+    ['print(p, "stderr", file=sys.stdout)'],
+])
+def test_a_print_whose_text_names_stderr_or_file_reaches_the_log(tmp_path, lines):
+    # The text backstop (#511): where the parse loses `file=sys.stderr` -- a
+    # `\{` in a raw f-string, a t-string, a `}` in a comment inside a field
+    # -- or the text names `stderr` or `file=` beside a stdout call, the
+    # call is read as reaching the log, whatever the heredoc's stdout does.
+    # `print("see stderr:", p)` into a file is harmless, refused fail-closed.
+    run = SHOWN_PY.format(" > f.txt", "\n".join(lines))
+    assert check(tmp_path, run, env=P_ENV) != []
+    assert guard.main(["--root", str(tmp_path)]) == 1
+
+
+@pytest.mark.parametrize("line", [
+    'print(f"x {shown(p)}", file=sys.stderr)',
+    'print(t"x {shown(p)}", file=sys.stderr)',
+    'print("x", file=sys.stderr)',
+    'print(p)',
+    'print("no stderr here", end="")',
+    'print("see stderr")',
+    'print("a", p, file=sys.stdout)',
+    'print(p); print("x", file=sys.stderr)',
+    'stderr_note = 1\nprint(p, stderr_note)',
+])
+def test_the_text_backstop_leaves_clean_prints_clean(tmp_path, line):
+    # A stdout print into a file is not a log line; the backstop only reads
+    # text up to the next print after a `;`, and a literal stays clean.
+    assert check(tmp_path, SHOWN_PY.format(" > f.txt", line), env=P_ENV) == []
+
+
+def test_the_text_backstop_takes_the_text_past_a_misread_close_as_a_value():
+    text = 'print(f"{1 # }\n + d[")"]}", p, file=sys.stderr)'
+    [call] = guard.print_calls(text, "py")
+    assert call.unknown and call.end == len(text)
+    assert call.args[-1] == '"]}", p, file=sys.stderr)'
+
+
 @pytest.mark.parametrize("line", [
     'kw = {"file": sys.stderr}\nprint(p, \\\n      **kw)',
     "print(p, \\\n  file=sys.stderr)",

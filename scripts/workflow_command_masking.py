@@ -341,10 +341,17 @@ Not covered (each would need a parser this script doesn't have):
     parentheses too); any other `file=` is read as stdout and as stderr both,
     so it reaches the log and, in an env-file or summary heredoc, that sink
     as well -- and so is a call whose `)` isn't found in its joined lines,
-    one with a `**` argument, or one with an f-string whose replacement
-    field holds that f-string's own quote (`f"{d[")"]}"`, legal since
-    Python 3.12), whose `file=` the guard can't see (the `**` argument
-    itself is read as a value, as it may carry `end=` or `sep=`). An
+    one with a `**` argument, or one with an f-string or t-string (PEP 750,
+    read like an f-string) whose replacement field holds its own quote
+    (`f"{d[")"]}"`, legal since Python 3.12), whose `file=` the guard can't
+    see (the `**` argument itself is read as a value, as it may carry `end=`
+    or `sep=`). A text backstop fails closed where that reading and the
+    text disagree: a print whose text -- from its name to its parsed `)`,
+    or on to the end of its joined lines where anything but a `;` and the
+    next print follows that `)` -- names `stderr` or a `file=` its parse
+    doesn't read as `file=sys.stderr` is read as stdout and as stderr both
+    (`sys.stderr.write` and `SystemExit` are stderr by name), and text past
+    the `)` is read as one more argument, a value. An
     argument after a backslash line continuation is read as written, so
     `file=` or `**` there counts. Not covered there: `sys.stdout` or `sys.stderr` rebound (after
     `sys.stdout = sys.stderr` an env-file heredoc's stdout prints reach the
@@ -403,6 +410,12 @@ heredoc reading err towards a finding, #507):
   * a log print that follows one on its line ending without a line end
     (`print("x", end=""); print(shown(p))`): every print call is taken to
     start a line, so a value first in it is a `<leading value>`;
+  * a stdout print whose text names `stderr` or a second `file=` without
+    a `file=sys.stderr` argument (#511, the text backstop): `print("see
+    stderr:", p)` or `print(p)  # file=sys.stderr` with the heredoc's stdout
+    into a file reads as a log print of `p`, and a print with anything but
+    `;` and the next print after its `)` on the line takes that text as a
+    value as well -- keep the word out of the call's line, or mask the value;
   * a stderr print of a heredoc whose opener names `2>&1` or `|&` anywhere,
     also where stderr stays on the log (`2>&1 >> "$GITHUB_OUTPUT"`): read as
     an env-file entry and as a log line both;
@@ -1536,10 +1549,10 @@ def shell_refs(text: str, mask: re.Pattern = SHELL_MASKED) -> list[tuple[str, bo
 
 
 def template_exprs(text: str, lang: str) -> list[str]:
-    """Interpolated expressions of a Python f-string or a JS template literal."""
+    """Interpolated expressions of a Python f-string or t-string (PEP 750), or a JS template literal."""
     exprs = []
     opener = "${" if lang == "js" else "{"
-    if lang == "py" and not re.search(r"\b[rR]?[fF][rR]?['\"]", text):
+    if lang == "py" and not re.search(r"\b[rR]?[fFtT][rR]?['\"]", text):
         return []
     if lang == "js" and "`" not in text:
         return []
@@ -1576,12 +1589,16 @@ def quote_open(text: str, i: int) -> str | None:
 
 
 def same_quote_field(text: str, start: int, end: int) -> bool:
-    """A Python f-string in text[start:end] has a replacement field holding its own quote.
+    """A Python f-string or t-string in text[start:end] has a replacement field holding its own quote.
 
-    Legal since Python 3.12 (PEP 701): `f"{d[")"]}"`, `f"{'''")'''}"`. The
-    call scans end the f-string at that inner quote, so they misread where
-    its call closes (#511). A `{{`/`}}` escape is text, and a field quoting
-    with the other kind (`f"{d['k']}"`) is a form older Pythons know too.
+    Legal since Python 3.12 (PEP 701): `f"{d[")"]}"`, `f"{'''")'''}"`, and
+    in a t-string (PEP 750, `t"{d[")"]}"`). The call scans end the f-string
+    at that inner quote, so they misread where its call closes (#511). A
+    `{{`/`}}` escape is text, and a field quoting with the other kind
+    (`f"{d['k']}"`) is a form older Pythons know too. A backslash before a
+    `{` doesn't escape it (`rf"\\{d[")"]}"`, `f"\\{x}"`): the field opens
+    there all the same; only `\\N{...}` of a string that isn't raw is an
+    escape (a named character), not a field.
     """
     i = start
     while i < end:
@@ -1594,11 +1611,18 @@ def same_quote_field(text: str, start: int, end: int) -> bool:
             k -= 1
         prefix = text[k:i].lower()
         i += len(quote)
-        if not (len(prefix) <= 2 and set(prefix) <= set("rbfu") and "f" in prefix):
+        if not (len(prefix) <= 2 and set(prefix) <= set("rbftu") and ("f" in prefix or "t" in prefix)):
             i = _literal_end(text, i, quote)
             continue
         depth = 0
         while i < end:
+            if text[i] == "\\" and not depth and text.startswith("{", i + 1):
+                i += 1  # the `{` opens a field all the same
+                continue
+            if text[i] == "\\" and not depth and "r" not in prefix and text.startswith("N{", i + 1):
+                close = text.find("}", i)
+                i = close + 1 if close >= 0 else end
+                continue
             if text[i] == "\\":
                 i += 2
                 continue
@@ -1752,7 +1776,8 @@ class PrintCall:
     keyword: dict[str, str]  # Python's keyword arguments: `file`, `end`, `sep`, `flush`
     to_stderr: bool  # by its name or a `file=` naming stderr
     # A `file=` the guard can't tell (or can't see: unclosed, `**`, a PEP 701
-    # same-quote f-string field): stdout, stderr or a file.
+    # same-quote f-string field, text naming `stderr` or `file=` the parse
+    # missed): stdout, stderr or a file.
     unknown: bool = False
 
     def reaches_log(self, dest: str) -> bool:
@@ -1789,8 +1814,42 @@ def file_stream(value: str) -> str:
     return "unknown"
 
 
+# A `file=` in the text of a Python print call, as its text backstop reads it (#511).
+FILE_KEYWORD = re.compile(r"\bfile\s*=")
+
+
+def call_region(text: str, lang: str, close: int | None) -> int:
+    """Where the text a print call may span ends, for the text backstop (#511).
+
+    Just before the next print call when only a `;` or space stands between
+    the parsed close and it (`print(p); print("x", file=sys.stderr)`);
+    anything else after the close -- an argument the scan misread as past it,
+    a comment, an operator -- may be the call's own, so the region runs to
+    the end of the joined text, as it does for a call not closed there.
+    """
+    if close is None:
+        return len(text)
+    following = (PY_STRICT_PRINT if lang == "py" else JS_STRICT_PRINT).search(text, close)
+    stop = following.start() if following else len(text)
+    return stop if text[close:stop].strip() in ("", ";") else len(text)
+
+
 def print_calls(text: str, lang: str) -> list[PrintCall]:
-    """Every print call on the text, outermost only (`print (` and every `console` method included)."""
+    """Every print call on the text, outermost only (`print (` and every `console` method included).
+
+    A Python print call is read fail-closed (#511) where the parse and the
+    text can disagree: a call not closed in the joined text, one spreading
+    `**` keyword arguments, or one whose close the scan can't trust -- an
+    f-string or t-string field holding its own quote (PEP 701) -- may name
+    any `file=`, so its stream is unknown. So is one whose text -- from its
+    name to the end of `call_region` -- names `stderr` or a `file=` the
+    parsed call doesn't read as `file=sys.stderr`: a stdout call (by
+    default, or by `file=sys.stdout` where that text names `stderr` or a
+    second `file=`) whose text says otherwise is read as reaching the log.
+    Where that text runs past the parsed close, the call is taken to run to
+    the end of it, the part past the close read as one more argument, a value.
+    `sys.stderr.write` and `SystemExit` are stderr by their name.
+    """
     calls: list[PrintCall] = []
     last = 0
     for m in (PY_STRICT_PRINT if lang == "py" else JS_STRICT_PRINT).finditer(text):
@@ -1801,17 +1860,25 @@ def print_calls(text: str, lang: str) -> list[PrintCall]:
                    for a in args if lang == "py" and KEYWORD_ARG.match(a)}
         name = re.sub(r"\s+", "", m.group(1))
         close = call_close(text, m.end())
+        end = len(text) if close is None else close
         if lang == "py" and (close is None or any(a.startswith("**") for a in args)
                              or same_quote_field(text, m.end(), close)):
-            # Fails closed (#511): a call not closed in the joined text, one
-            # spreading `**` keyword arguments, or one whose close the scan
-            # can't trust -- an f-string field holding the f-string's own
-            # quote (PEP 701) -- may name any `file=`.
             stream = "unknown"
         else:
             stream = file_stream(keyword["file"]) if "file" in keyword else "stdout"
+        if lang == "py" and name not in STDERR_PRINTS and stream != "stderr":
+            # The text backstop: any disagreement between the parse and the
+            # text reads the call as reaching the log.
+            region = call_region(text, lang, close)
+            told = stream == "stdout" and "file" in keyword  # a recognised `file=sys.stdout`
+            spoken = text[m.start():region]
+            if re.search(r"\bstderr\b", spoken) or len(FILE_KEYWORD.findall(spoken)) > told:
+                stream = "unknown"
+                if region > end:
+                    args = args + [text[end:region].strip()]
+                    end = region
         calls.append(PrintCall(
-            m.start(), m.end(), len(text) if close is None else close, name, args, keyword,
+            m.start(), m.end(), end, name, args, keyword,
             name in STDERR_PRINTS or stream == "stderr", stream == "unknown"))
         last = calls[-1].end
     return calls
@@ -1824,7 +1891,7 @@ KEYWORD_ARG = re.compile(r"^[A-Za-z_]+\s*=(?!=)")
 VALUE = "\x00"
 LINE_END_ESCAPE = re.compile(
     r"\\(?:[nr]|x0[aAdD]|u000[aAdD]|u\{0*[aAdD]\}|0?1[25](?![0-7])|N\{(?:LINE FEED|CARRIAGE RETURN|LF|CR)\})")
-LITERAL_OPEN = re.compile("([rRbBfFuU]{0,2})('''|\"\"\"|['\"`])")
+LITERAL_OPEN = re.compile("([rRbBfFtTuU]{0,2})('''|\"\"\"|['\"`])")
 PERCENT_CONVERSION = re.compile(r"%(?:\([^)]*\))?[-#0 +]*(?:\*|[0-9]+)?(?:\.(?:\*|[0-9]+))?[diouxXeEfFgGcrsa]")
 CONSOLE_CONVERSION = re.compile(r"%[sdifjoOc]")
 
@@ -1920,7 +1987,7 @@ def printed_skeleton(expr: str, lang: str, console_format: bool = False) -> str:
             end = _literal_end(text, lit.end(), quote)
             closed = text.startswith(quote, end - len(quote)) and end - len(quote) >= lit.end()
             content = text[lit.end():end - len(quote)] if closed else text[lit.end():end]
-            formatted = "f" in prefix or quote == "`"
+            formatted = "f" in prefix or "t" in prefix or quote == "`"
             if formatted:
                 content = _interpolated(content, lang)
             if "r" not in prefix:
@@ -1963,7 +2030,7 @@ def leading_print(call: PrintCall, lang: str) -> bool:
 
 def single_literal(arg: str, lang: str) -> bool:
     """One string literal and nothing else; a template's or f-string's parts are read on their own."""
-    prefix = r"[rRbBfFuU]{0,2}" if lang == "py" else ""
+    prefix = r"[rRbBfFtTuU]{0,2}" if lang == "py" else ""
     quotes = ("'", '"') if lang == "py" else ("'", '"', "`")
     if lang == "py" and any(re.fullmatch(prefix + q * 3 + r"(?:(?!" + q * 3 + r")[^\\]|\\.)*" + q * 3, arg.strip(),
                                          re.DOTALL) for q in quotes):
@@ -2506,12 +2573,15 @@ class Checker:
         Every print call on the line counts. Which ones this reads: stdout
         calls where `stdout` is set (the summary, an env file, or the log when
         the heredoc's stdout goes there); calls to stderr -- by their name, or
-        a `file=sys.stderr` argument, not that text in a comment -- where
+        a `file=sys.stderr` argument (that text in a comment makes a stdout
+        call one to either stream, not a stderr call) -- where
         `stderr` is set (the log, or an env file the heredoc sends its stderr
         into as well); calls to a `file=` the guard can't name as a stream
         (`file_stream`), calls not closed in the joined text, calls with a
-        `**` argument and calls with a same-quote f-string field
-        (`same_quote_field`) where either is set. In a call read, every argument,
+        `**` argument, calls with a same-quote f-string field
+        (`same_quote_field`) and calls whose text names `stderr` or `file=`
+        where the parse saw no `file=sys.stderr` (`print_calls`) where
+        either is set. In a call read, every argument,
         and Python's `end=` and `sep=`, must be one plain literal or a call of
         the helper (`calls`, which counts only where `defined`). Template and f-string parts anywhere else on the
         line, outside the calls not read, must be helper calls too.
