@@ -814,6 +814,65 @@ def test_a_quoted_or_expansion_free_python_heredoc_is_not_refused_as_unquoted(tm
     assert guard.UNQUOTED_NAME not in check(tmp_path, run)
 
 
+# --- #507 third review: heredoc end lines, `>&` and stderr aliases ------------
+
+@pytest.mark.parametrize("run, expected", [
+    # An indented end line inside a Python string: bash reads on, so the
+    # print after it is an env-file entry, not shell text.
+    ('python3 - <<PY >> "$GITHUB_OUTPUT"\n_ = """\n  PY\n"""\nprint("v=" + """$VALUE""")\nPY',
+     ['"v=" + """$VALUE"""', guard.UNQUOTED_NAME]),
+    ("python3 - <<'PY' >> \"$GITHUB_OUTPUT\"\nimport os\n_ = \"\"\"\n  PY\n\"\"\"\np = os.environ[\"VALUE\"]\n"
+     "print(\"v=\" + p)\nPY", ['"v=" + p']),
+    # A trailing space doesn't end it either.
+    ("python3 - <<'PY' >> \"$GITHUB_OUTPUT\"\nimport os\n_ = \"\"\"\nPY \n\"\"\"\np = os.environ[\"VALUE\"]\n"
+     "print(\"v=\" + p)\nPY", ['"v=" + p']),
+    # A shell heredoc the same way: `k=$VALUE` is a line of it, not an assignment.
+    ('cat >> "$GITHUB_OUTPUT" <<EOF\nk=fixed\n  EOF\nk=$VALUE\nEOF', ["VALUE"]),
+    # `<<-` strips leading tabs only: an end line indented by spaces stays a heredoc line.
+    ('cat >> "$GITHUB_OUTPUT" <<-EOF\nk=fixed\n  EOF\nk=$VALUE\nEOF', ["VALUE"]),
+])
+def test_a_heredoc_ends_only_on_its_exact_delimiter(tmp_path, run, expected):
+    assert check(tmp_path, run) == expected
+
+
+@pytest.mark.parametrize("run", [
+    'cat > f <<-EOF\n\tk=fixed\n\tEOF\necho "v=$VALUE" >> "$GITHUB_OUTPUT"',
+    "python3 - <<-'PY' >> \"$GITHUB_OUTPUT\"\n\tprint(\"v=fixed\")\n\tPY\necho \"v=$VALUE\" >> \"$GITHUB_OUTPUT\"",
+])
+def test_a_tab_indented_end_line_closes_a_dash_heredoc(tmp_path, run):
+    # The heredoc closes, so the echo after it is read as shell.
+    assert check(tmp_path, run) == ["VALUE"]
+
+
+@pytest.mark.parametrize("redirect", [
+    '>& "$GITHUB_OUTPUT"',
+    '>&"$GITHUB_ENV"',
+    '>> "$GITHUB_OUTPUT" 2>&01',
+    '>> "$GITHUB_OUTPUT" 2>/dev/stdout',
+    '>> "$GITHUB_OUTPUT" 2>/dev/fd/1',
+    '>> "$GITHUB_OUTPUT" 2>/proc/self/fd/1',
+])
+def test_stderr_aliased_into_an_env_file_is_read_strictly(tmp_path, redirect):
+    assert check(tmp_path, STDERR_PY.format(redirect, 'print("v=" + p, file=sys.stderr)')) == ['"v=" + p']
+
+
+def test_heredoc_stdout_through_ampersand_redirect_is_an_env_file(tmp_path):
+    # bash reads `>& word` as `&> word`: stdout goes there as well.
+    assert check(tmp_path, STDERR_PY.format('>& "$GITHUB_OUTPUT"', 'print("v=" + p)')) == ['"v=" + p']
+
+
+def test_a_shell_write_through_ampersand_redirect_is_an_env_file(tmp_path):
+    assert check(tmp_path, 'echo "v=$VALUE" >& "$GITHUB_OUTPUT"') == ["VALUE"]
+    assert check(tmp_path, f'{HELPER}\necho "v=$(shown "$VALUE")" >& "$GITHUB_OUTPUT"') == []
+
+
+@pytest.mark.parametrize("redirect", ["2>&1", ">&2", "2>/dev/stdout", '>&2 2>> /tmp/log'])
+def test_stderr_or_stdout_kept_on_the_log_is_no_env_file(tmp_path, redirect):
+    # No env file on the line: the heredoc is a log heredoc, its stderr print a log line.
+    assert check(tmp_path, STDERR_PY.format(redirect, 'print("v=" + p, file=sys.stderr)')) == []
+    assert check(tmp_path, STDERR_PY.format(redirect, 'print("v=" + p)')) == []
+
+
 # --- the allow-list ----------------------------------------------------------
 
 REL = ".github/workflows/reusable-w.yaml"

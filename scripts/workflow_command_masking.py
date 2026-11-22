@@ -22,8 +22,11 @@ Predicate: EVERY line of a `run:` body that
   * emits a workflow command (it carries `::<command>::` or
     `::<command> <params>::`),
   * writes to `$GITHUB_OUTPUT`, `$GITHUB_ENV`, `$GITHUB_STATE` or
-    `$GITHUB_PATH` -- a `{ ...; } >> "$GITHUB_OUTPUT"` group and a heredoc
-    written there count line by line -- or
+    `$GITHUB_PATH` (`>`, `>>`, `>|`, `>&`, `&>`, `tee`, `dd of=`) -- a `{
+    ...; } >> "$GITHUB_OUTPUT"` group and a heredoc written there count line
+    by line; a heredoc ends only on a line that is exactly its delimiter
+    (after stripping leading tabs for `<<-`), as in bash, so `  PY` or `PY `
+    is a line of it -- or
   * prints to the log: a shell `echo`/`printf` statement whose output is not
     piped or redirected to a file, a Python `print(...)`, `raise SystemExit(...)`
     or `sys.stdout/stderr.write(...)`, a Node `console.*(...)` or
@@ -31,7 +34,7 @@ Predicate: EVERY line of a `run:` body that
     own stdout is not redirected; a stdout print into a plain file or a
     pipe is not read --
   * is a line of a Python or Node heredoc whose stdout goes to one of the
-    env files above (#507): redirected there (`>`, `>>`, `>|`), piped into
+    env files above (#507): redirected there (`>`, `>>`, `>|`, `>&`), piped into
     `tee` with the file among its arguments (`tee -a`, `tee --append`, `tee
     -ai --`, `tee -a /dev/null "$GITHUB_OUTPUT"`) or into `dd ... of=`, or
     opened without a stdout redirect of its own inside a group or compound
@@ -45,8 +48,9 @@ Predicate: EVERY line of a `run:` body that
     that heredoc -- or `len(...)`, or a name on ALLOWED. So `"v=" + p`,
     `"v=%s" % p` and `.format(p)` are findings there; its stderr prints are
     log lines, read as below, unless the line that opens the heredoc sends
-    stderr into an env file as well (`2>>` or `&>`/`&>>` there, or `2>&1`
-    or `|&` with stdout going there): then they are read as strictly as its
+    stderr into an env file as well (`2>>`, `&>`/`&>>` or `>&` there, or
+    `2>&1`, `2>&01`, `2>/dev/stdout`, `2>/dev/fd/1`, `2>/proc/self/fd/1` or
+    `|&` with stdout going there): then they are read as strictly as its
     stdout prints --
 
 and interpolates a value. Each interpolated name must be one of the list
@@ -147,7 +151,8 @@ own stdout elsewhere -- openers and closers count anywhere at statement level
 (`echo "$v"; } >> ...` ends its group), and a closer redirected there whose
 opener the guard can't find is itself a finding (`<summary group>`); a line
 of a heredoc written there by a bare `cat`, or a Python or Node heredoc whose
-stdout goes there (their stderr prints stay log lines) -- also one opened
+stdout goes there (their stderr prints are read as log lines, though `2>&1`
+on the opener sends them into the summary too; that isn't read) -- also one opened
 inside such a group without a stdout redirect of its own -- may interpolate
 only names that are:
 
@@ -273,9 +278,20 @@ Not covered (each would need a parser this script doesn't have):
     digit, `_`, `-` or `.`;
   * in an env-file heredoc, a bare name on a continuation line of a print
     call more than JOINED_LINES lines below its start, and a stderr print in
-    a heredoc whose stderr reaches the env file through a redirect of an
-    enclosing group or compound (`{ ...; } >> "$GITHUB_OUTPUT" 2>&1`) rather
-    than of the line that opens it: read as a log line only;
+    a heredoc whose stderr reaches the env file other than through a
+    redirect on the line that opens it -- through a redirect of an enclosing
+    group or compound (`{ ...; } >> "$GITHUB_OUTPUT" 2>&1`), an earlier
+    `exec 2>> "$GITHUB_OUTPUT"`, another file descriptor (`3>>"$GITHUB_OUTPUT"
+    2>&3`) or a process substitution (`2> >(tee -a "$GITHUB_OUTPUT")`): read
+    as a log line only;
+  * in a heredoc whose stderr goes to an env file, stderr written other than
+    by a named print: by `logging`, `warnings.warn` or an uncaught `raise`
+    (its traceback), and every print after `sys.stderr = sys.stdout`;
+  * an interpreter fed by a pipe (`cat <<PY | python3 -`): the heredoc is
+    `cat`'s, read as data or shell text, and the interpreter's own stdout is
+    not followed; nor a redirect written before the command (`<<'PY' python3
+    - >> "$GITHUB_OUTPUT"`), since the interpreter is named only before the
+    `<<`;
   * an env file or the summary written by a command other than a
     redirect, `tee` or `dd of=` (`cp /dev/stdin "$GITHUB_OUTPUT"`,
     `sponge`, `install`), or by a `tee` whose arguments before the file
@@ -349,7 +365,11 @@ heredoc reading err towards a finding, #507):
     an env-file entry and as a log line both;
   * a `$` or backtick the shell leaves alone in an unquoted Python or Node
     heredoc (`\\$`, a `$` before a space or a quote): every one is refused --
-    quote the delimiter.
+    quote the delimiter;
+  * a delimiter quoted in part (`<<P"Y"`): bash takes it as the quoted
+    delimiter `PY`, the guard as the unquoted delimiter `P`, so a harmless
+    body with `$1` is refused as `<unquoted heredoc>` -- quote the whole
+    delimiter.
 
 Refused although harmless (the summary rule errs towards a finding):
 
@@ -378,12 +398,13 @@ import yaml
 
 # `::error::`, `::error title=x::`, `::add-mask::`, `::<token>::` (resume).
 COMMAND = re.compile(r"::[A-Za-z0-9][A-Za-z0-9_-]*(?:\s[^:\n]*)?::")
-# `>`, `>>` and the clobbering `>|` into the file; `tee` with any options or
-# other files before it (`tee -a`, `tee --append`, `tee -ai --`, `tee -a
-# /dev/null "$GITHUB_OUTPUT"`); `dd ... of=`.
+# `>`, `>>`, the clobbering `>|` and `>&` (bash reads `>&word` with a word
+# that isn't a number or `-` as `&>word`: stdout and stderr) into the file;
+# `tee` with any options or other files before it (`tee -a`, `tee --append`,
+# `tee -ai --`, `tee -a /dev/null "$GITHUB_OUTPUT"`); `dd ... of=`.
 TEE_TO = r"""\btee\b(?:\s+[^\s|;&<>]+)*?\s+|\btee\s*"""
 ENV_FILE = re.compile(
-    r"""(?:(?:>>|>\|?)\s*|""" + TEE_TO + r"""|\bdd\b[^|;&\n]*?\bof=)"""
+    r"""(?:(?:>>|>&|>\|?)\s*|""" + TEE_TO + r"""|\bdd\b[^|;&\n]*?\bof=)"""
     r"""["']?\$\{?GITHUB_(?:OUTPUT|ENV|STATE|PATH)\b\}?["']?""")
 # The same for the step summary.
 SUMMARY_FILE = re.compile(
@@ -443,12 +464,18 @@ PY_STRICT_PRINT = re.compile(r"\b(print|SystemExit|sys\.stdout\.write|sys\.stder
 JS_STRICT_PRINT = re.compile(r"\b(console\s*\.\s*[A-Za-z]+|process\.stdout\.write|process\.stderr\.write)\s*\(")
 STDERR_PRINTS = {"SystemExit", "sys.stderr.write", "console.error", "console.warn", "console.trace", "console.assert",
                  "process.stderr.write"}
-# A heredoc command that sends its stderr into an env file as well: `2>>` or
-# `&>`/`&>>` there, or -- its stdout going there -- `2>&1` or `|&` (read
-# wherever it stands, so `2>&1 >> "$GITHUB_OUTPUT"`, which keeps stderr on the
-# log, errs towards a finding).
+# A heredoc command that sends its stderr into an env file as well: `2>>`,
+# `&>`/`&>>` or `>&` there, or -- its stdout going there -- `2>&1` (`2>&01`
+# too: bash reads a file descriptor as a number), `2>/dev/stdout`,
+# `2>/dev/fd/1`, `2>/proc/self/fd/1` or `|&` (read wherever it stands, so
+# `2>&1 >> "$GITHUB_OUTPUT"`, which keeps stderr on the log, errs towards a
+# finding). `2>&1` or `>&2` alone, with no env file on the line, never
+# reaches this: the heredoc's stdout isn't an env file then.
 STDERR_TO_ENV_FILE = re.compile(
-    r"""(?:(?<![0-9])2>>?\|?|&>>?)\s*["']?\$\{?GITHUB_(?:OUTPUT|ENV|STATE|PATH)\b|(?<![0-9])2>&\s*1\b|\|&""")
+    r"""(?:(?<![0-9])0*2>>?\|?|&>>?|(?<![0-9])>&)\s*["']?\$\{?GITHUB_(?:OUTPUT|ENV|STATE|PATH)\b"""
+    r"""|(?<![0-9])0*2>&\s*0*1\b"""
+    r"""|(?<![0-9])0*2>>?\|?\s*["']?/(?:dev/stdout\b|dev/fd/0*1\b|proc/self/fd/0*1\b)"""
+    r"""|\|&""")
 # The most continuation lines an env-file heredoc's print call is joined over.
 JOINED_LINES = 50
 CAP = 200
@@ -869,11 +896,16 @@ def destination(text: str) -> str:
 def logical_lines(lines: list[str]) -> list[Logical]:
     out: list[Logical] = []
     i = 0
-    heredoc: tuple[str, str, str, int, bool] | None = None
+    # The delimiter, the heredoc's lang and destination, its opener's unit,
+    # whether the shell expands it, and whether it strips leading tabs (`<<-`).
+    heredoc: tuple[str, str, str, int, bool, bool] | None = None
     while i < len(lines):
         if heredoc is not None:
-            delimiter, lang, dest, origin, expands = heredoc
-            if lines[i].strip() == delimiter:
+            delimiter, lang, dest, origin, expands, tabs = heredoc
+            # bash ends a heredoc only on a line that IS the delimiter -- no
+            # leading or trailing space -- after stripping leading tabs for
+            # `<<-` (and only tabs). `  PY` or `PY ` is a line of the heredoc.
+            if (lines[i].lstrip("\t") if tabs else lines[i]) == delimiter:
                 heredoc = None
             else:
                 out.append(Logical(i, lines[i], lang, dest, origin, expands))
@@ -899,7 +931,7 @@ def logical_lines(lines: list[str]) -> list[Logical]:
             else:
                 # An unquoted one reads like any other shell line.
                 lang = "sh-heredoc" if expands else "data"
-            heredoc = (match.group(3), lang, dest, len(out) - 1, expands)
+            heredoc = (match.group(3), lang, dest, len(out) - 1, expands, match.group(0).startswith("<<-"))
         i += 1
     return out
 
