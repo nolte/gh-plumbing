@@ -1601,10 +1601,24 @@ def template_exprs(text: str, lang: str) -> list[str]:
             depth += {"{": 1, "}": -1}.get(text[j], 0)
             j += 1
         expr = text[start:j - 1].strip()
-        # Drop a format spec or conversion: {x!r}, {x:>8}.
-        expr = re.split(r"![rsa]$|:(?![^\[]*\])", expr)[0].strip() if lang == "py" else expr
-        exprs.append(expr)
+        exprs.append(field_expr(expr) if lang == "py" else expr)
         i = j
+
+
+FIELD_TAIL = re.compile(r"![rsa]\s*$|:(?![^\[]*\])")
+SELF_DOCUMENTING = re.compile(r"(?<![=<>!:])=\s*$")
+NAMED_CHARACTER = re.compile(r"\\N\{[A-Za-z0-9 -]+\}")
+
+
+def field_expr(field: str) -> str:
+    """The expression of a Python replacement field, as an ALLOWED entry names it.
+
+    A format spec or conversion is dropped (`{x!r}`, `{x:>8}`), and so is the
+    `=` of a self-documenting field (`{x=}`, `{x = !r}`), which prints the
+    expression's text before its value; `==`, `<=`, `>=`, `!=` and `:=` stay.
+    """
+    expr = FIELD_TAIL.split(field.strip())[0]
+    return SELF_DOCUMENTING.sub("", expr).strip()
 
 
 def named_escapes(text: str) -> dict[int, int]:
@@ -1613,8 +1627,13 @@ def named_escapes(text: str) -> dict[int, int]:
     In an f-string or t-string that isn't raw `f"v\\N{LINE FEED}{x}"` has one
     field, `x`: the braces of a named character are no field (#511). A raw
     one's `\\N{x}` is a backslash, an `N` and the field `x`, as is a
-    non-raw `\\\\N{x}` (an escaped backslash). A literal is read to its
-    first closing quote, as `_literal_end` does.
+    non-raw `\\\\N{x}` (an escaped backslash). A bytes literal has no
+    named characters: `b"\\N{"` is a backslash, an `N` and a `{`, so its `{`
+    is no escape and a field after the literal stays a field. An escape is
+    a name of letters, digits, spaces and hyphens closed by `}` (Python's
+    names and aliases); anything else -- a quote or the literal's end before
+    the `}` -- is no escape, so its `{` is read as a field. A literal is read
+    to its first closing quote, as `_literal_end` does.
     """
     spans: dict[int, int] = {}
     i = 0
@@ -1626,13 +1645,14 @@ def named_escapes(text: str) -> dict[int, int]:
         k = i
         while k > 0 and (text[k - 1].isalnum() or text[k - 1] == "_"):
             k -= 1
-        raw = "r" in text[k:i].lower()
+        prefix = text[k:i].lower()
+        named = "r" not in prefix and "b" not in prefix
         i += len(quote)
         while i < len(text) and not text.startswith(quote, i):
-            if text[i] == "\\" and not raw and text.startswith("N{", i + 1):
-                close = text.find("}", i)
-                spans[i + 2] = len(text) if close < 0 else close + 1
-                i = spans[i + 2]
+            escape = NAMED_CHARACTER.match(text, i) if named else None
+            if escape:
+                spans[i + 2] = escape.end()
+                i = escape.end()
                 continue
             i += 2 if text[i] == "\\" else 1
         i += len(quote)
@@ -1957,14 +1977,15 @@ LINE_END_ESCAPE = re.compile(
     r"\\(?:[nr]|x0[aAdD]|u000[aAdD]|u\{0*[aAdD]\}|0?1[25](?![0-7])|(U0000000[aAdD])|N\{([^{}]*)\})")
 
 
-def line_ends(content: str, lang: str) -> str:
+def line_ends(content: str, lang: str, data: bool = False) -> str:
     """A literal's content with every escape that writes a line end as a line end.
 
     Python's `\\U0000000a` and `\\N{...}` are escapes of Python only; a
     `\\N{...}` is one where its name resolves to a line feed or a carriage
     return as Python resolves it (#511): in any case and by an alias, so
     `\\N{line feed}`, `\\N{NEW LINE}`, `\\N{EOL}`, `\\N{END OF LINE}`, `\\N{nl}`
-    and `\\N{cr}` are, `\\N{BULLET}` isn't.
+    and `\\N{cr}` are, `\\N{BULLET}` isn't. A bytes literal's (`data`)
+    `\\N{...}` is no escape: `b"\\N{LINE FEED}"` writes it as written.
     """
     def end(m: re.Match[str]) -> str:
         if m.group(1) is None and m.group(2) is None:
@@ -1973,6 +1994,8 @@ def line_ends(content: str, lang: str) -> str:
             return m.group(0)
         if m.group(1) is not None:
             return "\n"
+        if data:
+            return m.group(0)
         try:
             char = unicodedata.lookup(m.group(2))
         except KeyError:
@@ -2006,7 +2029,8 @@ def _interpolated(content: str, lang: str, raw: bool = False) -> str:
     """An f-string's or template literal's content with every interpolation as VALUE.
 
     A `\\N{...}` of a Python f-string that isn't raw is a named character,
-    kept as written, not a field (`named_escapes`).
+    kept as written, not a field (`named_escapes`). A self-documenting field
+    (`{x=}`) prints its expression's text, then the value: `x=` and VALUE.
     """
     out, i = [], 0
     opener = "${" if lang == "js" else "{"
@@ -2015,22 +2039,24 @@ def _interpolated(content: str, lang: str, raw: bool = False) -> str:
             out.append(content[i:i + 2])
             i += 2
             continue
-        if content[i] == "\\" and lang == "py" and not raw and content.startswith(("\\", "N{"), i + 1):
-            close = content.find("}", i) if content.startswith("N{", i + 1) else i + 1
-            stop = len(content) if close < 0 else close + 1
-            out.append(content[i:stop])
-            i = stop
-            continue
+        if content[i] == "\\" and lang == "py" and not raw:
+            escape = NAMED_CHARACTER.match(content, i)
+            stop = escape.end() if escape else i + 2 if content.startswith("\\", i + 1) else None
+            if stop is not None:
+                out.append(content[i:stop])
+                i = stop
+                continue
         if lang == "py" and content.startswith(("{{", "}}"), i):
             out.append(content[i])
             i += 2
             continue
         if content.startswith(opener, i):
-            depth, i = 1, i + len(opener)
+            depth, start, i = 1, i + len(opener), i + len(opener)
             while i < len(content) and depth:
                 depth += {"{": 1, "}": -1}.get(content[i], 0)
                 i += 1
-            out.append(VALUE)
+            head = FIELD_TAIL.split(content[start:i - 1])[0] if lang == "py" else ""
+            out.append((head if SELF_DOCUMENTING.search(head) else "") + VALUE)
             continue
         out.append(content[i])
         i += 1
@@ -2089,7 +2115,7 @@ def printed_skeleton(expr: str, lang: str, console_format: bool = False) -> str:
             if formatted:
                 content = _interpolated(content, lang, "r" in prefix)
             if "r" not in prefix:
-                content = line_ends(content, lang)
+                content = line_ends(content, lang, "b" in prefix)
             content = content.replace("\r", "\n")
             i = end
             rest = text[i:].lstrip()

@@ -1785,6 +1785,88 @@ def test_template_exprs_skip_a_named_character(text, exprs):
     assert guard.template_exprs(text, "py") == exprs
 
 
+@pytest.mark.parametrize("line", [
+    'print(b"\\N{", f"{p}")',
+    'print(b"\\N{", f"{p}", "}")',
+    'print(b"\\N{", f"x{p}x}")',
+    'print(B"\\N{", f"{p}")',
+    'print(rb"\\N{", f"{p}")',
+    'print(Rb"\\N{", f"{p}")',
+    # A quote before the `}` ends the literal: no named character.
+    'print("\\N{", f"{p}")',
+])
+def test_a_bytes_literal_s_backslash_n_brace_hides_no_field(tmp_path, line):
+    # `b"\N{"` is a backslash, an `N` and a `{` (bytes have no named
+    # characters), so the f-string after it is read; at runtime it prints p.
+    assert check(tmp_path, LOG_PY.format(line), env=P_ENV) != []
+
+
+@pytest.mark.parametrize("text, spans", [
+    ('b"\\N{" + f"{x}"', {}),
+    ('B"\\N{" + f"{x}"', {}),
+    ('rb"\\N{" + f"{x}"', {}),
+    ('br"\\N{" + f"{x}"', {}),
+    ('"\\N{" + f"{x}"', {}),
+    ('f"\\N{A\\"}{x}"', {}),
+    ('f"\\N{LINE FEED}" + f"{x}"', {4: 15}),
+])
+def test_a_named_character_ends_within_its_literal_and_not_in_bytes(text, spans):
+    # Where it is no escape its `{` is read as a field, so `x` is read.
+    assert guard.named_escapes(text) == spans
+    assert any("x" in e for e in guard.template_exprs(text, "py"))
+
+
+@pytest.mark.parametrize("field, expr", [
+    ("x=", "x"),
+    ("x = ", "x"),
+    ("x=!r", "x"),
+    ("x = !r", "x"),
+    ("x=:>8", "x"),
+    ("d['k']=", "d['k']"),
+    ("a == b", "a == b"),
+    ("a <= b", "a <= b"),
+    ("a >= b", "a >= b"),
+    ("a != b", "a != b"),
+    ("x!r", "x"),
+    ("x:>8", "x"),
+])
+def test_a_self_documenting_field_is_named_by_its_expression(field, expr):
+    assert guard.field_expr(field) == expr
+
+
+def test_an_allowed_name_covers_its_self_documenting_field(tmp_path):
+    run = LOG_PY.format('x = os.environ["X"]\nprint(f"{x=}", file=sys.stderr)')
+    write(tmp_path, REL, workflow(run, env=P_ENV))
+    entry = guard.Allowed(REL, "x", reason="a number")
+    # `{x=}` prints `x=` before the value: the line starts with text.
+    assert names(tmp_path, [entry]) == []
+    run = LOG_PY.format('x = os.environ["X"]\nprint(f"{x=}{p}")')
+    write(tmp_path, REL, workflow(run, env=P_ENV))
+    assert [n for _, n in names(tmp_path, [entry])] == ["p"]
+
+
+@pytest.mark.parametrize("text, lang, leads", [
+    ('print(p, b"ok\\N{LINE FEED}")', "py", True),
+    ('print(b"ok\\N{LINE FEED}", shown(p))', "py", False),
+    ('print(b"ok\\N{LINE FEED}" + shown(p))', "py", False),
+    ('print(B"ok\\N{CARRIAGE RETURN}", shown(p))', "py", False),
+    ('print("ok\\N{LINE FEED}", shown(p))', "py", True),
+    ('print(b"ok\\n", shown(p))', "py", True),
+])
+def test_a_bytes_literal_s_backslash_n_is_no_line_end(text, lang, leads):
+    # Bytes have no named characters: `b"\N{LINE FEED}"` is that text. A
+    # first value starts the line as ever (`print(p, ...)`).
+    calls = guard.print_calls(text, lang)
+    assert len(calls) == 1
+    assert guard.leading_print(calls[0], lang) is leads
+
+
+def test_a_bytes_named_character_starts_no_line_in_a_workflow(tmp_path):
+    assert check(tmp_path, LOG_PY_SHOWN.format('print(b"ok\\N{LINE FEED}", shown(p))'), env=P_ENV) == []
+    shutil.rmtree(tmp_path / ".github")
+    assert check(tmp_path, LOG_PY_SHOWN.format('print("ok\\N{LINE FEED}", shown(p))'), env=P_ENV) == [guard.LEADING]
+
+
 def test_the_line_start_rule_holds_for_every_print_on_a_line(tmp_path):
     run = LOG_PY_SHOWN.format('print("ok"); print(shown(p))')
     assert check(tmp_path, run, env=P_ENV) == [guard.LEADING]
