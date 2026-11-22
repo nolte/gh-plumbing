@@ -338,16 +338,13 @@ Not covered (each would need a parser this script doesn't have):
     `sys.__stdout__.write(...)`, `from sys import stdout` then
     `stdout.write(...)`. A print's `file=` is read (#511): `sys.stdout` and
     `sys.__stdout__` are stdout, `sys.stderr` and `sys.__stderr__` stderr (in
-    parentheses too), an `open(...)` of a plain literal path outside `/dev/`
-    and `/proc/` -- inline, or bound to a name the heredoc binds to nothing
-    else -- a file of its own that isn't read; any other `file=` is read as
-    stdout and as stderr both, so it reaches the log and, in an env-file or
-    summary heredoc, that sink as well. Not covered there: a literal path
-    that is a standard stream anyway (a symlink to `/dev/stderr`), a stream
-    swapped under the file (`os.dup2`), and `sys.stdout` or `sys.stderr`
-    rebound (after `sys.stdout = sys.stderr` an env-file heredoc's stdout
-    prints reach the log, but are read as entries only, without the
-    line-start rule);
+    parentheses too); any other `file=` is read as stdout and as stderr both,
+    so it reaches the log and, in an env-file or summary heredoc, that sink
+    as well. Not covered there: `sys.stdout` or `sys.stderr` rebound (after
+    `sys.stdout = sys.stderr` an env-file heredoc's stdout prints reach the
+    log, but are read as entries only, without the line-start rule), and a
+    write to a file the heredoc opens that isn't a named print
+    (`f = open(...)` then `f.write(p)`), which isn't read at all;
   * a mask line that isn't a statement: `x=$(shown "$x")` on a line inside a
     quoted string over several lines or inside a backtick command
     substitution is read as a statement of its own, as a keyword there is
@@ -387,12 +384,13 @@ heredoc reading err towards a finding, #507):
     line; in an env-file heredoc so is a value encoded for the entry,
     `print(f"matrix={json.dumps(m)}")` or ``console.log(`matrix=${JSON.stringify(m)}`)``,
     though JSON escapes every line end -- mask it as well, or add the name to ALLOWED;
-  * a print to a file of its own the guard can't tell from a stream
-    (#511): `file=` an `open(...)` whose path isn't one plain literal
-    (`open(path, "w")`, `Path(p).open("w")`), or a name bound to an `open(...)`
-    that the heredoc also binds otherwise anywhere -- another assignment, a
-    `for` or `with ... as` target, an attribute or augmented assignment
-    (`f.mode = ...`, which reads as one) -- is read as stdout and stderr;
+  * a print into a file the heredoc opens itself (#511): `file=` an
+    `open(...)` of any path, or a name bound to one (`f = open("out.txt",
+    "w")`, `with open(...) as f`), is read as stdout and stderr both -- as a
+    log line, and in an env-file or summary heredoc as an entry or summary
+    line as well, since its path, its opener or a rebinding of the name can
+    make it a standard stream (`open("//dev/stdout", "w")`) -- write to the
+    file with `f.write(...)` of a masked value, or mask the printed value;
   * a print call's text inside a string literal (`msg = "use print(p)"`):
     print calls are found by name, not by a parser, so it reads as a print
     of `p` -- on a log line, and in an env-file or summary heredoc;
@@ -1460,7 +1458,6 @@ def joined_text(units: list[Logical], k: int) -> str:
 def sink_units(units: list[Logical]) -> set[int]:
     """Indices of units that emit a command, write an env file or print to the log."""
     redirected, sinks, _ = redirected_groups(units)
-    files = heredoc_files(units)
     for k, unit in enumerate(units):
         if unit.lang == "data" or is_comment(unit.text):
             continue
@@ -1483,8 +1480,7 @@ def sink_units(units: list[Logical]) -> set[int]:
             if unit.text.strip():
                 sinks.add(k)
         elif unit.lang in ("py", "js") and any(call.reaches_log(unit.dest)
-                                                for call in print_calls(joined_text(units, k), unit.lang,
-                                                                        files.get(unit.origin, frozenset()))):
+                                                for call in print_calls(joined_text(units, k), unit.lang)):
             # stderr is the log; stdout counts where the heredoc sends it to
             # it. Every print call on the line, read strictly (#511), each
             # with its continuation lines: `file=sys.stderr` can sit on one.
@@ -1667,118 +1663,30 @@ class PrintCall:
     args: list[str]
     keyword: dict[str, str]  # Python's keyword arguments: `file`, `end`, `sep`, `flush`
     to_stderr: bool  # by its name or a `file=` naming stderr
-    elsewhere: bool  # a `file=` that recognisably opens a file of its own (`file_stream`)
     unknown: bool = False  # a `file=` the guard can't tell: stdout, stderr or a file
 
     def reaches_log(self, dest: str) -> bool:
         """It prints to the log: to stderr, to a heredoc stdout that goes there, or -- unknown -- maybe either."""
-        return not self.elsewhere and (self.to_stderr or self.unknown or dest == "log")
+        return self.to_stderr or self.unknown or dest == "log"
 
     def read_by(self, stdout: bool, stderr: bool) -> bool:
         """A reading of the stdout prints, the stderr prints or both takes this call.
 
         A call to an unknown stream is taken by either: it fails closed.
         """
-        if self.elsewhere:
-            return False
         if self.unknown:
             return stdout or stderr
         return stderr if self.to_stderr else stdout
 
 
-# `open("out.txt", "w")`, `io.open(...)`: a file of its own -- unless its first
-# argument isn't one plain literal path, or names a standard stream
-# (`open("/dev/stderr")`, `open(2, "w")`, `open(os.environ["GITHUB_OUTPUT"])`).
-OPEN_CALL = re.compile(r"^(?:io\.)?open\(")
-STREAM_PATH = re.compile(r"^[rRbBuU]?['\"]/(?:dev|proc)/")
-# `with open(...) as f`, `with a, open(...) as f`.
-WITH_OPEN = re.compile(r"(?:\bwith\s+|,\s*)((?:io\.)?open\()")
-# A name bound otherwise: `for f in`, `as f`, `import f`, `def f`, `f :=`, `global f`.
-BINDING_WORD = r"\b(?:for|as|import|def|class|global|nonlocal|del)\b[^#=]*?\b{}\b|\b{}\s*:="
+def file_stream(value: str) -> str:
+    """Where a Python `file=` argument writes: `stdout`, `stderr` or `unknown`.
 
-
-def own_file(value: str) -> bool:
-    """`value` is an `open(...)` call of a plain literal path that names no standard stream."""
-    text = value.strip()
-    m = OPEN_CALL.match(text)
-    if not m or call_close(text, m.end()) != len(text):
-        return False
-    args = call_args(text, m.end())
-    return bool(args) and single_literal(args[0], "py") and not re.match(r"^[fF]", args[0]) \
-        and not STREAM_PATH.match(args[0])
-
-
-def _assignment_split(line: str) -> tuple[str, str] | None:
-    """(target, value) of a line's top-level `=`, not `==`, `!=`, `<=`, `>=` or a keyword argument."""
-    depth, quote, i = 0, None, 0
-    while i < len(line):
-        c = line[i]
-        if quote:
-            if c == "\\":
-                i += 2
-                continue
-            if c == quote:
-                quote = None
-        elif c in "'\"":
-            quote = c
-        elif c == "#":
-            return None
-        elif c in "([{":
-            depth += 1
-        elif c in ")]}":
-            depth -= 1
-        elif c == "=" and not depth and line[i + 1:i + 2] != "=" and (i == 0 or line[i - 1] not in "=!<>"):
-            return line[:i], line[i + 1:]
-        i += 1
-    return None
-
-
-def own_files(lines: list[str]) -> frozenset[str]:
-    """Names a Python heredoc binds to a file of its own (`own_file`), and to nothing else.
-
-    `f = open("out.txt", "w")` or `with open("out.txt") as f:` binds one; any
-    other binding of the name anywhere in the heredoc -- an assignment, a
-    tuple or augmented target, `for`, `as`, `import`, `:=`, `global` -- makes
-    it unknown, and a `file=` naming it is read as reaching the log (#511).
-    """
-    opened: set[str] = set()
-    other: set[str] = set()
-    for line in lines:
-        code = line.strip()
-        split = _assignment_split(code)
-        if split is not None:
-            target, value = (part.strip() for part in split)
-            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", target) and own_file(value):
-                opened.add(target)
-            else:
-                other.update(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", target.rstrip("+-*/%&|^@<> ")))
-        for m in WITH_OPEN.finditer(code):
-            close = call_close(code, m.end())
-            bound = re.match(r"\s+as\s+([A-Za-z_][A-Za-z0-9_]*)", code[close:]) if close else None
-            if bound and own_file(code[m.start(1):close]):
-                opened.add(bound.group(1))
-    for name in list(opened):
-        word = re.escape(name)
-        pattern = re.compile(BINDING_WORD.format(word, word))
-        for line in lines:
-            code = line.strip()
-            hits = list(pattern.finditer(code))
-            own = [m for m in WITH_OPEN.finditer(code)
-                   if (close := call_close(code, m.end())) and own_file(code[m.start(1):close])
-                   and re.match(r"\s+as\s+" + word + r"\b", code[close:])]
-            if len(hits) > len(own):
-                other.add(name)
-    return frozenset(opened - other)
-
-
-def file_stream(value: str, files: frozenset[str] = frozenset()) -> str:
-    """Where a Python `file=` argument writes: `stdout`, `stderr`, `file` (a file of its own) or `unknown`.
-
-    Fails closed (#511): only `sys.stdout`/`sys.__stdout__`, `sys.stderr`/
-    `sys.__stderr__` (in parentheses too), an `open(...)` of a plain literal
-    path (`own_file`) and a name the heredoc binds to one and nothing else
-    (`own_files`) are told; anything else -- `from sys import stderr`,
-    `err = sys.stderr`, `sys.stderr if c else sys.stdout` -- is unknown.
+    Fails closed (#511): only `sys.stdout`/`sys.__stdout__` and `sys.stderr`/
+    `sys.__stderr__` (in parentheses too) are told; anything else -- a file
+    the heredoc opens (`open("out.txt", "w")`, or a name bound to one),
+    `from sys import stderr`, `err = sys.stderr`, `sys.stderr if c else
+    sys.stdout` -- is unknown, and read as stdout and as stderr both.
     """
     text = value.strip()
     while text.startswith("(") and call_close(text, 1) == len(text):
@@ -1788,25 +1696,11 @@ def file_stream(value: str, files: frozenset[str] = frozenset()) -> str:
         return "stdout"
     if bare in ("sys.stderr", "sys.__stderr__"):
         return "stderr"
-    if own_file(text) or bare in files:
-        return "file"
     return "unknown"
 
 
-def heredoc_files(units: list[Logical]) -> dict[int, frozenset[str]]:
-    """`own_files` of every Python heredoc, by the unit that opens it (a unit's `origin`)."""
-    lines: dict[int, list[str]] = {}
-    for unit in units:
-        if unit.lang == "py" and not is_comment(unit.text):
-            lines.setdefault(unit.origin, []).append(unit.text)
-    return {origin: own_files(text) for origin, text in lines.items()}
-
-
-def print_calls(text: str, lang: str, files: frozenset[str] = frozenset()) -> list[PrintCall]:
-    """Every print call on the text, outermost only (`print (` and every `console` method included).
-
-    `files` are the names the heredoc binds to a file of its own (`own_files`).
-    """
+def print_calls(text: str, lang: str) -> list[PrintCall]:
+    """Every print call on the text, outermost only (`print (` and every `console` method included)."""
     calls: list[PrintCall] = []
     last = 0
     for m in (PY_STRICT_PRINT if lang == "py" else JS_STRICT_PRINT).finditer(text):
@@ -1816,10 +1710,10 @@ def print_calls(text: str, lang: str, files: frozenset[str] = frozenset()) -> li
         keyword = {a.split("=", 1)[0].strip(): a.split("=", 1)[1].strip()
                    for a in args if lang == "py" and KEYWORD_ARG.match(a)}
         name = re.sub(r"\s+", "", m.group(1))
-        stream = file_stream(keyword["file"], files) if "file" in keyword else "stdout"
+        stream = file_stream(keyword["file"]) if "file" in keyword else "stdout"
         calls.append(PrintCall(
             m.start(), m.end(), call_end(text, m.end()), name, args, keyword,
-            name in STDERR_PRINTS or stream == "stderr", stream == "file", stream == "unknown"))
+            name in STDERR_PRINTS or stream == "stderr", stream == "unknown"))
         last = calls[-1].end
     return calls
 
@@ -2017,7 +1911,6 @@ class Checker:
             for name, rhs in assignments(unit):
                 self.assigned.setdefault(name, []).append((j, rhs))
         self.shell_shown = any(u.lang == "sh" and u.text.strip() == SHELL_SHOWN for u in self.units)
-        self._files = heredoc_files(self.units)
         self.blocks = blocks_of(self.units)
         self._mask_paths: dict[tuple[str, int], tuple[int, ...] | None] = {}
         self._events: dict[str, tuple[list[tuple[int, bool]], set[int]]] = {}
@@ -2076,11 +1969,6 @@ class Checker:
             return text in [line.strip() for line in PY_MD.split("\n")] or text == PY_SHOWN_RETURN \
                 or PY_SHOWN.match(unit.text) is not None
         return False
-
-    def calls_on(self, k: int, text: str) -> list[PrintCall]:
-        """`print_calls` of text read on unit k, with the files its heredoc opens."""
-        unit = self.units[k]
-        return print_calls(text, unit.lang, self._files.get(unit.origin, frozenset()))
 
     def heredoc_id(self, k: int) -> int:
         """The first unit of the run of units in unit k's language that holds k."""
@@ -2510,20 +2398,20 @@ class Checker:
         the heredoc's stdout goes there); calls to stderr -- by their name, or
         a `file=sys.stderr` argument, not that text in a comment -- where
         `stderr` is set (the log, or an env file the heredoc sends its stderr
-        into as well). A call to a file of its own is never read. In a call
-        read, every argument, and Python's `end=` and `sep=`, must be one
-        plain literal or a call of the helper (`calls`, which counts only
-        where `defined`). Template and f-string parts anywhere else on the
+        into as well); calls to a `file=` the guard can't name as a stream
+        (`file_stream`) where either is set. In a call read, every argument,
+        and Python's `end=` and `sep=`, must be one plain literal or a call of
+        the helper (`calls`, which counts only where `defined`). Template and f-string parts anywhere else on the
         line, outside the calls not read, must be helper calls too.
         """
         unit = self.units[k]
         exprs: list[str] = []
         outside, last = [], 0
-        for call in self.calls_on(k, text):
+        for call in print_calls(text, unit.lang):
             outside.append(text[last:call.start])
             last = call.end
             if not call.read_by(stdout, stderr):
-                continue  # another sink's line (its rules read it), or a file of its own
+                continue  # another sink's line (its rules read it)
             exprs += template_exprs(text[call.opener_end:call.end], unit.lang)
             for arg in call.args:
                 if unit.lang == "py" and KEYWORD_ARG.match(arg):
@@ -2579,7 +2467,7 @@ class Checker:
             # Its stdout prints are entries, read strictly; its stderr prints
             # are log lines, read below as on any other heredoc line.
             names += self.envfile_template(k)
-            if not any(call.reaches_log(unit.dest) for call in self.calls_on(k, self.joined(k))):
+            if not any(call.reaches_log(unit.dest) for call in print_calls(self.joined(k), unit.lang)):
                 return names
         # Its log prints, read as strictly (#511).
         return names + self.log_template(k)
@@ -2588,7 +2476,7 @@ class Checker:
         """A log print call of a Python or Node line begins a line with a value (`leading_print`)."""
         unit = self.units[k]
         return any(call.reaches_log(unit.dest) and leading_print(call, unit.lang)
-                   for call in self.calls_on(k, self.joined(k)))
+                   for call in print_calls(self.joined(k), unit.lang))
 
 
 def _literal_head(quoted: str) -> str | None:
