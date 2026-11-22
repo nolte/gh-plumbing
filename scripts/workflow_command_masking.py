@@ -140,7 +140,9 @@ Two rules hold per line, whatever its names:
     value are on ALLOWED under the name `<leading value>`, with the reason.
     In a Python or Node heredoc this holds for every log print call on the
     line (#511), each taken to start a line, and after every line end the
-    printed text holds: a line-end escape in a literal (`f"ok\\n{v}"`), a
+    printed text holds: a line-end escape in a literal (`f"ok\\n{v}"`;
+    Python's `\\U0000000a` too, and a `\\N{...}` whose name Python resolves
+    to a line end, in any case or by an alias: `\\N{nl}`, `\\N{cr}`), a
     `sep=` that holds one, a value joined by `+` to a literal that ends in
     one; the parts formatted in by `%`, `.format(...)` or a Node `console`
     `%s` count as values;
@@ -394,7 +396,9 @@ heredoc reading err towards a finding, #507):
     concatenation, `%` or `.format(...)` (`"v=" + shown(p)`,
     `"n=" + str(len(p))`) -- put `shown(...)` in an f-string or template
     literal instead; the finding names the whole expression, not a value
-    an ALLOWED entry would name -- and an f-string or template part
+    an ALLOWED entry would name (`expr_name`: an operator expression such
+    as `total + p` is named whole, also in an f-string field, so an entry
+    for `total` doesn't cover the `p` in it) -- and an f-string or template part
     outside any print on such a line (`msg = f"v={p}"`), as on a summary
     line; in an env-file heredoc so is a value encoded for the entry,
     `print(f"matrix={json.dumps(m)}")` or ``console.log(`matrix=${JSON.stringify(m)}`)``,
@@ -455,6 +459,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -1578,11 +1583,15 @@ def template_exprs(text: str, lang: str) -> list[str]:
         return []
     if lang == "js" and "`" not in text:
         return []
+    named = named_escapes(text) if lang == "py" else {}
     i = 0
     while True:
         i = text.find(opener, i)
         if i < 0:
             return exprs
+        if i in named:
+            i = named[i]  # `\N{...}`, a named character, not a field
+            continue
         if lang == "py" and text.startswith("{{", i):
             i += 2
             continue
@@ -1596,6 +1605,38 @@ def template_exprs(text: str, lang: str) -> list[str]:
         expr = re.split(r"![rsa]$|:(?![^\[]*\])", expr)[0].strip() if lang == "py" else expr
         exprs.append(expr)
         i = j
+
+
+def named_escapes(text: str) -> dict[int, int]:
+    """The `{` of every `\\N{...}` escape in a Python string literal that isn't raw, mapped to the index past its `}`.
+
+    In an f-string or t-string that isn't raw `f"v\\N{LINE FEED}{x}"` has one
+    field, `x`: the braces of a named character are no field (#511). A raw
+    one's `\\N{x}` is a backslash, an `N` and the field `x`, as is a
+    non-raw `\\\\N{x}` (an escaped backslash). A literal is read to its
+    first closing quote, as `_literal_end` does.
+    """
+    spans: dict[int, int] = {}
+    i = 0
+    while i < len(text):
+        quote = quote_open(text, i)
+        if not quote or quote == "`":
+            i += 1
+            continue
+        k = i
+        while k > 0 and (text[k - 1].isalnum() or text[k - 1] == "_"):
+            k -= 1
+        raw = "r" in text[k:i].lower()
+        i += len(quote)
+        while i < len(text) and not text.startswith(quote, i):
+            if text[i] == "\\" and not raw and text.startswith("N{", i + 1):
+                close = text.find("}", i)
+                spans[i + 2] = len(text) if close < 0 else close + 1
+                i = spans[i + 2]
+                continue
+            i += 2 if text[i] == "\\" else 1
+        i += len(quote)
+    return spans
 
 
 def quote_open(text: str, i: int) -> str | None:
@@ -1909,10 +1950,35 @@ def print_calls(text: str, lang: str) -> list[PrintCall]:
 # A Python keyword argument (`file=`, `end=`, `sep=`, `flush=`), not `==`.
 KEYWORD_ARG = re.compile(r"^[A-Za-z_]+\s*=(?!=)")
 # The mark an interpolated value leaves in the text a print call writes, and
-# the escapes that write a line end (`\n`, `\x0a`, `\u000a`, `\012`, ...).
+# the escapes that write a line end (`\n`, `\x0a`, `\u000a`, `\012`, ...);
+# Python's `\U0000000a` and `\N{...}` too, read by `line_ends`.
 VALUE = "\x00"
 LINE_END_ESCAPE = re.compile(
-    r"\\(?:[nr]|x0[aAdD]|u000[aAdD]|u\{0*[aAdD]\}|0?1[25](?![0-7])|N\{(?:LINE FEED|CARRIAGE RETURN|LF|CR)\})")
+    r"\\(?:[nr]|x0[aAdD]|u000[aAdD]|u\{0*[aAdD]\}|0?1[25](?![0-7])|(U0000000[aAdD])|N\{([^{}]*)\})")
+
+
+def line_ends(content: str, lang: str) -> str:
+    """A literal's content with every escape that writes a line end as a line end.
+
+    Python's `\\U0000000a` and `\\N{...}` are escapes of Python only; a
+    `\\N{...}` is one where its name resolves to a line feed or a carriage
+    return as Python resolves it (#511): in any case and by an alias, so
+    `\\N{line feed}`, `\\N{NEW LINE}`, `\\N{EOL}`, `\\N{END OF LINE}`, `\\N{nl}`
+    and `\\N{cr}` are, `\\N{BULLET}` isn't.
+    """
+    def end(m: re.Match[str]) -> str:
+        if m.group(1) is None and m.group(2) is None:
+            return "\n"
+        if lang != "py":
+            return m.group(0)
+        if m.group(1) is not None:
+            return "\n"
+        try:
+            char = unicodedata.lookup(m.group(2))
+        except KeyError:
+            return m.group(0)
+        return "\n" if char in ("\n", "\r") else m.group(0)
+    return LINE_END_ESCAPE.sub(end, content)
 LITERAL_OPEN = re.compile("([rRbBfFtTuU]{0,2})('''|\"\"\"|['\"`])")
 PERCENT_CONVERSION = re.compile(r"%(?:\([^)]*\))?[-#0 +]*(?:\*|[0-9]+)?(?:\.(?:\*|[0-9]+))?[diouxXeEfFgGcrsa]")
 CONSOLE_CONVERSION = re.compile(r"%[sdifjoOc]")
@@ -1936,14 +2002,24 @@ def _literal_end(text: str, i: int, quote: str) -> int:
     return len(text)
 
 
-def _interpolated(content: str, lang: str) -> str:
-    """An f-string's or template literal's content with every interpolation as VALUE."""
+def _interpolated(content: str, lang: str, raw: bool = False) -> str:
+    """An f-string's or template literal's content with every interpolation as VALUE.
+
+    A `\\N{...}` of a Python f-string that isn't raw is a named character,
+    kept as written, not a field (`named_escapes`).
+    """
     out, i = [], 0
     opener = "${" if lang == "js" else "{"
     while i < len(content):
         if content[i] == "\\" and lang == "js":
             out.append(content[i:i + 2])
             i += 2
+            continue
+        if content[i] == "\\" and lang == "py" and not raw and content.startswith(("\\", "N{"), i + 1):
+            close = content.find("}", i) if content.startswith("N{", i + 1) else i + 1
+            stop = len(content) if close < 0 else close + 1
+            out.append(content[i:stop])
+            i = stop
             continue
         if lang == "py" and content.startswith(("{{", "}}"), i):
             out.append(content[i])
@@ -2011,9 +2087,9 @@ def printed_skeleton(expr: str, lang: str, console_format: bool = False) -> str:
             content = text[lit.end():end - len(quote)] if closed else text[lit.end():end]
             formatted = "f" in prefix or "t" in prefix or quote == "`"
             if formatted:
-                content = _interpolated(content, lang)
+                content = _interpolated(content, lang, "r" in prefix)
             if "r" not in prefix:
-                content = LINE_END_ESCAPE.sub("\n", content)
+                content = line_ends(content, lang)
             content = content.replace("\r", "\n")
             i = end
             rest = text[i:].lstrip()
@@ -2058,6 +2134,37 @@ def single_literal(arg: str, lang: str) -> bool:
                                          re.DOTALL) for q in quotes):
         return True  # a triple-quoted one
     return any(re.fullmatch(prefix + q + r"(?:[^" + q + r"\\]|\\.)*" + q, arg.strip()) for q in quotes)
+
+
+ATTRIBUTE = re.compile(r"\.[A-Za-z_][A-Za-z0-9_]*")
+
+
+def expr_name(expr: str) -> str:
+    """The name a finding gives a printed expression: its root name, or the whole expression.
+
+    A name, or one followed only by attribute accesses, subscripts and calls
+    (`x`, `a.b`, `x[0]`, `f(x)`), is named by its leading dotted name (`x`,
+    `a.b`, `x`, `f`), the name an ALLOWED entry gives it. Anything else -- an
+    operator expression (`total + p`, `x % p`, `p or ""`, `a if c else b`),
+    a literal followed by more (`f"v" + p`, `"{}".format(p)`) -- is named
+    whole (#511), so an ALLOWED entry for its first name doesn't cover it.
+    """
+    text = expr.strip()
+    root = re.match(r"[A-Za-z_][A-Za-z0-9_.]*", text)
+    if not root:
+        return text
+    i = root.end()
+    while i < len(text):
+        if text[i] in "([":
+            close = call_close(text, i + 1)
+            if close is None:
+                return text
+            i = close
+        elif attr := ATTRIBUTE.match(text, i):
+            i = attr.end()
+        else:
+            return text
+    return root.group(0)
 
 
 def whole_call(expr: str, names: tuple[str, ...]) -> bool:
@@ -2635,8 +2742,7 @@ class Checker:
                 continue
             if unit.lang == "py" and whole_call(expr, ("len",)):
                 continue
-            root = re.match(r"^[A-Za-z_][A-Za-z0-9_.]*", expr)
-            names.append(root.group(0) if root else expr)
+            names.append(expr_name(expr))
         return names
 
     @staticmethod

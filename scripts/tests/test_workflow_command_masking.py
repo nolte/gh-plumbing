@@ -1630,6 +1630,51 @@ def test_only_the_log_prints_of_a_heredoc_redirected_elsewhere_are_read(tmp_path
     assert check(tmp_path, run, env=P_ENV) == ['"y " + p']
 
 
+TOTAL_PY = ("python3 - <<'PY'\nimport os, re, sys\ntotal = len(os.environ[\"P\"])\np = os.environ[\"P\"]\n"
+            "{}\nPY")
+
+
+@pytest.mark.parametrize("line, expected", [
+    ('print("x", total, file=sys.stderr)', []),
+    ('print("x", total[0], int(total), file=sys.stderr)', ["int"]),
+    # A dotted name is named as written, as it always was.
+    ('print("x", total.real, file=sys.stderr)', ["total.real"]),
+    ('print(f"x {total}", file=sys.stderr)', []),
+    ('print("x", total + p, file=sys.stderr)', ["total + p"]),
+    ('print("x", total % p, file=sys.stderr)', ["total % p"]),
+    ('print("x", total or p, file=sys.stderr)', ["total or p"]),
+    ('print("x", total if p else 0, file=sys.stderr)', ["total if p else 0"]),
+    ('print("x", total == p, file=sys.stderr)', ["total == p"]),
+    ('print("x", total[0] | p, file=sys.stderr)', ["total[0] | p"]),
+    ('print(f"x {total + p}", file=sys.stderr)', ["total + p"]),
+    # A string prefix is no name: the f-string and what follows it are named whole.
+    ('print("x", f"{total}" + p, file=sys.stderr)', ['f"{total}" + p']),
+])
+def test_an_operator_expression_is_named_whole_not_by_its_first_name(tmp_path, line, expected):
+    # An entry for `total` covers `total` and accesses of it, not an
+    # expression it merely starts: `total + p` prints the unmasked `p` (#511 review).
+    entry = guard.Allowed(REL, "total", step="Step", reason="a number")
+    write(tmp_path, REL, workflow(TOTAL_PY.format(line), env=P_ENV))
+    assert [n for _, n in names(tmp_path, [entry])] == expected
+
+
+@pytest.mark.parametrize("expr, name", [
+    ("x", "x"),
+    ("a.b", "a.b"),
+    ("x[0]", "x"),
+    ("f(x)", "f"),
+    ("a.b(c)[1].d", "a.b"),
+    ("x + p", "x + p"),
+    ("x.y - p", "x.y - p"),
+    ('f"v" + x', 'f"v" + x'),
+    ('"{}".format(x)', '"{}".format(x)'),
+    ("not x", "not x"),
+    ("x(", "x("),
+])
+def test_expr_name(expr, name):
+    assert guard.expr_name(expr) == name
+
+
 def test_a_log_entry_names_a_bare_value_on_a_strict_line(tmp_path):
     entry = guard.Allowed(REL, "p", reason="test")
     run = LOG_PY.format('print("ok"); print("x", p)')
@@ -1674,6 +1719,70 @@ def test_the_line_start_rule_reads_every_line_a_print_writes(text, lang, leads):
     calls = guard.print_calls(text, lang)
     assert len(calls) == 1
     assert guard.leading_print(calls[0], lang) is leads
+
+
+@pytest.mark.parametrize("text, lang, leads", [
+    ('print(f"v\\U0000000D{shown(p)}")', "py", True),
+    ('print(f"v\\U0000000a{shown(p)}")', "py", True),
+    ('print("v\\N{line feed}", shown(p))', "py", True),
+    ('print("v\\N{Carriage Return}", shown(p))', "py", True),
+    ('print("v\\N{cr}" + shown(p))', "py", True),
+    ('print(f"v\\N{LINE FEED}{shown(p)}")', "py", True),
+    ('print("v\\N{BULLET}", shown(p))', "py", False),
+    ('print(f"v\\N{BULLET} {shown(p)}")', "py", False),
+    ('print("v\\N{NO SUCH NAME}", shown(p))', "py", False),
+    ('print(r"v\\N{LINE FEED}", shown(p))', "py", False),
+    ('print(r"v\\U0000000A", shown(p))', "py", False),
+    # Not escapes of JavaScript: `"\U0000000A"` is `U0000000A`.
+    ('console.log("v\\U0000000A", shown(p))', "js", False),
+    ('console.log("v\\N{LINE FEED}", shown(p))', "js", False),
+])
+def test_the_line_start_rule_reads_python_s_long_and_named_line_ends(text, lang, leads):
+    # Python resolves `\N{...}` in any case and by an alias; `\U0000000a`
+    # writes a line end as `\u000a` does (#511 review).
+    calls = guard.print_calls(text, lang)
+    assert len(calls) == 1
+    assert guard.leading_print(calls[0], lang) is leads
+
+
+@pytest.mark.parametrize("line", [
+    'print(f"v\\U0000000D{shown(p)}", file=sys.stderr)',
+    'print("v\\N{line feed}", shown(p))',
+    'print("v\\N{NEW LINE}", shown(p))',
+    'print("v\\N{EOL}", shown(p))',
+    'print("v\\N{END OF LINE}", shown(p))',
+    'print("v\\N{nl}", shown(p))',
+    'print("v\\N{carriage return}", shown(p))',
+    # The braces of a named character are no field: not a value `LINE`.
+    'print(f"v\\N{LINE FEED}{shown(p)}")',
+])
+def test_a_long_or_named_line_end_escape_starts_a_line(tmp_path, line):
+    assert check(tmp_path, LOG_PY_SHOWN.format(line), env=P_ENV) == [guard.LEADING]
+
+
+@pytest.mark.parametrize("line, expected", [
+    ('print(f"v {shown(p)}")', []),
+    ('print(f"v\\N{BULLET} {shown(p)}")', []),
+    ('print("v\\N{BULLET}", shown(p))', []),
+    # A literal built by concatenation is refused as before, whole.
+    ('print("v\\N{BULLET} " + "x")', ['"v\\N{BULLET} " + "x"']),
+    # A raw f-string's `\N{p}` is a field `p`, as is one after an escaped backslash.
+    ('print(rf"v \\N{p}")', ["p"]),
+    ('print(f"v \\\\N{p}")', ["p"]),
+])
+def test_a_named_character_that_is_no_line_end_is_no_finding(tmp_path, line, expected):
+    assert check(tmp_path, LOG_PY_SHOWN.format(line), env=P_ENV) == expected
+
+
+@pytest.mark.parametrize("text, exprs", [
+    ('f"v\\N{LINE FEED}{x}"', ["x"]),
+    ('f"v\\N{bullet} {x}"', ["x"]),
+    ('rf"v\\N{x}"', ["x"]),
+    ('f"v\\\\N{x}"', ["x"]),
+    ('"a\\N{LF}" + f"{x}"', ["x"]),
+])
+def test_template_exprs_skip_a_named_character(text, exprs):
+    assert guard.template_exprs(text, "py") == exprs
 
 
 def test_the_line_start_rule_holds_for_every_print_on_a_line(tmp_path):
