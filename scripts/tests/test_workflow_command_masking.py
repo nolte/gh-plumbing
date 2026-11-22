@@ -271,6 +271,18 @@ def test_a_mask_in_a_loop_re_applied_before_the_print_is_fine(tmp_path):
     assert check(tmp_path, run) == []
 
 
+@pytest.mark.parametrize("run", [
+    f'{HELPER}\nx="$VALUE"\nx[1]=$(shown "$VALUE")\necho "::error::$x"',
+    f'{HELPER}\nx="$VALUE"\nx[1]=$(shown "$VALUE")\necho "v=$x" >> "$GITHUB_OUTPUT"',
+    f'{HELPER}\nread -ra x <<< "$VALUE"\nx[0]=$(shown "$VALUE")\necho "::error::${{x[*]}}"',
+    f'{HELPER}\nx=("$VALUE" "$VALUE")\nx[0]=$(shown "$VALUE")\necho "::error::${{x[@]}}"',
+])
+def test_a_masked_element_does_not_mask_the_array(tmp_path, run):
+    # `x[1]=$(shown ...)` sets one element: `$x` is `x[0]`, `${x[*]}` all of
+    # them, still raw. An indexed assignment is an unmasked one.
+    assert check(tmp_path, run) == ["x"]
+
+
 @pytest.mark.parametrize("unbalanced", [
     'v="$(\n  cat f\n)"',        # a substitution over lines: its `)` reads as a closer
     "jq '\n  if . then 1 else 2 end\n' f",  # a quoted string over lines, its words read as keywords

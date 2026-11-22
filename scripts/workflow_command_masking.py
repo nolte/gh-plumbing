@@ -79,8 +79,9 @@ value is a line end, and the mask turns every one into `?`:
     `&&` or `||` -- also not at the start of a line after one that ends in
     `&&`, `||` or `|` --, not in a pipeline or in the background, not a
     prefix of a command (`x=$(shown "$x") cmd` sets x for cmd only), not
-    after a `(` on the same line (see the constant rule), and the last
-    assignment to the name on its line. Since a function body runs where
+    after a `(` on the same line (see the constant rule), not to an element
+    (`x[1]=$(shown "$x")` sets one element, `$x` is `x[0]`: it is an
+    unmasked assignment), and the last assignment to the name on its line. Since a function body runs where
     the function is called, not where it stands, a print inside one the
     mask is outside of is not covered, and an unmasked assignment to the
     name inside a function body the print is outside of voids every mask of
@@ -976,7 +977,9 @@ def assignments(unit: Logical) -> list[tuple[str, str | None]]:
     """(name, right-hand side or None when unknown) assigned on a shell line.
 
     `x+=...` is reported with a leading `+`, so it is never a mask or a
-    plain assignment and an appended raw value keeps the name unclean.
+    plain assignment and an appended raw value keeps the name unclean. So is
+    an indexed one (`x[1]=...`): it sets one element, and `$x` is `x[0]`, so
+    `x[1]=$(shown "$x")` masks nothing; it still counts for the constant rule.
     """
     if unit.lang != "sh" or unit.text.lstrip().startswith("#"):
         return []
@@ -1005,7 +1008,8 @@ def assignments(unit: Logical) -> list[tuple[str, str | None]]:
             rest = bare[chain[-1].end():]
             prefix = re.match(r"\s*(?![0-9]*[<>]|#)[^\s;&|()]", rest) is not None
             for c in chain:
-                rhs = ("+" if c.group(2) else "") + c.group(3)
+                indexed = text[c.end(1)] == "["
+                rhs = ("+" if c.group(2) or indexed else "") + c.group(3)
                 found.append((c.group(1), None if opener == "(" or prefix else rhs))
     for m in LOOP_OR_READ.finditer(text):
         name = m.group(1) or m.group(2) or m.group(3)
