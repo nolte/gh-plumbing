@@ -340,10 +340,13 @@ Not covered (each would need a parser this script doesn't have):
     `sys.__stdout__` are stdout, `sys.stderr` and `sys.__stderr__` stderr (in
     parentheses too); any other `file=` is read as stdout and as stderr both,
     so it reaches the log and, in an env-file or summary heredoc, that sink
-    as well -- and so is a call whose `)` isn't found in its joined lines
-    or one with a `**` argument, whose `file=` the guard can't see (the
-    `**` argument itself is read as a value, as it may carry `end=` or
-    `sep=`). Not covered there: `sys.stdout` or `sys.stderr` rebound (after
+    as well -- and so is a call whose `)` isn't found in its joined lines,
+    one with a `**` argument, or one with an f-string whose replacement
+    field holds that f-string's own quote (`f"{d[")"]}"`, legal since
+    Python 3.12), whose `file=` the guard can't see (the `**` argument
+    itself is read as a value, as it may carry `end=` or `sep=`). An
+    argument after a backslash line continuation is read as written, so
+    `file=` or `**` there counts. Not covered there: `sys.stdout` or `sys.stderr` rebound (after
     `sys.stdout = sys.stderr` an env-file heredoc's stdout prints reach the
     log, but are read as entries only, without the line-start rule), and a
     write to a file the heredoc opens that isn't a named print
@@ -1572,12 +1575,68 @@ def quote_open(text: str, i: int) -> str | None:
     return text[i] if text[i] in "'\"`" else None
 
 
+def same_quote_field(text: str, start: int, end: int) -> bool:
+    """A Python f-string in text[start:end] has a replacement field holding its own quote.
+
+    Legal since Python 3.12 (PEP 701): `f"{d[")"]}"`, `f"{'''")'''}"`. The
+    call scans end the f-string at that inner quote, so they misread where
+    its call closes (#511). A `{{`/`}}` escape is text, and a field quoting
+    with the other kind (`f"{d['k']}"`) is a form older Pythons know too.
+    """
+    i = start
+    while i < end:
+        quote = quote_open(text, i)
+        if not quote or quote == "`":
+            i += 1
+            continue
+        k = i
+        while k > start and (text[k - 1].isalnum() or text[k - 1] == "_"):
+            k -= 1
+        prefix = text[k:i].lower()
+        i += len(quote)
+        if not (len(prefix) <= 2 and set(prefix) <= set("rbfu") and "f" in prefix):
+            i = _literal_end(text, i, quote)
+            continue
+        depth = 0
+        while i < end:
+            if text[i] == "\\":
+                i += 2
+                continue
+            if text.startswith(quote, i):
+                if depth:
+                    return True
+                i += len(quote)
+                break
+            if not depth and text.startswith(("{{", "}}"), i):
+                i += 2
+                continue
+            inner = quote_open(text, i) if depth else None
+            if inner:
+                inner_end = _literal_end(text, i + len(inner), inner)
+                if quote in text[i + len(inner):inner_end]:
+                    return True
+                i = inner_end
+                continue
+            depth = max(depth + {"{": 1, "}": -1}.get(text[i], 0), 0)
+            i += 1
+    return False
+
+
 def call_args(text: str, opener_end: int) -> list[str]:
-    """Top-level arguments of the call whose `(` ends at opener_end."""
+    """Top-level arguments of the call whose `(` ends at opener_end.
+
+    A line continuation (a backslash and its line end) outside a quote reads
+    as a space, so an argument on a continued line is read as written:
+    `file=sys.stderr`, `**kw` (#511).
+    """
     args, depth, current, quote = [], 1, [], None
     i = opener_end
     while i < len(text) and depth:
         c = text[i]
+        if not quote and text.startswith("\\\n", i):
+            current.append(" ")
+            i += 2
+            continue
         if quote:
             if c == "\\":
                 current.append(text[i:i + 2])
@@ -1692,7 +1751,9 @@ class PrintCall:
     args: list[str]
     keyword: dict[str, str]  # Python's keyword arguments: `file`, `end`, `sep`, `flush`
     to_stderr: bool  # by its name or a `file=` naming stderr
-    unknown: bool = False  # a `file=` the guard can't tell (or can't see: unclosed, `**`): stdout, stderr or a file
+    # A `file=` the guard can't tell (or can't see: unclosed, `**`, a PEP 701
+    # same-quote f-string field): stdout, stderr or a file.
+    unknown: bool = False
 
     def reaches_log(self, dest: str) -> bool:
         """It prints to the log: to stderr, to a heredoc stdout that goes there, or -- unknown -- maybe either."""
@@ -1740,9 +1801,12 @@ def print_calls(text: str, lang: str) -> list[PrintCall]:
                    for a in args if lang == "py" and KEYWORD_ARG.match(a)}
         name = re.sub(r"\s+", "", m.group(1))
         close = call_close(text, m.end())
-        if lang == "py" and (close is None or any(a.startswith("**") for a in args)):
-            # Fails closed (#511): a call not closed in the joined text, or one
-            # spreading `**` keyword arguments, may name any `file=`.
+        if lang == "py" and (close is None or any(a.startswith("**") for a in args)
+                             or same_quote_field(text, m.end(), close)):
+            # Fails closed (#511): a call not closed in the joined text, one
+            # spreading `**` keyword arguments, or one whose close the scan
+            # can't trust -- an f-string field holding the f-string's own
+            # quote (PEP 701) -- may name any `file=`.
             stream = "unknown"
         else:
             stream = file_stream(keyword["file"]) if "file" in keyword else "stdout"
@@ -2445,8 +2509,9 @@ class Checker:
         a `file=sys.stderr` argument, not that text in a comment -- where
         `stderr` is set (the log, or an env file the heredoc sends its stderr
         into as well); calls to a `file=` the guard can't name as a stream
-        (`file_stream`), calls not closed in the joined text and calls with a
-        `**` argument where either is set. In a call read, every argument,
+        (`file_stream`), calls not closed in the joined text, calls with a
+        `**` argument and calls with a same-quote f-string field
+        (`same_quote_field`) where either is set. In a call read, every argument,
         and Python's `end=` and `sep=`, must be one plain literal or a call of
         the helper (`calls`, which counts only where `defined`). Template and f-string parts anywhere else on the
         line, outside the calls not read, must be helper calls too.

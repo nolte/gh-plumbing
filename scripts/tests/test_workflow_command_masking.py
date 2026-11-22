@@ -1986,3 +1986,77 @@ def test_a_spread_keyword_argument_makes_the_stream_unknown(tmp_path, opener, li
     assert call.unknown
     assert "p" in checker.log_template(k)
     assert guard.main(["--root", str(tmp_path)]) == 1
+
+
+@pytest.mark.parametrize("opener, line", [
+    (" > f.txt", 'print(f"{d[")"]}", p, file=sys.stderr)'),
+    (" > f.txt", "print(\"x\", f\"{'''\")'''}\", p, file=sys.stderr)"),
+    (" | cat", 'print("x", f"{")"}", p, file=sys.stderr)'),
+    (" > f.txt", 'print("x", f"{shown(")")}", p, file=sys.stderr)'),
+])
+def test_a_same_quote_f_string_field_makes_the_stream_unknown(tmp_path, opener, line):
+    # Fails closed (#511): since Python 3.12 (PEP 701) a replacement field may
+    # hold the f-string's own quote; the scan ends the f-string there, closes
+    # the call early and loses `file=sys.stderr`. Such a call reaches the log.
+    run = SHOWN_PY.format(opener, line)
+    write(tmp_path, REL, workflow(run, env=P_ENV))
+    [body] = guard.bodies_of(tmp_path, tmp_path / REL)
+    checker = guard.Checker(body, [body], (), set())
+    k = next(k for k, u in enumerate(checker.units) if u.text.startswith("print("))
+    [call] = guard.print_calls(checker.joined(k), "py")
+    assert call.unknown and call.read_by(True, False) and call.read_by(False, True)
+    assert checker.log_template(k)
+    assert guard.main(["--root", str(tmp_path)]) == 1
+
+
+@pytest.mark.parametrize("text, found", [
+    ('print(f"{d[")"]}", p)', True),
+    ("print(f'{d[')']}')", True),
+    ("print(f\"{'''\")'''}\")", True),
+    ("print(F\"{x}\", rf\"{d[\"k\"]}\")", True),
+    ('print(f"""{d[""\"k""\"]}""")', True),
+    ("print(f\"{d['k']}\")", False),
+    ('print(f"""{"a"}""")', False),
+    ('print(f"{{")', False),
+    ('print(f"{{)}}", p)', False),
+    ('print(f"x {shown(p)!r:>{9}}")', False),
+    ("print(f'x {shown(p)} \"q\"')", False),
+    ('print("{" + p + "}")', False),
+    ('print(b"{\\"}")', False),
+])
+def test_same_quote_field_finds_only_the_pep_701_form(text, found):
+    assert guard.same_quote_field(text, len("print("), len(text)) is found
+
+
+@pytest.mark.parametrize("line", [
+    'kw = {"file": sys.stderr}\nprint(p, \\\n      **kw)',
+    "print(p, \\\n  file=sys.stderr)",
+])
+def test_a_keyword_on_a_continued_line_is_read(tmp_path, line):
+    # A backslash continuation left `\` and the line end in front of the
+    # argument (#511), so neither `**kw` nor `file=` was seen as such and the
+    # stderr print counted as a stdout one into the heredoc's file.
+    assert "p" in check(tmp_path, LOG_PY.replace("<<'PY'", "<<'PY' > f.txt").format(line), env=P_ENV)
+
+
+def test_call_args_reads_a_line_continuation_as_a_space():
+    text = 'print(p, \\\n  file=sys.stderr, \\\n  **kw, end="\\\n")'
+    assert guard.call_args(text, len("print(")) == ["p", "file=sys.stderr", "**kw", 'end="\\\n"']
+
+
+@pytest.mark.parametrize("opener", ["", " > f.txt"])
+@pytest.mark.parametrize("line", [
+    'print(f"x {shown(p)}", \\\n  file=sys.stderr)',
+    'print("a", \\\n  "b", file=sys.stderr)',
+    "print(f'x {shown(p)} \"q\"', file=sys.stderr)",
+    'print(f"{{)}}", file=sys.stderr)',
+])
+def test_a_masked_or_literal_continued_or_quoted_stderr_print_is_clean(tmp_path, opener, line):
+    assert check(tmp_path, SHOWN_PY.format(opener, line), env=P_ENV) == []
+
+
+def test_a_different_quote_f_string_field_keeps_its_reading(tmp_path):
+    line = 'd = {"k": 1}\nprint(f"{d[\'k\']}")'
+    assert check(tmp_path, LOG_PY.format(line), env=P_ENV) == ["d", guard.LEADING]
+    [call] = guard.print_calls("print(f\"{d['k']}\")", "py")
+    assert not call.unknown and not call.to_stderr
