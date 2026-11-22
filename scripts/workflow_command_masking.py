@@ -1409,7 +1409,7 @@ def stdout_print(unit: Logical) -> bool | None:
         return None if m is None else m.group(1) in ("print", "sys.stdout.write") and "file=sys.stderr" not in unit.text
     if unit.lang == "js":
         m = JS_PRINT.search(unit.text)
-        return None if m is None else m.group(1) in ("console.log", "console.info", "process.stdout.write")
+        return None if m is None else m.group(1) not in STDERR_PRINTS  # every other console method is stdout
     return None
 
 

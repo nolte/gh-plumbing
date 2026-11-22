@@ -731,6 +731,15 @@ def test_a_masked_heredoc_print_into_an_env_file_is_fine(tmp_path, run):
     assert check(tmp_path, run) == []
 
 
+@pytest.mark.parametrize("method", ["log", "info", "debug"])
+def test_every_stdout_console_method_into_an_env_file_is_an_env_file_entry(tmp_path, method):
+    # All console methods but STDERR_PRINTS write to stdout, so a masked
+    # `console.debug` into an env file is an entry there, not a log line.
+    run = (f"node <<'JS' >> \"$GITHUB_OUTPUT\"\n{guard.JS_SHOWN}\nconst p = process.env.VALUE;\n"
+           f"console.{method}(shown(p));\nJS")
+    assert check(tmp_path, run) == []
+
+
 def test_shown_into_an_env_file_needs_the_canonical_definition(tmp_path):
     run = ("node <<'NODE' >> \"$GITHUB_OUTPUT\"\nconst shown = (v) => v;\n"
            "console.log(`v=${shown(process.env.P)}`);\nNODE")
