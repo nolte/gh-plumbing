@@ -1883,3 +1883,106 @@ def test_a_masked_stderr_call_over_lines_stays_clean(tmp_path, opener):
 def test_a_print_inside_a_string_literal_is_refused_although_harmless(tmp_path):
     # Documented under "Refused although harmless": calls are found by name.
     assert check(tmp_path, SHOWN_PY.format("", 'msg = "use print(p)"'), env=P_ENV) == ["p", guard.LEADING]
+
+
+TRIPLE_QUOTED_STDERR = [
+    "print(p, end='''it's''', file=sys.stderr)",
+    'print(p, end="""it"s""", file=sys.stderr)',
+    "print(p, sep='''it's''', file=sys.stderr)",
+    "print(p, end=f'''it's''', file=sys.stderr)",
+    "print(p, end=rb'''it's''', file=sys.stderr)",
+    "print(p, end='''it's\n''', file=sys.stderr)",
+]
+
+
+@pytest.mark.parametrize("opener", [" > f.txt", " | cat"])
+@pytest.mark.parametrize("line", TRIPLE_QUOTED_STDERR)
+def test_a_triple_quoted_argument_does_not_hide_a_stderr_file(tmp_path, opener, line):
+    # A quote inside a Python triple quote left the scan in an open quote
+    # (#511): the call read as unclosed, `file=sys.stderr` as part of `end=`,
+    # and the print as a stdout one into the heredoc's file. Develop read it.
+    assert check(tmp_path, LOG_PY.replace("<<'PY'", "<<'PY'" + opener).format(line), env=P_ENV)[0] == "p"
+
+
+@pytest.mark.parametrize("line, expected", [
+    ("print(f\"x {p}\", '''it's''', file=sys.stderr)", ["p"]),
+    ("print(shown(p), end='''it's''', file=sys.stderr)", [guard.LEADING]),
+])
+def test_a_triple_quoted_argument_keeps_its_call_a_stderr_print(tmp_path, line, expected):
+    assert check(tmp_path, SHOWN_PY.format(" > f.txt", line), env=P_ENV) == expected
+
+
+@pytest.mark.parametrize("opener", ["", " > f.txt", ' >> "$GITHUB_OUTPUT"'])
+@pytest.mark.parametrize("line", [
+    "print(f\"x {shown(p)}\", end='''it's''', file=sys.stderr)",
+    "print('''it's a \"quote\"''', file=sys.stderr)",
+    "print(f'''it's {shown(p)}''', file=sys.stderr)",
+    "print(\"x\", '''it's''', sep=\"\"\" \"\"\", file=sys.stderr)",
+])
+def test_a_masked_or_literal_triple_quoted_stderr_print_is_clean(tmp_path, opener, line):
+    assert check(tmp_path, SHOWN_PY.format(opener, line), env=P_ENV) == []
+
+
+def test_a_pure_triple_quoted_literal_log_print_is_clean(tmp_path):
+    assert check(tmp_path, LOG_PY.format("print(f'''it's''')"), env=P_ENV) == []
+
+
+@pytest.mark.parametrize("text, close", [
+    ("print(p, end='''it's''', file=sys.stderr) # x", 41),
+    ('print(p, end="""a"b""")', 23),
+    ("print(p, end='''it's", None),
+    ("print('''a)''')", 15),
+])
+def test_call_close_reads_triple_quotes(text, close):
+    assert guard.call_close(text, len("print(")) == close
+
+
+def test_call_args_reads_triple_quotes():
+    text = "print(p, end='''it's, (''', file=sys.stderr)"
+    assert guard.call_args(text, len("print(")) == ["p", "end='''it's, ('''", "file=sys.stderr"]
+    assert guard.bracket_state("print('''a\n", len("print(")) == (1, "'''")
+    # Carried over a continuation line: a lone `'` doesn't end it, `'''` does.
+    assert guard.bracket_state("it's\nb'''), x", 0, 1, "'''") == (0, None)
+
+
+UNCLOSED = "print(p,\n" + '      "x",\n' * (guard.JOINED_LINES + 1) + "      file=sys.stderr)"
+
+
+@pytest.mark.parametrize("opener", [" > f.txt", " | cat"])
+def test_a_print_not_closed_in_the_joined_text_reaches_the_log(tmp_path, opener):
+    # Fails closed (#511): its `file=` may sit past the lines joined, so it is
+    # read as both streams, never as a stdout print into the heredoc's file.
+    assert check(tmp_path, LOG_PY.replace("<<'PY'", "<<'PY'" + opener).format(UNCLOSED), env=P_ENV) == [
+        "p", guard.LEADING]
+
+
+def test_a_print_not_closed_in_the_joined_text_is_read_both_ways_in_an_env_file_heredoc(tmp_path):
+    run = SHOWN_PY.format(' >> "$GITHUB_OUTPUT"', UNCLOSED)
+    write(tmp_path, REL, workflow(run, env=P_ENV))
+    [body] = guard.bodies_of(tmp_path, tmp_path / REL)
+    checker = guard.Checker(body, [body], (), set())
+    k = next(k for k, u in enumerate(checker.units) if u.text.startswith("print("))
+    [call] = guard.print_calls(checker.joined(k), "py")
+    assert call.unknown and call.read_by(True, False) and call.read_by(False, True)
+    assert checker.envfile_template(k) == ["p"]
+    assert checker.log_template(k) == ["p"]
+
+
+@pytest.mark.parametrize("opener", [" > f.txt", " | cat", ' >> "$GITHUB_OUTPUT"'])
+@pytest.mark.parametrize("line", [
+    'print(p, **{"file": sys.stderr})',
+    'kw = {"file": sys.stderr}\nprint(p, **kw)',
+    'print(p,\n      **kw)',
+])
+def test_a_spread_keyword_argument_makes_the_stream_unknown(tmp_path, opener, line):
+    # Fails closed (#511): `**` may carry any `file=`, so the call reaches the
+    # log whatever the heredoc's stdout does.
+    run = LOG_PY.replace("<<'PY'", "<<'PY'" + opener).format(line)
+    write(tmp_path, REL, workflow(run, env=P_ENV))
+    [body] = guard.bodies_of(tmp_path, tmp_path / REL)
+    checker = guard.Checker(body, [body], (), set())
+    k = next(k for k, u in enumerate(checker.units) if u.text.startswith("print("))
+    [call] = guard.print_calls(checker.joined(k), "py")
+    assert call.unknown
+    assert "p" in checker.log_template(k)
+    assert guard.main(["--root", str(tmp_path)]) == 1
