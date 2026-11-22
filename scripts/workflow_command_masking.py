@@ -64,8 +64,10 @@ value is a line end, and the mask turns every one into `?`:
   * masked at the print by the canonical helper, which turns control
     characters into `?` and every `##[` into `#?[`: `$(shown "$name")` in
     shell, `shown(...)` in a Python or Node heredoc -- and only where the body
-    or heredoc defines `shown` exactly that way (SHELL_SHOWN, PY_SHOWN_RETURN,
-    JS_SHOWN);
+    or heredoc defines `shown` exactly that way (SHELL_SHOWN, PY_SHOWN and
+    PY_SHOWN_RETURN, JS_SHOWN). Only those exact lines are the helper's own:
+    a line that merely starts `def shown(` is read like any other, prints and
+    all;
   * assigned from such a masked expansion (`x=$(shown "$x")`) by a
     statement that dominates the print (#507): the block holding the
     assignment -- an `if` branch, a loop body, a `case` arm, a `{ ...; }`
@@ -443,7 +445,9 @@ SHELL_REF = re.compile(r"\$(?:\{(?!\{)(#?)([A-Za-z_][A-Za-z0-9_]*|[0-9])([^}]*)\
 SHELL_MASKED = re.compile(r"""\$\(shown "\$\{?([A-Za-z_][A-Za-z0-9_]*|[0-9])\}?"\)""")
 MASKED_ASSIGNMENT = re.compile(r"""^"?\$\(shown "\$\{?([A-Za-z_][A-Za-z0-9_]*|[0-9])\}?"\)"?$""")
 SHELL_SHOWN = """shown() { local v="${1//[[:cntrl:]]/?}"; printf '%s' "${v//\\#\\#\\[/#?[}"; }"""
-PY_SHOWN = re.compile(r"^\s*def shown\(")
+# The canonical definition line itself, nothing on it after the colon: a line that
+# only starts `def shown(` can hold a print of its own (`def shown(v): print(...)`).
+PY_SHOWN = re.compile(r"^\s*def shown\(value\):\s*$")
 PY_SHOWN_RETURN = """return re.sub(r"[\\x00-\\x1f\\x7f-\\x9f]", "?", str(value)).replace("##[", "#?[")"""
 JS_SHOWN = ("const shown = (value) => String(value).replace(/[\\u0000-\\u001f\\u007f-\\u009f]/g, '?')"
             ".replace(/##\\[/g, '#?[');")
@@ -1880,7 +1884,11 @@ class Checker:
                 self.md[key] = bool(at) and not any(PY_MD_NAME.search(line) for line in own)
 
     def helper_line(self, k: int) -> bool:
-        """A line of a canonical helper's own definition."""
+        """A line of a canonical helper's own definition, exactly as the canonical text has it.
+
+        Its prints aren't read, so it must be one of those lines and nothing
+        else: `def shown(v): print(f"x {p}")` is not one.
+        """
         unit = self.units[k]
         text = unit.text.strip()
         if unit.lang == "sh":

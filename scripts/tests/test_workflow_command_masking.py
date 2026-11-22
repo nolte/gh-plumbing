@@ -1676,3 +1676,32 @@ def test_the_line_start_rule_holds_for_every_print_on_a_line(tmp_path):
     shutil.rmtree(tmp_path / ".github")
     run = LOG_JS_SHOWN.format('console.log("ok"); console.error(`${shown(p)}`);')
     assert check(tmp_path, run, env=P_ENV) == [guard.LEADING]
+
+
+SHOWN_PY = f"python3 - <<'PY'{{}}\nimport os, re, sys\n{PY_HELPER}p = os.environ[\"P\"]\n{{}}\nPY"
+
+
+@pytest.mark.parametrize("opener", ["", " > /tmp/o", ' >> "$GITHUB_OUTPUT"'])
+@pytest.mark.parametrize("line", [
+    'def shown(v): print(f"x {p}", file=sys.stderr)',
+    'def shown(v): raise SystemExit(f"x {p}")',
+])
+def test_a_line_that_only_starts_like_the_helper_hides_no_print(tmp_path, opener, line):
+    # A line starting `def shown(` is not the helper's definition: the log
+    # prints on it are read (develop read them; #511's first cut skipped them).
+    assert check(tmp_path, SHOWN_PY.format(opener, line), env=P_ENV) == ["p"]
+
+
+@pytest.mark.parametrize("opener", ["", ' >> "$GITHUB_OUTPUT"'])
+def test_a_stdout_print_on_a_helper_like_line_is_read(tmp_path, opener):
+    assert check(tmp_path, SHOWN_PY.format(opener, 'def shown(v): print(f"x {p}")'), env=P_ENV) == ["p"]
+
+
+@pytest.mark.parametrize("opener", ["", " > /tmp/o", ' >> "$GITHUB_OUTPUT"', ' >> "$GITHUB_STEP_SUMMARY"'])
+def test_the_canonical_helper_definition_is_no_finding(tmp_path, opener):
+    assert check(tmp_path, SHOWN_PY.format(opener, "pass"), env=P_ENV) == []
+    shutil.rmtree(tmp_path / ".github")
+    # A definition other than the canonical one doesn't define the mask.
+    run = SHOWN_PY.format(opener, 'print(f"x {shown(p)}", file=sys.stderr)').replace(
+        "def shown(value):", "def shown(value):  # masked")
+    assert check(tmp_path, run, env=P_ENV) == ["shown"]
