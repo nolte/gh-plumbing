@@ -117,6 +117,12 @@ none
 | B6 env-file heredoc prints read laxly (concatenation, second print, continuation, `end=`) | diff review @ 80e2194 | fixed directly (6c46d8e): strict reader shared with the summary rule | fixtures E1–E4: 0 → 1 | — |
 | N1 `"a"#` read as a comment; N2 `tee --append` / `dd of=`; N3 heredoc delimiters and interpreters | diff review @ 80e2194 | fixed directly (6c46d8e); rest named under "Not covered" | developer tests; not re-run one by one by the orchestrator | — |
 | Log-line Python/Node prints: only the first call on a line, no continuation lines, no `end=`/`sep=`; exists on develop | diff review @ 80e2194 (B6, log side) | named under "Not covered"; follow-up issue pending operator decision | reviewer observed on develop and head | pending |
+| R2-B1 function head with a name outside `FUNCTION_NAME` (`x@y()`, `a/b()`, `f+()`) bypasses both function rules | diff review @ a41de8a75ee000ae2f173084e8d29e0429deb26b | fixed directly (1cee6df) | orchestrator fixture: exit 0 at a41de8a, exit 1 at 1cee6df | — |
+| R2-N1 stderr of an env-file heredoc routed into the env file (`2>&1`, `2>>`, `&>>`) read only as log | diff review @ a41de8a | fixed directly (1cee6df); stderr via an enclosing group's redirect named under "Not covered" | 6 fixtures 0 → 1, masked forms 0 → 0 (re-run by orchestrator) | — |
+| R2-P1 Python/Node heredoc with unquoted delimiter: shell expansion unread; exists on develop | diff review @ a41de8a | fixed directly (1cee6df): `<unquoted heredoc>` finding, fail-closed | 5 fixtures 0 → 1, no-expansion control 0 (re-run by orchestrator) | — |
+| R2-N2 stdout under an alias (`sys.__stdout__`, `file=out`, `from sys import stdout`); R2-P2 mask line inside a multi-line string or backtick; R2-P4 literal in pipeline/background/uncalled function makes a name constant | diff review @ a41de8a | named under "Not covered" (1cee6df) | reviewer fixtures, exit 0 on develop and a41de8a | — |
+| R2-D1 docstring on case-arm literals wrong; R2-R2 `json.dumps`/`JSON.stringify` refused unlisted | diff review @ a41de8a | docstring corrected (1cee6df) | — | — |
+| R2-R1 unreadable blocks (multi-line `$( … )`, keyword-led string lines) refuse every mask in the body | diff review @ a41de8a | accepted: fails closed, already under "Refused although harmless"; no hit on the tree | reviewer fixtures r01, r05, r12 | — |
 
 ## Dispatch log
 
@@ -125,3 +131,5 @@ none
 2026-11-21 P3 dispatched to nolte-engineering:fullstack-developer — committed 80e2194; sweep: (a) 1 name with a masked and an unmasked assignment (`message`, actions/setup-vale/setup-vale.sh:51,54, accepted by the block rule), (b) 0 of 5 Python/Node heredocs write an env file; re-run by orchestrator
 2026-11-21 diff review @ 80e2194 by an independent read-only agent, security brief — 5 blocking, 1 blocking by documentation, 5 non-blocking; all 13 fixtures re-run by orchestrator
 2026-11-21 review findings dispatched to nolte-engineering:fullstack-developer — committed 6c46d8e, c5f19dd; orchestrator re-run at c5f19dd: 15 fixtures exit 1, tree exit 0, 717 passed
+2026-11-22 diff review @ a41de8a by an independent read-only agent, security brief — 1 blocking (B1, reproduced by orchestrator), 2 non-blocking, 3 pre-existing, 2 regressions (1 documented, fail-closed); triage approved by operator
+2026-11-22 review-2 findings dispatched to nolte-engineering:fullstack-developer — committed 1cee6df; orchestrator re-run at 1cee6df: 22 fixtures as expected, tree exit 0, 747 passed
