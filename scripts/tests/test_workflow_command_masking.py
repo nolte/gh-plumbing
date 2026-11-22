@@ -1705,3 +1705,83 @@ def test_the_canonical_helper_definition_is_no_finding(tmp_path, opener):
     run = SHOWN_PY.format(opener, 'print(f"x {shown(p)}", file=sys.stderr)').replace(
         "def shown(value):", "def shown(value):  # masked")
     assert check(tmp_path, run, env=P_ENV) == ["shown"]
+
+
+UNKNOWN_FILES = [
+    "file=sys.stderr if p else sys.stdout",
+    "file=stderr",
+    "file=err",
+    "file=open(2, 'w')",
+    'file=open("/dev/stderr", "w")',
+    "file=open(os.environ['GITHUB_OUTPUT'], 'a')",
+]
+STREAM_PRELUDE = "from sys import stderr\nerr = sys.stderr\n"
+
+
+@pytest.mark.parametrize("opener", ["", ' >> "$GITHUB_OUTPUT"'])
+@pytest.mark.parametrize("file_", ["file=sys.__stderr__", "file=sys.__stdout__", "file=(sys.stderr)",
+                                   "file=( sys.stdout )", *UNKNOWN_FILES])
+def test_a_print_to_a_stream_the_guard_cant_rule_out_is_read(tmp_path, opener, file_):
+    # Fails closed (#511): only a recognisable file of its own escapes the
+    # reading. Develop read every `file=` but sys.stderr as stdout; the first
+    # cut of #511 dropped every one but sys.stdout/sys.stderr.
+    line = f'{STREAM_PRELUDE}print(f"x {{p}}", {file_})'
+    assert check(tmp_path, SHOWN_PY.format(opener, line), env=P_ENV) == ["p"]
+
+
+@pytest.mark.parametrize("file_", UNKNOWN_FILES)
+def test_an_unknown_stream_of_an_env_file_heredoc_is_read_both_ways(tmp_path, file_):
+    # It may be the entry's stdout or the log's stderr: both readings take it.
+    run = SHOWN_PY.format(' >> "$GITHUB_OUTPUT"', f'{STREAM_PRELUDE}print(p, {file_})')
+    write(tmp_path, REL, workflow(run, env=P_ENV))
+    [body] = guard.bodies_of(tmp_path, tmp_path / REL)
+    checker = guard.Checker(body, [body], (), set())
+    [k] = [k for k, u in enumerate(checker.units) if u.text.startswith("print(")]
+    assert checker.envfile_template(k) == ["p"]
+    assert checker.log_template(k) == ["p"]
+    assert checker.leading_print(k)
+    assert [n for _, n in names(tmp_path)] == ["p", guard.LEADING]
+
+
+def test_an_unknown_stream_of_a_summary_heredoc_is_read_both_ways(tmp_path):
+    run = SHOWN_PY.format(' >> "$GITHUB_STEP_SUMMARY"', f'{STREAM_PRELUDE}print(f"x {{p}}", file=err)')
+    write(tmp_path, REL, workflow(run, env=P_ENV))
+    messages = [f["message"] for f in guard.audit(tmp_path, ())[0]]
+    assert len(messages) == 2
+    assert any("log line" in m for m in messages) and any("step-summary" in m for m in messages)
+
+
+@pytest.mark.parametrize("opener", ["", " > /tmp/o", ' >> "$GITHUB_OUTPUT"'])
+@pytest.mark.parametrize("line", [
+    'print(f"x {p}", file=open("/tmp/f", "w"))',
+    'print(f"x {p}", file=io.open("/tmp/f", "w"))',
+    'f = open("/tmp/f", "w")\nprint(f"x {p}", file=f)',
+    'with open("/tmp/f", "w") as out:\n    print(f"x {p}", file=out)',
+    'with open("/tmp/a") as src, open("/tmp/f", "w") as out:\n    print(f"x {p}", file=out)',
+])
+def test_a_print_to_a_file_the_heredoc_opens_is_not_read(tmp_path, opener, line):
+    assert check(tmp_path, SHOWN_PY.format(opener, line), env=P_ENV) == []
+
+
+@pytest.mark.parametrize("line", [
+    'f = open("/tmp/f", "w")\nf = sys.stderr\nprint(f"x {p}", file=f)',
+    'f = open("/tmp/f", "w")\nif p:\n    f, g = sys.stderr, 1\nprint(f"x {p}", file=f)',
+    'with open("/tmp/f", "w") as out:\n    pass\nfor out in [sys.stderr]:\n    print(f"x {p}", file=out)',
+    'from sys import stderr as out\nwith open("/tmp/f", "w") as out:\n    print(f"x {p}", file=out)',
+    'f = open(f"/dev/{p}", "w")\nprint(f"x {p}", file=f)',
+    'f = open("/proc/self/fd/2", "w")\nprint(f"x {p}", file=f)',
+])
+def test_a_name_also_bound_to_something_else_is_no_file_of_its_own(tmp_path, line):
+    assert check(tmp_path, SHOWN_PY.format("", line), env=P_ENV) == ["p"]
+
+
+@pytest.mark.parametrize("value, stream", [
+    ("sys.stdout", "stdout"), ("sys.__stdout__", "stdout"), ("( sys.stdout )", "stdout"),
+    ("sys.stderr", "stderr"), ("sys.__stderr__", "stderr"), ("((sys.stderr))", "stderr"),
+    ('open("out.txt", "w")', "file"), ("io.open('out.txt')", "file"), ("out", "file"),
+    ("err", "unknown"), ("stderr", "unknown"), ("sys.stderr if c else sys.stdout", "unknown"),
+    ("open(2, 'w')", "unknown"), ('open("/dev/stdout", "w")', "unknown"), ('open(path, "w")', "unknown"),
+    ('open("a").buffer', "unknown"), ("(sys.stderr).buffer", "unknown"),
+])
+def test_file_stream(value, stream):
+    assert guard.file_stream(value, frozenset({"out"})) == stream
