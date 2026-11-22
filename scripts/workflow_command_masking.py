@@ -44,7 +44,10 @@ Predicate: EVERY line of a `run:` body that
     stderr print must be `shown(...)` -- with the canonical definition in
     that heredoc -- or `len(...)`, or a name on ALLOWED. So `"v=" + p`,
     `"v=%s" % p` and `.format(p)` are findings there; its stderr prints are
-    log lines, read as below --
+    log lines, read as below, unless the line that opens the heredoc sends
+    stderr into an env file as well (`2>>` or `&>`/`&>>` there, or `2>&1`
+    or `|&` with stdout going there): then they are read as strictly as its
+    stdout prints --
 
 and interpolates a value. Each interpolated name must be one of the list
 below -- the same list for a log line and an env-file write, in shell and in
@@ -82,7 +85,9 @@ value is a line end, and the mask turns every one into `?`:
     but not the mask (the next pass prints it). Blocks are read statement by
     statement from their keywords (`if`/`then`/`elif`/`else`/`fi`, `for`/`while`/`until`/`select`
     ... `done`, `case`/`;;`/`esac`, `{`/`}`, `(`/`)`). A function body is
-    the compound command after `f()`, `f ()` or `function f` [`()`],
+    the compound command after `f()`, `f ()` or `function f` [`()`] --
+    before an empty `()` any single word is a function's name (`x@y()`,
+    `a/b()`, `f+()`), since bash takes it as one --
     wherever it opens (same line or a later one) and whatever it is (`{
     ...; }`, `( ... )`, `if`, a loop, `case`). Where a closer has no
     matching opener, a block stays open -- a `$(...)` or a quoted string
@@ -102,8 +107,10 @@ value is a line end, and the mask turns every one into `?`:
     name-shaped word after it, an option's argument too), `mapfile`,
     `readarray`, `getopts`, `let`, `for` or `select`, nor an assignment in a
     `( ... )` subshell (it doesn't reach a print outside it; one after a
-    `(` on the same line -- a case arm's `(pattern)` too -- is never read
-    as a literal), nor assignment words before a command (`a=1 x=lit cmd`
+    `(` on the same line -- inside a case arm's `(pattern)` too, as in
+    `case a in (x=lit) ...` -- is never read as a literal, while one after
+    the pattern's closing `)`, as in `(a) mode=fast ;;`, is a statement of
+    the arm and is), nor assignment words before a command (`a=1 x=lit cmd`
     sets x for cmd only); `x+=...` and `x[0]=...` count as assignments, and
     so does a second assignment word (`a=1 x="$v"`), one after `typeset`,
     `time`, `elif`, `while`, `until` or a case pattern's `)` (`a) x="$v"
@@ -121,6 +128,12 @@ Two rules hold per line, whatever its names:
   * `$(shown "...")` must not sit directly next to a literal `#` or `[` or
     another `$(shown "...")`, quotes in between included -- `'#'` followed by
     a masked `#[x` re-forms `##[` (`<mask seam>`).
+
+A line of a Python or Node heredoc whose delimiter is unquoted (`<<PY`, not
+`<<'PY'`, `<<"PY"` or `<<\\PY`) must not hold `$` or a backtick, wherever the
+heredoc's output goes (`<unquoted heredoc>`): the shell expands both before
+the interpreter reads the line, so a value lands in the code itself, which
+the Python or Node reading doesn't see.
 
 The step summary is a third sink with its own rule (#506). GitHub renders
 `$GITHUB_STEP_SUMMARY` as Markdown, so a controlled value there can add a
@@ -259,7 +272,10 @@ Not covered (each would need a parser this script doesn't have):
     that starts with a digit or holds a character other than a letter, a
     digit, `_`, `-` or `.`;
   * in an env-file heredoc, a bare name on a continuation line of a print
-    call more than JOINED_LINES lines below its start;
+    call more than JOINED_LINES lines below its start, and a stderr print in
+    a heredoc whose stderr reaches the env file through a redirect of an
+    enclosing group or compound (`{ ...; } >> "$GITHUB_OUTPUT" 2>&1`) rather
+    than of the line that opens it: read as a log line only;
   * an env file or the summary written by a command other than a
     redirect, `tee` or `dd of=` (`cp /dev/stdin "$GITHUB_OUTPUT"`,
     `sponge`, `install`), or by a `tee` whose arguments before the file
@@ -287,6 +303,20 @@ Not covered (each would need a parser this script doesn't have):
   * a print the Python or Node reading doesn't name: an alias of it
     (`out = sys.stdout.write`, `const log = console.log`), `os.write(1, ...)`,
     `print` passed or rebound, `process.stdout` behind another name;
+  * stdout under another name in Python: `print(..., file=sys.__stdout__)`,
+    `out = sys.stdout` then `print(..., file=out)`, `sys.__stdout__.write(...)`,
+    `from sys import stdout` then `stdout.write(...)`. Every `file=` other
+    than `sys.stdout` (and `sys.stderr`) counts as a file of its own, so in
+    an env-file or summary heredoc such a print is not read;
+  * a mask line that isn't a statement: `x=$(shown "$x")` on a line inside a
+    quoted string over several lines or inside a backtick command
+    substitution is read as a statement of its own, as a keyword there is
+    (see block dominance above), so it can cover a print it never reaches;
+  * for the constant rule, whether an assignment runs where it stands: a
+    literal assignment in a pipeline (`true | N=1`), in the background
+    (`N=1 &`), in a function that is never called or under `if false` still
+    makes an otherwise unset name constant, though the print sees the name
+    unset (or as the runner set it);
   * `actions/**/*.bash` and extension-less scripts;
   * `${{ ... }}` expressions in a `run:` body (a neighbouring class), and the
     non-reusable workflows.
@@ -311,7 +341,15 @@ heredoc reading err towards a finding, #507):
     from `shown(...)` by concatenation, `%` or `.format(...)` (`"v=" +
     shown(p)`) -- put `shown(...)` in an f-string or template literal
     instead -- and an f-string or template part outside any print (`msg =
-    f"v={p}"`), as on a summary line.
+    f"v={p}"`), as on a summary line; so is a value encoded for the entry,
+    `print(f"matrix={json.dumps(m)}")` or ``console.log(`matrix=${JSON.stringify(m)}`)``,
+    though JSON escapes every line end -- mask it as well, or add the name to ALLOWED;
+  * a stderr print of a heredoc whose opener names `2>&1` or `|&` anywhere,
+    also where stderr stays on the log (`2>&1 >> "$GITHUB_OUTPUT"`): read as
+    an env-file entry and as a log line both;
+  * a `$` or backtick the shell leaves alone in an unquoted Python or Node
+    heredoc (`\\$`, a `$` before a space or a quote): every one is refused --
+    quote the delimiter.
 
 Refused although harmless (the summary rule errs towards a finding):
 
@@ -405,6 +443,12 @@ PY_STRICT_PRINT = re.compile(r"\b(print|SystemExit|sys\.stdout\.write|sys\.stder
 JS_STRICT_PRINT = re.compile(r"\b(console\s*\.\s*[A-Za-z]+|process\.stdout\.write|process\.stderr\.write)\s*\(")
 STDERR_PRINTS = {"SystemExit", "sys.stderr.write", "console.error", "console.warn", "console.trace", "console.assert",
                  "process.stderr.write"}
+# A heredoc command that sends its stderr into an env file as well: `2>>` or
+# `&>`/`&>>` there, or -- its stdout going there -- `2>&1` or `|&` (read
+# wherever it stands, so `2>&1 >> "$GITHUB_OUTPUT"`, which keeps stderr on the
+# log, errs towards a finding).
+STDERR_TO_ENV_FILE = re.compile(
+    r"""(?:(?<![0-9])2>>?\|?|&>>?)\s*["']?\$\{?GITHUB_(?:OUTPUT|ENV|STATE|PATH)\b|(?<![0-9])2>&\s*1\b|\|&""")
 # The most continuation lines an env-file heredoc's print call is joined over.
 JOINED_LINES = 50
 CAP = 200
@@ -763,6 +807,7 @@ class Logical:
     lang: str  # sh, py, js, data
     dest: str = "log"  # where a heredoc's stdout goes: log, file, envfile, summary, pipe
     origin: int = -1  # a heredoc line: the unit of the command that opened it
+    expands: bool = False  # a heredoc line the shell expands: its delimiter is unquoted
 
 
 def unquoted(text: str, fill: str = " ") -> str:
@@ -824,14 +869,14 @@ def destination(text: str) -> str:
 def logical_lines(lines: list[str]) -> list[Logical]:
     out: list[Logical] = []
     i = 0
-    heredoc: tuple[str, str, str, int] | None = None
+    heredoc: tuple[str, str, str, int, bool] | None = None
     while i < len(lines):
         if heredoc is not None:
-            delimiter, lang, dest, origin = heredoc
+            delimiter, lang, dest, origin, expands = heredoc
             if lines[i].strip() == delimiter:
                 heredoc = None
             else:
-                out.append(Logical(i, lines[i], lang, dest, origin))
+                out.append(Logical(i, lines[i], lang, dest, origin, expands))
             i += 1
             continue
         start, text = i, lines[i]
@@ -843,15 +888,18 @@ def logical_lines(lines: list[str]) -> list[Logical]:
         if match and not text.lstrip().startswith("#"):
             command = text[:match.start()]
             dest = destination(text[:match.start()] + text[match.end():])
+            # Quoted delimiter: text the shell leaves alone. Unquoted: the
+            # shell expands it -- in a Python or Node heredoc too, before the
+            # interpreter reads it (see UNQUOTED_NAME).
+            expands = not (match.group(1) or match.group(2))
             if PY_INTERPRETER.search(command):
                 lang = "py"
             elif JS_INTERPRETER.search(command):
                 lang = "js"
             else:
-                # Quoted delimiter: text the shell leaves alone. Unquoted: the
-                # shell expands it, so it reads like any other shell line.
-                lang = "data" if match.group(1) or match.group(2) else "sh-heredoc"
-            heredoc = (match.group(3), lang, dest, len(out) - 1)
+                # An unquoted one reads like any other shell line.
+                lang = "sh-heredoc" if expands else "data"
+            heredoc = (match.group(3), lang, dest, len(out) - 1, expands)
         i += 1
     return out
 
@@ -965,6 +1013,10 @@ CLOSERS = {"}", "done", "fi", "esac"}
 # of `>|`), a background `&` (not `2>&1` or `&>`), and `(` / `)`.
 STATEMENT_SPLIT = re.compile(r";|&&|\|\||(?<!>)\|(?!\|)|(?<![>&])&(?![>&])|[()]")
 GROUP_NAME = "<summary group>"
+# A line of a Python or Node heredoc with an unquoted delimiter that holds `$`
+# or a backtick: the shell expands it before the interpreter reads the line,
+# and the Python or Node reading doesn't see that expansion.
+UNQUOTED_NAME = "<unquoted heredoc>"
 
 
 # `name=(...)`, `name+=(...)`: an array literal, whose words are data.
@@ -1137,7 +1189,10 @@ def unattributed_summary_closers(units: list[Logical]) -> list[int]:
     return out
 
 
-# A function's name in its definition: `f() ...`, `function f ...`.
+# A function's name after `function` (`function f ...`). Before an empty `()`
+# any single word is one (`x@y() ...`, `a/b() ...`, `f+() ...`): outside a
+# definition, a word followed by `()` is a syntax error, so it can't be a
+# subshell.
 FUNCTION_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_:.-]*")
 # The words that open the compound command a function definition takes as its body.
 BODY_OPENERS = ("{", "if", "for", "while", "until", "select", "case")
@@ -1227,7 +1282,7 @@ def blocks_of(units: list[Logical]) -> Blocks:
             path: tuple[int, ...] | None = None
             if i == parens + 1 and parens >= 0:
                 words = []  # the inside of `()`
-            elif len(words) == 1 and FUNCTION_NAME.fullmatch(words[0]) and parens_follow(segments, i):
+            elif len(words) == 1 and parens_follow(segments, i):
                 header, words, parens = True, [], i
             while words:
                 word = words.pop(0)
@@ -2042,18 +2097,23 @@ class Checker:
                 text += "\n" + self.units[end].text
                 depth, quote = bracket_state(text, len(text) - len(self.units[end].text) - 1, depth, quote)
                 end += 1
-        names = self.strict_prints(k, ("shown",), self.shown.get(self.heredoc_id(k), False), text)
+        opener = self.units[unit.origin] if unit.origin >= 0 else None
+        stderr = opener is not None and STDERR_TO_ENV_FILE.search(HEREDOC.sub(" ", opener.text)) is not None
+        names = self.strict_prints(k, ("shown",), self.shown.get(self.heredoc_id(k), False), text, stderr)
         return [name for name in names if not self.allowed(name, k, shell=False)]
 
-    def strict_prints(self, k: int, calls: tuple[str, ...], defined: bool, text: str) -> list[str]:
+    def strict_prints(self, k: int, calls: tuple[str, ...], defined: bool, text: str,
+                      stderr: bool = False) -> list[str]:
         """Unclean values on a Python or Node line whose stdout reaches the summary or an env file.
 
         Every print call on the line counts. A call to stderr (by its name, or
         a `file=sys.stderr` argument -- not that text in a comment) is a log
-        line and left to the log rules; in a stdout call every argument, and
-        Python's `end=` and `sep=`, must be one plain literal or a call of the
-        helper (`calls`, which counts only where `defined`). Template and
-        f-string parts anywhere else on the line must be helper calls too.
+        line and left to the log rules, unless `stderr` is set (the heredoc
+        sends its stderr into the env file as well): then it is read like a
+        stdout call. In a stdout call every argument, and Python's `end=` and
+        `sep=`, must be one plain literal or a call of the helper (`calls`,
+        which counts only where `defined`). Template and f-string parts
+        anywhere else on the line must be helper calls too.
         """
         unit = self.units[k]
         exprs: list[str] = []
@@ -2068,7 +2128,8 @@ class Checker:
             keyword = {a.split("=", 1)[0].strip(): a.split("=", 1)[1].strip()
                        for a in args if unit.lang == "py" and re.match(r"^[A-Za-z_]+\s*=(?!=)", a)}
             to_stderr = (re.sub(r"\s+", "", m.group(1)) in STDERR_PRINTS or keyword.get("file") == "sys.stderr")
-            if to_stderr or ("file" in keyword and keyword["file"] != "sys.stdout"):
+            elsewhere = "file" in keyword and keyword["file"] not in ("sys.stdout", "sys.stderr")
+            if (to_stderr and not stderr) or elsewhere:
                 continue  # a log line (the log rules read it), or a file of its own
             call_text = text[m.end():end]
             exprs += template_exprs(call_text, unit.lang)
@@ -2225,6 +2286,13 @@ def audit_body(body: Body, siblings: list[Body] | None = None, entries: tuple[Al
                 body.path, line, body.step,
                 f"`{LEADING}`: this log line begins with an interpolated value. No mask touches a "
                 "leading '::', so put a literal in front of it."))
+    for unit in checker.units:
+        if unit.lang in ("py", "js") and unit.expands and re.search(r"[$`]", unit.text):
+            findings.append(finding(
+                body.path, body.first_line + unit.index, body.step,
+                f"`{UNQUOTED_NAME}`: this line of a Python or Node heredoc holds '$' or a backtick, and the "
+                "heredoc's delimiter is unquoted, so the shell expands it before the interpreter reads the "
+                "line. Quote the delimiter (<<'PY') and read a value from the environment instead."))
     for k in unattributed_summary_closers(checker.units):
         findings.append(finding(
             body.path, body.first_line + checker.units[k].index, body.step,

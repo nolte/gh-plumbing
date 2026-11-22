@@ -736,6 +736,84 @@ def test_quoted_data_heredoc_is_not_shell(tmp_path):
     assert check(tmp_path, "cat > f.py <<'PY'\nprint('::error::$VALUE')\nPY") == []
 
 
+# --- #507 second review: function names, stderr into an env file, unquoted heredocs ---
+
+@pytest.mark.parametrize("fname", ["x@y", "a/b", "f+", "f", "my-f"])
+def test_a_print_in_a_function_with_any_name_is_seen_in_its_body(tmp_path, fname):
+    # bash takes any word before an empty `()` as a function's name. Read as
+    # a subshell and a group, `x@y() {` let the mask before it cover the print.
+    run = f'{HELPER}\nx=$(shown "$VALUE")\n{fname}() {{\n  echo "::error::x $x"\n}}\nx="$VALUE"\n{fname}'
+    assert check(tmp_path, run) == ["x"]
+
+
+@pytest.mark.parametrize("fname", ["x@y", "a/b", "f+", "f", "my-f"])
+def test_a_raw_assignment_in_a_function_with_any_name_voids_the_mask(tmp_path, fname):
+    run = f'{HELPER}\n{fname}() {{ x="$VALUE"; }}\nx=$(shown "$VALUE")\n{fname}\necho "::error::x $x"'
+    assert check(tmp_path, run) == ["x"]
+
+
+STDERR_PY = "python3 - <<'PY' {}\nimport os, sys\np = os.environ['P']\n{}\nPY"
+
+
+@pytest.mark.parametrize("redirect, print_, expected", [
+    ('>> "$GITHUB_OUTPUT" 2>&1', 'print("v=" + p, file=sys.stderr)', '"v=" + p'),
+    ('2>> "$GITHUB_OUTPUT"', 'sys.stderr.write("v=" + p + "\\n")', '"v=" + p + "\\n"'),
+    ('&>> "$GITHUB_OUTPUT"', 'print("v=" + p, file=sys.stderr)', '"v=" + p'),
+    ('&> "$GITHUB_ENV"', 'print("v=" + p, file=sys.stderr)', '"v=" + p'),
+    ('> /dev/null 2>> "$GITHUB_OUTPUT"', 'print("v=" + p, file=sys.stderr)', '"v=" + p'),
+    ('|& tee -a "$GITHUB_OUTPUT"', 'print("v=" + p, file=sys.stderr)', '"v=" + p'),
+])
+def test_stderr_routed_into_an_env_file_is_read_strictly(tmp_path, redirect, print_, expected):
+    # Its stderr prints are entries of the env file too: `"v=" + p` is no
+    # finding on a log line, but is one there.
+    assert check(tmp_path, STDERR_PY.format(redirect, print_)) == [expected]
+
+
+@pytest.mark.parametrize("redirect", ['>> "$GITHUB_OUTPUT" 2>&1', '2>> "$GITHUB_OUTPUT"'])
+def test_node_stderr_routed_into_an_env_file_is_read_strictly(tmp_path, redirect):
+    run = f"node <<'NODE' {redirect}\nconst p = process.env.P;\nconsole.error(\"v=\" + p);\nNODE"
+    assert check(tmp_path, run) == ['"v=" + p']
+
+
+@pytest.mark.parametrize("run", [
+    (f"python3 - <<'PY' >> \"$GITHUB_OUTPUT\" 2>&1\nimport os, re, sys\n{PY_HELPER}p = os.environ['P']\n"
+     "print(f\"v={shown(p)}\", file=sys.stderr)\nsys.stderr.write(f\"w={shown(p)}\\n\")\nPY"),
+    (f"node <<'NODE' 2>> \"$GITHUB_OUTPUT\"\n{guard.JS_SHOWN}\nconst p = process.env.P;\n"
+     "console.error(`v=${shown(p)}`);\nNODE"),
+])
+def test_masked_stderr_routed_into_an_env_file_is_fine(tmp_path, run):
+    assert check(tmp_path, run) == []
+
+
+def test_stderr_kept_on_the_log_stays_a_log_line(tmp_path):
+    # Without a stderr redirect into the env file, the log reading holds.
+    run = STDERR_PY.format('>> "$GITHUB_OUTPUT"', 'print("v=" + p, file=sys.stderr)')
+    assert check(tmp_path, run) == []
+
+
+@pytest.mark.parametrize("run", [
+    'python3 - <<PY >> "$GITHUB_OUTPUT"\nprint("v=$VALUE")\nPY',
+    'node <<NODE >> "$GITHUB_OUTPUT"\nconsole.log("v=$VALUE");\nNODE',
+    'python3 - <<PY\nprint("::error::x $VALUE")\nPY',
+    'python3 - <<PY >> "$GITHUB_STEP_SUMMARY"\nprint("v=$VALUE")\nPY',
+    'python3 - <<PY > out.json\nprint("v=${VALUE}")\nPY',
+    'python3 - <<-PY\nprint("::error::x `cat f`")\nPY',
+])
+def test_an_unquoted_python_or_node_heredoc_with_an_expansion_is_refused(tmp_path, run):
+    # The shell expands `$VALUE` before the interpreter runs, so the value
+    # becomes code and text the Python or Node reading never sees.
+    assert check(tmp_path, run) == [guard.UNQUOTED_NAME]
+
+
+@pytest.mark.parametrize("run", [
+    'python3 - <<PY\nprint("::error::x fixed")\nPY',
+    "python3 - <<'PY'\nimport os\nprint(\"x\", os.environ['VALUE'].count('$'))\nPY",
+    "node <<\\NODE\nconsole.log(`x $${1}`);\nNODE",
+])
+def test_a_quoted_or_expansion_free_python_heredoc_is_not_refused_as_unquoted(tmp_path, run):
+    assert guard.UNQUOTED_NAME not in check(tmp_path, run)
+
+
 # --- the allow-list ----------------------------------------------------------
 
 REL = ".github/workflows/reusable-w.yaml"
