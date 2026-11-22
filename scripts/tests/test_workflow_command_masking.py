@@ -794,8 +794,8 @@ STDERR_PY = "python3 - <<'PY' {}\nimport os, sys\np = os.environ['P']\n{}\nPY"
     ('|& tee -a "$GITHUB_OUTPUT"', 'print("v=" + p, file=sys.stderr)', '"v=" + p'),
 ])
 def test_stderr_routed_into_an_env_file_is_read_strictly(tmp_path, redirect, print_, expected):
-    # Its stderr prints are entries of the env file too: `"v=" + p` is no
-    # finding on a log line, but is one there.
+    # Its stderr prints are entries of the env file too, read as strictly as
+    # its stdout prints (and as a log line, #511).
     assert check(tmp_path, STDERR_PY.format(redirect, print_)) == [expected]
 
 
@@ -815,10 +815,17 @@ def test_masked_stderr_routed_into_an_env_file_is_fine(tmp_path, run):
     assert check(tmp_path, run) == []
 
 
-def test_stderr_kept_on_the_log_stays_a_log_line(tmp_path):
-    # Without a stderr redirect into the env file, the log reading holds.
-    run = STDERR_PY.format('>> "$GITHUB_OUTPUT"', 'print("v=" + p, file=sys.stderr)')
-    assert check(tmp_path, run) == []
+@pytest.mark.parametrize("print_, expected", [
+    # Read as a log line -- since #511 as strictly as an entry.
+    ('print("v=" + p, file=sys.stderr)', ['"v=" + p']),
+    ('print(f"v={shown(p)}", file=sys.stderr)', []),
+    ('print(shown(p), file=sys.stderr)', ["<leading value>"]),
+])
+def test_stderr_kept_on_the_log_stays_a_log_line(tmp_path, print_, expected):
+    # Without a stderr redirect into the env file, it is a log line only: the
+    # line-start rule holds for it, not for the stdout entries.
+    run = STDERR_PY.format('>> "$GITHUB_OUTPUT"', f"import re\n{PY_HELPER}{print_}\nprint(shown(p))")
+    assert check(tmp_path, run) == expected
 
 
 @pytest.mark.parametrize("run", [
@@ -898,9 +905,16 @@ def test_a_shell_write_through_ampersand_redirect_is_an_env_file(tmp_path):
 
 @pytest.mark.parametrize("redirect", ["2>&1", ">&2", "2>/dev/stdout", '>&2 2>> /tmp/log'])
 def test_stderr_or_stdout_kept_on_the_log_is_no_env_file(tmp_path, redirect):
-    # No env file on the line: the heredoc is a log heredoc, its stderr print a log line.
-    assert check(tmp_path, STDERR_PY.format(redirect, 'print("v=" + p, file=sys.stderr)')) == []
-    assert check(tmp_path, STDERR_PY.format(redirect, 'print("v=" + p)')) == []
+    # No env file on the line: the heredoc is a log heredoc, its prints log
+    # lines -- read as strictly as an entry (#511), but under the line-start
+    # rule, which an entry isn't.
+    helper = f"import re\n{PY_HELPER}"
+    assert check(tmp_path, STDERR_PY.format(redirect, 'print("v=" + p, file=sys.stderr)')) == ['"v=" + p']
+    assert check(tmp_path, STDERR_PY.format(redirect, f'{helper}print(f"v={{shown(p)}}", file=sys.stderr)')) == []
+    if "/tmp/log" not in redirect:
+        # (With `>&2 2>> /tmp/log` bash sends stdout to the log, but the guard
+        # reads the heredoc's stdout as a file: a known gap, not #511's.)
+        assert check(tmp_path, STDERR_PY.format(redirect, f'{helper}print(shown(p))')) == ["<leading value>"]
 
 
 # --- the allow-list ----------------------------------------------------------
@@ -1526,3 +1540,139 @@ def test_an_array_of_keywords_opens_nothing(tmp_path):
     run = (f'{HELPER}\nfor x in 1; do\n  echo "x $(shown "$VALUE")"\n  kw=(if for while)\n  local -a k2=(do {{ case)\n'
            f'done {SUMMARY}')
     assert summary_names(tmp_path, run) == ["VALUE"]
+
+
+# --- #511: Python and Node log prints, read as strictly as an env-file entry ---
+
+P_ENV = "          P: ${{ inputs.p }}\n"
+LOG_PY = "python3 - <<'PY'\nimport os, re, sys\np = os.environ[\"P\"]\n{}\nPY"
+LOG_PY_SHOWN = f"python3 - <<'PY'\nimport os, re, sys\n{PY_HELPER}p = os.environ[\"P\"]\n{{}}\nPY"
+LOG_JS = "node <<'JS'\nconst p = process.env.P;\n{}\nJS"
+LOG_JS_SHOWN = f"node <<'JS'\n{guard.JS_SHOWN}\nconst p = process.env.P;\n{{}}\nJS"
+
+
+@pytest.mark.parametrize("run, expected", [
+    # A second print call on the line (the issue's fixture).
+    (LOG_PY.format('print("ok"); print("::error::" + p)'), ['"::error::" + p']),
+    # The continuation line of a call.
+    (LOG_PY.format('print("ok",\n      "::error::" + p)'), ['"::error::" + p']),
+    # `end=` ends the line in a command; the next print fills it.
+    (LOG_PY.format('print("x", end="\\n::error::"); print(p)'), ["p", guard.LEADING]),
+    # A second Node print call on the line.
+    (LOG_JS.format('console.log("ok"); console.log("::error::" + p);'), ['"::error::" + p']),
+    # A single print, built by concatenation.
+    (LOG_PY.format('print("::error::" + p)'), ['"::error::" + p']),
+    # `sep=` was a finding already and stays one.
+    (LOG_PY.format('print("ok", p, sep="\\n::error::")'), ["p"]),
+])
+def test_the_measured_log_print_forms_are_findings(tmp_path, run, expected):
+    # Each exited 0 on develop before #511, as the only step of a reusable
+    # workflow reading a caller's input.
+    assert check(tmp_path, run, env=P_ENV) == expected
+    assert guard.main(["--root", str(tmp_path)]) == 1
+
+
+@pytest.mark.parametrize("print_", [
+    'print("x %s" % p)',
+    'print("x {}".format(p))',
+    'print("x", "y" + p)',
+    'print("x", file=sys.stderr); print("::error::" + p, file=sys.stderr)',
+    'sys.stderr.write("x " + p + "\\n")',
+    'raise SystemExit("::error::" + p)',
+    'print (f"x {p}")',
+    'print("x",\n      f"y {p}",\n      file=sys.stderr)',
+    'print("x", end=p)',
+])
+def test_python_log_prints_are_read_strictly(tmp_path, print_):
+    assert check(tmp_path, LOG_PY.format(print_), env=P_ENV) != []
+
+
+@pytest.mark.parametrize("print_", [
+    'console.error("::error::" + p);',
+    'console.log("ok"); console.error(`x ${p}`);',
+    'console.table(`x ${p}`);',
+    'console.dir("x " + p);',
+    'console . log("x " + p);',
+    'process.stderr.write("x " + p + "\\n");',
+    'console.log("ok",\n  "x " + p);',
+])
+def test_node_log_prints_are_read_strictly(tmp_path, print_):
+    assert check(tmp_path, LOG_JS.format(print_), env=P_ENV) != []
+
+
+@pytest.mark.parametrize("run", [
+    LOG_PY_SHOWN.format('print(f"::error::{shown(p)}")'),
+    LOG_PY_SHOWN.format('print("ok"); print(f"::error::x {shown(p)}", file=sys.stderr)'),
+    LOG_PY_SHOWN.format('print("ok",\n      f"x {shown(p)}", sep=" - ", end="\\n")'),
+    LOG_PY_SHOWN.format('print(f"n={len(p)}"); sys.stderr.write(f"x {shown(p)}\\n")'),
+    LOG_PY.format('print("ok"); print("::error::fixed", file=sys.stderr)'),
+    LOG_JS_SHOWN.format('console.log("ok"); console.error(`::error::${shown(p)}`);'),
+    LOG_JS.format('console.log("ok"); console.table("fixed");'),
+])
+def test_masked_or_literal_log_prints_stay_clean(tmp_path, run):
+    assert check(tmp_path, run, env=P_ENV) == []
+
+
+def test_only_the_log_prints_of_a_heredoc_redirected_elsewhere_are_read(tmp_path):
+    # Its stdout goes to a file: those prints aren't log lines; its stderr
+    # prints are, read strictly.
+    run = 'python3 - <<\'PY\' > out.txt\nimport os, sys\np = os.environ["P"]\nprint("x " + p)\nPY'
+    assert check(tmp_path, run, env=P_ENV) == []
+    shutil.rmtree(tmp_path / ".github")
+    run = ('python3 - <<\'PY\' > out.txt\nimport os, sys\np = os.environ["P"]\n'
+           'print("x " + p); print("y " + p, file=sys.stderr)\nPY')
+    assert check(tmp_path, run, env=P_ENV) == ['"y " + p']
+
+
+def test_a_log_entry_names_a_bare_value_on_a_strict_line(tmp_path):
+    entry = guard.Allowed(REL, "p", reason="test")
+    run = LOG_PY.format('print("ok"); print("x", p)')
+    write(tmp_path, REL, workflow(run, env=P_ENV))
+    assert names(tmp_path, [entry]) == []
+    assert names(tmp_path) == [(15, "p")]
+
+
+@pytest.mark.parametrize("text, lang, leads", [
+    ('print(shown(p))', "py", True),
+    ('print(f"{shown(p)}")', "py", True),
+    ('print(f"  {shown(p)}")', "py", True),
+    ('print(f"ok\\n{shown(p)}")', "py", True),
+    ('print(f"ok\\x0a {shown(p)}")', "py", True),
+    ('print("ok\\n" + shown(p))', "py", True),
+    ('print("" + shown(p))', "py", True),
+    ('print("%s x" % shown(p))', "py", True),
+    ('print("{} x".format(shown(p)))', "py", True),
+    ('print("", shown(p))', "py", True),
+    ('print("ok", shown(p), sep="\\n")', "py", True),
+    ('sys.stderr.write(shown(p))', "py", True),
+    ('raise SystemExit(f"{shown(p)}")', "py", True),
+    ('console.log(shown(p))', "js", True),
+    ('console.log(`ok\\n${shown(p)}`)', "js", True),
+    ('console.log("%s", shown(p))', "js", True),
+    ('console.log("ok\\n" + shown(p))', "js", True),
+    ('print(f"x {shown(p)}")', "py", False),
+    ('print("x", shown(p))', "py", False),
+    ('print("x " + shown(p))', "py", False),
+    ('print("x %s" % shown(p))', "py", False),
+    ('print("x {}".format(shown(p)))', "py", False),
+    ('print(f"{{literal}} {shown(p)}")', "py", False),
+    ('print(r"x\\n" + shown(p))', "py", False),
+    ('print("ok", shown(p), sep=" - ")', "py", False),
+    ('print(f"ok\\n  - {shown(p)}")', "py", False),
+    ('print()', "py", False),
+    ('console.log(`x ${shown(p)}`)', "js", False),
+    ('console.log("x", shown(p))', "js", False),
+    ('console.log("x %s", shown(p))', "js", False),
+])
+def test_the_line_start_rule_reads_every_line_a_print_writes(text, lang, leads):
+    calls = guard.print_calls(text, lang)
+    assert len(calls) == 1
+    assert guard.leading_print(calls[0], lang) is leads
+
+
+def test_the_line_start_rule_holds_for_every_print_on_a_line(tmp_path):
+    run = LOG_PY_SHOWN.format('print("ok"); print(shown(p))')
+    assert check(tmp_path, run, env=P_ENV) == [guard.LEADING]
+    shutil.rmtree(tmp_path / ".github")
+    run = LOG_JS_SHOWN.format('console.log("ok"); console.error(`${shown(p)}`);')
+    assert check(tmp_path, run, env=P_ENV) == [guard.LEADING]

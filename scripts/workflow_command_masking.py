@@ -460,11 +460,9 @@ READERS = ("read", "mapfile", "readarray", "getopts", "let")
 LOOP_OR_READ = re.compile(r"""\b(?:(?:for|select)\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\b|read\s+(?:-[A-Za-z]+\s+(?:''\s+)?)*([A-Za-z_][A-Za-z0-9_]*)|mapfile\s+(?:-\w+\s+)*([A-Za-z_][A-Za-z0-9_]*))""")
 SHELL_PRINT = re.compile(r"(?:^\s*|[;&|]\s*|\b(?:then|do|else|if|!)\s+|\{\s+)(echo|printf)\b(?!\s+-v\b)")
 STATEMENT_END = re.compile(r";|&&|\|\||\bthen\b|\bdo\b")
-PY_PRINT = re.compile(r"\b(print|SystemExit|sys\.stdout\.write|sys\.stderr\.write)\(")
-JS_PRINT = re.compile(r"\b(console\.(?:log|info|warn|error|debug)|process\.stdout\.write|process\.stderr\.write)\(")
-# The strict reading of a Python or Node print (step summary, env file): a
-# space before the call's `(` too, and every `console` method -- all but
-# STDERR_PRINTS write to stdout.
+# How a Python or Node print is read, on every sink (step summary, env file,
+# log -- #511): a space before the call's `(` too, and every `console` method
+# -- all but STDERR_PRINTS write to stdout.
 PY_STRICT_PRINT = re.compile(r"\b(print|SystemExit|sys\.stdout\.write|sys\.stderr\.write)\s*\(")
 JS_STRICT_PRINT = re.compile(r"\b(console\s*\.\s*[A-Za-z]+|process\.stdout\.write|process\.stderr\.write)\s*\(")
 STDERR_PRINTS = {"SystemExit", "sys.stderr.write", "console.error", "console.warn", "console.trace", "console.assert",
@@ -1402,17 +1400,6 @@ def blocks_of(units: list[Logical]) -> Blocks:
     return Blocks(segments_by, paths_by, kinds, spans, functions, ok)
 
 
-def stdout_print(unit: Logical) -> bool | None:
-    """Whether the first print of a Python or Node line goes to stdout; None: no print."""
-    if unit.lang == "py":
-        m = PY_PRINT.search(unit.text)
-        return None if m is None else m.group(1) in ("print", "sys.stdout.write") and "file=sys.stderr" not in unit.text
-    if unit.lang == "js":
-        m = JS_PRINT.search(unit.text)
-        return None if m is None else m.group(1) not in STDERR_PRINTS  # every other console method is stdout
-    return None
-
-
 def sink_units(units: list[Logical]) -> set[int]:
     """Indices of units that emit a command, write an env file or print to the log."""
     redirected, sinks, _ = redirected_groups(units)
@@ -1437,10 +1424,10 @@ def sink_units(units: list[Logical]) -> set[int]:
             # read strictly, as for the step summary.
             if unit.text.strip():
                 sinks.add(k)
-        elif unit.lang in ("py", "js") and stdout_print(unit) is not None:
-            # stderr is the log; stdout counts where the heredoc sends it to it.
-            if not stdout_print(unit) or unit.dest == "log":
-                sinks.add(k)
+        elif unit.lang in ("py", "js") and any(call.reaches_log(unit.dest) for call in print_calls(text, unit.lang)):
+            # stderr is the log; stdout counts where the heredoc sends it to
+            # it. Every print call on the line, read strictly (#511).
+            sinks.add(k)
     return sinks
 
 
@@ -1608,19 +1595,181 @@ def bracket_state(text: str, start: int, depth: int = 1, quote: str | None = Non
     return depth, quote
 
 
-def printed_exprs(unit: Logical) -> list[str]:
-    """Expressions a Python or Node line prints."""
-    text = unit.text
-    exprs = list(template_exprs(text, unit.lang))
-    m = (PY_PRINT if unit.lang == "py" else JS_PRINT).search(text)
-    if m:
-        for arg in call_args(text, m.end()):
-            if unit.lang == "py" and re.match(r"^[A-Za-z_]+\s*=", arg):
-                continue  # file=, end=, sep=, flush=
-            if re.match(r"""^(?:[rRbBfF]{0,2})?['"`]""", arg):
-                continue  # a literal; f-strings and templates are read above
-            exprs.append(arg)
-    return exprs
+@dataclass
+class PrintCall:
+    """One print call of a Python or Node line, as the strict reading takes it."""
+
+    start: int  # where the call's name starts
+    opener_end: int  # just past its `(`
+    end: int  # just past its `)`, or the end of the text if it isn't closed there
+    name: str  # `print`, `console.log`, ... with any space dropped
+    args: list[str]
+    keyword: dict[str, str]  # Python's keyword arguments: `file`, `end`, `sep`, `flush`
+    to_stderr: bool  # by its name or a `file=sys.stderr` argument
+    elsewhere: bool  # a `file=` other than sys.stdout and sys.stderr: a file of its own
+
+    def reaches_log(self, dest: str) -> bool:
+        """It prints to the log: to stderr, or to a heredoc stdout that goes there."""
+        return not self.elsewhere and (self.to_stderr or dest == "log")
+
+
+def print_calls(text: str, lang: str) -> list[PrintCall]:
+    """Every print call on the text, outermost only (`print (` and every `console` method included)."""
+    calls: list[PrintCall] = []
+    last = 0
+    for m in (PY_STRICT_PRINT if lang == "py" else JS_STRICT_PRINT).finditer(text):
+        if m.start() < last:
+            continue  # inside an earlier call
+        args = call_args(text, m.end())
+        keyword = {a.split("=", 1)[0].strip(): a.split("=", 1)[1].strip()
+                   for a in args if lang == "py" and KEYWORD_ARG.match(a)}
+        name = re.sub(r"\s+", "", m.group(1))
+        calls.append(PrintCall(
+            m.start(), m.end(), call_end(text, m.end()), name, args, keyword,
+            name in STDERR_PRINTS or keyword.get("file") == "sys.stderr",
+            "file" in keyword and keyword["file"] not in ("sys.stdout", "sys.stderr")))
+        last = calls[-1].end
+    return calls
+
+
+# A Python keyword argument (`file=`, `end=`, `sep=`, `flush=`), not `==`.
+KEYWORD_ARG = re.compile(r"^[A-Za-z_]+\s*=(?!=)")
+# The mark an interpolated value leaves in the text a print call writes, and
+# the escapes that write a line end (`\n`, `\x0a`, `\u000a`, `\012`, ...).
+VALUE = "\x00"
+LINE_END_ESCAPE = re.compile(
+    r"\\(?:[nr]|x0[aAdD]|u000[aAdD]|u\{0*[aAdD]\}|0?1[25](?![0-7])|N\{(?:LINE FEED|CARRIAGE RETURN|LF|CR)\})")
+LITERAL_OPEN = re.compile("([rRbBfFuU]{0,2})('''|\"\"\"|['\"`])")
+PERCENT_CONVERSION = re.compile(r"%(?:\([^)]*\))?[-#0 +]*(?:\*|[0-9]+)?(?:\.(?:\*|[0-9]+))?[diouxXeEfFgGcrsa]")
+CONSOLE_CONVERSION = re.compile(r"%[sdifjoOc]")
+
+
+def _literal_end(text: str, i: int, quote: str) -> int:
+    """Index just past the literal whose content starts at i and ends at `quote`."""
+    while i < len(text):
+        if text[i] == "\\":
+            i += 2
+            continue
+        if text.startswith(quote, i):
+            return i + len(quote)
+        if quote == "`" and text.startswith("${", i):
+            depth, i = 1, i + 2
+            while i < len(text) and depth:
+                depth += {"{": 1, "}": -1}.get(text[i], 0)
+                i += 1
+            continue
+        i += 1
+    return len(text)
+
+
+def _interpolated(content: str, lang: str) -> str:
+    """An f-string's or template literal's content with every interpolation as VALUE."""
+    out, i = [], 0
+    opener = "${" if lang == "js" else "{"
+    while i < len(content):
+        if content[i] == "\\" and lang == "js":
+            out.append(content[i:i + 2])
+            i += 2
+            continue
+        if lang == "py" and content.startswith(("{{", "}}"), i):
+            out.append(content[i])
+            i += 2
+            continue
+        if content.startswith(opener, i):
+            depth, i = 1, i + len(opener)
+            while i < len(content) and depth:
+                depth += {"{": 1, "}": -1}.get(content[i], 0)
+                i += 1
+            out.append(VALUE)
+            continue
+        out.append(content[i])
+        i += 1
+    return "".join(out)
+
+
+def _top_level(text: str, i: int, stops: str) -> int:
+    """Index of the first character of `stops` at bracket depth 0 from i, outside quotes; len(text) if none."""
+    depth, quote = 0, None
+    while i < len(text):
+        c = text[i]
+        if quote:
+            if c == "\\":
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+        elif c in "'\"`":
+            quote = c
+        elif c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif c in stops and depth == 0:
+            return i
+        i += 1
+    return len(text)
+
+
+def printed_skeleton(expr: str, lang: str, console_format: bool = False) -> str:
+    """The text an expression prints, literal parts as written and every value as VALUE.
+
+    Read for the log's line-start rule: string literals (f-strings and
+    template literals with their parts as VALUE), joined by `+`; a literal
+    formatted by `%` or `.format(...)` -- or, as the first argument of a Node
+    `console` call, by its own `%s`-style conversions -- has each conversion
+    as VALUE; anything else is one VALUE. Line-end escapes become line ends.
+    """
+    out: list[str] = []
+    text, i = expr.strip(), 0
+    while i < len(text):
+        if text[i].isspace() or text[i] == "+":
+            i += 1
+            continue
+        lit = LITERAL_OPEN.match(text, i)
+        if lit and (lang == "py" or not lit.group(1)) and (lang == "js" or lit.group(2) != "`"):
+            prefix, quote = lit.group(1).lower(), lit.group(2)
+            end = _literal_end(text, lit.end(), quote)
+            closed = text.startswith(quote, end - len(quote)) and end - len(quote) >= lit.end()
+            content = text[lit.end():end - len(quote)] if closed else text[lit.end():end]
+            formatted = "f" in prefix or quote == "`"
+            if formatted:
+                content = _interpolated(content, lang)
+            if "r" not in prefix:
+                content = LINE_END_ESCAPE.sub("\n", content)
+            content = content.replace("\r", "\n")
+            i = end
+            rest = text[i:].lstrip()
+            if not formatted and lang == "py" and rest.startswith(".format("):
+                content = re.sub(r"(?<!\{)\{[^{}]*\}", VALUE, content)
+                i = call_end(text, text.index(".format(", i) + len(".format("))
+            elif not formatted and lang == "py" and rest.startswith("%") and not rest.startswith("%="):
+                content = PERCENT_CONVERSION.sub(VALUE, content).replace("%%", "%")
+                i = _top_level(text, text.index("%", i) + 1, "+")
+            elif not formatted and console_format and not out:
+                content = CONSOLE_CONVERSION.sub(VALUE, content)
+            out.append(content)
+            continue
+        # Anything else -- a name, a call, an operator expression -- is a value.
+        out.append(VALUE)
+        i = max(_top_level(text, i, "+"), i + 1)
+    return "".join(out)
+
+
+def leading_print(call: PrintCall, lang: str) -> bool:
+    """A log print call whose text begins a line with an interpolated value.
+
+    The call's positional arguments are joined by its separator (a space, or
+    Python's `sep=`); the line-start rule holds at the start of the text and
+    after every line end in it. The call itself is taken to start a line.
+    """
+    positional = [a for a in call.args if not (lang == "py" and KEYWORD_ARG.match(a))]
+    console = call.name.startswith("console")
+    if lang == "py" and call.name == "print":
+        sep = printed_skeleton(call.keyword["sep"], lang) if "sep" in call.keyword else " "
+    else:
+        sep = " " if console else ""
+    printed = sep.join(printed_skeleton(arg, lang, console and n == 0) for n, arg in enumerate(positional))
+    return any(line.lstrip().startswith(VALUE) for line in printed.split("\n"))
 
 
 def single_literal(arg: str, lang: str) -> bool:
@@ -2127,6 +2276,31 @@ class Checker:
         continuation lines joined to it.
         """
         unit = self.units[k]
+        opener = self.units[unit.origin] if unit.origin >= 0 else None
+        stderr = opener is not None and STDERR_TO_ENV_FILE.search(HEREDOC.sub(" ", opener.text)) is not None
+        names = self.strict_prints(k, ("shown",), self.shown.get(self.heredoc_id(k), False), self.joined(k),
+                                   stderr=stderr)
+        return [name for name in names if not self.allowed(name, k, shell=False)]
+
+    def log_template(self, k: int) -> list[str]:
+        """Unclean values in the log prints of a Python or Node line (#511).
+
+        Read as strictly as an env-file line (`strict_prints`), with
+        `shown(...)` -- defined the canonical way in that heredoc -- as the
+        mask, and ALLOWED for the log sink: every stderr print, and every
+        stdout print where the heredoc's stdout is the log.
+        """
+        unit = self.units[k]
+        names = self.strict_prints(k, ("shown",), self.shown.get(self.heredoc_id(k), False), self.joined(k),
+                                   stdout=unit.dest == "log", stderr=True)
+        return [name for name in names if not self.allowed(name, k, shell=False)]
+
+    def joined(self, k: int) -> str:
+        """A Python or Node line, with the continuation lines of a print call it leaves open.
+
+        Up to JOINED_LINES of them, of the same heredoc.
+        """
+        unit = self.units[k]
         text = unit.text
         opener = open_print(text, unit.lang)
         if opener is not None:
@@ -2137,44 +2311,34 @@ class Checker:
                 text += "\n" + self.units[end].text
                 depth, quote = bracket_state(text, len(text) - len(self.units[end].text) - 1, depth, quote)
                 end += 1
-        opener = self.units[unit.origin] if unit.origin >= 0 else None
-        stderr = opener is not None and STDERR_TO_ENV_FILE.search(HEREDOC.sub(" ", opener.text)) is not None
-        names = self.strict_prints(k, ("shown",), self.shown.get(self.heredoc_id(k), False), text, stderr)
-        return [name for name in names if not self.allowed(name, k, shell=False)]
+        return text
 
     def strict_prints(self, k: int, calls: tuple[str, ...], defined: bool, text: str,
-                      stderr: bool = False) -> list[str]:
-        """Unclean values on a Python or Node line whose stdout reaches the summary or an env file.
+                      stdout: bool = True, stderr: bool = False) -> list[str]:
+        """Unclean values in the print calls of a Python or Node line that reach a sink.
 
-        Every print call on the line counts. A call to stderr (by its name, or
-        a `file=sys.stderr` argument -- not that text in a comment) is a log
-        line and left to the log rules, unless `stderr` is set (the heredoc
-        sends its stderr into the env file as well): then it is read like a
-        stdout call. In a stdout call every argument, and Python's `end=` and
-        `sep=`, must be one plain literal or a call of the helper (`calls`,
-        which counts only where `defined`). Template and f-string parts
-        anywhere else on the line must be helper calls too.
+        Every print call on the line counts. Which ones this reads: stdout
+        calls where `stdout` is set (the summary, an env file, or the log when
+        the heredoc's stdout goes there); calls to stderr -- by their name, or
+        a `file=sys.stderr` argument, not that text in a comment -- where
+        `stderr` is set (the log, or an env file the heredoc sends its stderr
+        into as well). A call to a file of its own is never read. In a call
+        read, every argument, and Python's `end=` and `sep=`, must be one
+        plain literal or a call of the helper (`calls`, which counts only
+        where `defined`). Template and f-string parts anywhere else on the
+        line, outside the calls not read, must be helper calls too.
         """
         unit = self.units[k]
         exprs: list[str] = []
         outside, last = [], 0
-        for m in (PY_STRICT_PRINT if unit.lang == "py" else JS_STRICT_PRINT).finditer(text):
-            if m.start() < last:
-                continue
-            args = call_args(text, m.end())
-            end = call_end(text, m.end())
-            outside.append(text[last:m.start()])
-            last = end
-            keyword = {a.split("=", 1)[0].strip(): a.split("=", 1)[1].strip()
-                       for a in args if unit.lang == "py" and re.match(r"^[A-Za-z_]+\s*=(?!=)", a)}
-            to_stderr = (re.sub(r"\s+", "", m.group(1)) in STDERR_PRINTS or keyword.get("file") == "sys.stderr")
-            elsewhere = "file" in keyword and keyword["file"] not in ("sys.stdout", "sys.stderr")
-            if (to_stderr and not stderr) or elsewhere:
-                continue  # a log line (the log rules read it), or a file of its own
-            call_text = text[m.end():end]
-            exprs += template_exprs(call_text, unit.lang)
-            for arg in args:
-                if unit.lang == "py" and re.match(r"^[A-Za-z_]+\s*=(?!=)", arg):
+        for call in print_calls(text, unit.lang):
+            outside.append(text[last:call.start])
+            last = call.end
+            if call.elsewhere or not (stderr if call.to_stderr else stdout):
+                continue  # another sink's line (its rules read it), or a file of its own
+            exprs += template_exprs(text[call.opener_end:call.end], unit.lang)
+            for arg in call.args:
+                if unit.lang == "py" and KEYWORD_ARG.match(arg):
                     name, value = (part.strip() for part in arg.split("=", 1))
                     if name in ("end", "sep") and not single_literal(value, "py"):
                         exprs.append(value)
@@ -2221,20 +2385,22 @@ class Checker:
                 if not ((masked and self.shell_shown) or numeric or self.clean_shell(name, k)):
                     names.append(name)
             return names
-        if unit.dest == "envfile" and not self.helper_line(k):
+        if self.helper_line(k):
+            return names
+        if unit.dest == "envfile":
             # Its stdout prints are entries, read strictly; its stderr prints
             # are log lines, read below as on any other heredoc line.
             names += self.envfile_template(k)
-        for expr in printed_exprs(unit):
-            if re.match(r"^shown\(.*\)$", expr) and self.shown.get(self.heredoc_id(k)):
-                continue
-            if re.match(r"^len\(.*\)$", expr):
-                continue
-            root = re.match(r"^[A-Za-z_][A-Za-z0-9_]*", expr)
-            name = root.group(0) if root else expr
-            if not self.allowed(name, k, shell=False):
-                names.append(name)
-        return names
+            if not any(call.reaches_log(unit.dest) for call in print_calls(unit.text, unit.lang)):
+                return names
+        # Its log prints, read as strictly (#511).
+        return names + self.log_template(k)
+
+    def leading_print(self, k: int) -> bool:
+        """A log print call of a Python or Node line begins a line with a value (`leading_print`)."""
+        unit = self.units[k]
+        return any(call.reaches_log(unit.dest) and leading_print(call, unit.lang)
+                   for call in print_calls(self.joined(k), unit.lang))
 
 
 def _literal_head(quoted: str) -> str | None:
@@ -2248,7 +2414,7 @@ def _literal_head(quoted: str) -> str | None:
 
 
 def leading_value(unit: Logical) -> bool:
-    """A log line whose printed text begins with an interpolated value.
+    """A shell log line whose printed text begins with an interpolated value.
 
     The runner trims leading whitespace before it looks for `::`, and no mask
     touches `::`, so such a value can start a command of its own. A literal
@@ -2277,27 +2443,6 @@ def leading_value(unit: Logical) -> bool:
             return rest.startswith("$")
         lead = head.split("%", 1)[0]
         return "%" in head and not lead.strip()
-    if unit.lang in ("py", "js"):
-        m = (PY_PRINT if unit.lang == "py" else JS_PRINT).search(text)
-        if not m or COMMAND.search(text):
-            return False
-        if unit.dest == "envfile" and stdout_print(unit):
-            return False  # an env-file entry, not a log line: as for a shell write there
-        args = call_args(text, m.end())
-        if not args:
-            return False
-        first = args[0]
-        lit = re.match(r"""^([rRbBfF]{0,2})(['"`])(.*)""", first)
-        if not lit:
-            return True
-        prefix, quote, body = lit.groups()
-        if quote == "`":
-            head = body.split("${", 1)[0]
-            return "${" in body and not head.strip()
-        if "f" in prefix.lower():
-            head = re.split(r"(?<!\{)\{(?!\{)", body, maxsplit=1)[0]
-            return head != body and not head.strip()
-        return False
     return False
 
 
@@ -2320,8 +2465,9 @@ def audit_body(body: Body, siblings: list[Body] | None = None, entries: tuple[Al
                 body.path, line, body.step,
                 f"`{SEAM_NAME}`: a masked value sits next to a literal '#' or '[' or another masked value, so "
                 "'##[' can re-form across the seam. Put a space or another character between them."))
-        if k not in redirected and leading_value(checker.units[k]) \
-                and not checker.allowed(LEADING, k, shell=checker.units[k].lang == "sh"):
+        lang = checker.units[k].lang
+        leads = checker.leading_print(k) if lang in ("py", "js") else leading_value(checker.units[k])
+        if k not in redirected and leads and not checker.allowed(LEADING, k, shell=lang == "sh"):
             findings.append(finding(
                 body.path, line, body.step,
                 f"`{LEADING}`: this log line begins with an interpolated value. No mask touches a "
