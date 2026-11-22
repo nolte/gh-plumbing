@@ -757,9 +757,15 @@ def test_a_heredoc_inside_an_env_file_group_is_read_as_well(tmp_path):
     assert check(tmp_path, masked) == []
 
 
-@pytest.mark.parametrize("target", ["> vbf.json", ">> out.txt", "| jq ."])
-def test_heredoc_stdout_into_a_plain_file_or_pipe_stays_unread(tmp_path, target):
+@pytest.mark.parametrize("target", ["> vbf.json", ">> out.txt"])
+def test_heredoc_stdout_into_a_plain_file_stays_unread(tmp_path, target):
     assert check(tmp_path, ISSUE_507_GAP_2.replace('>> "$GITHUB_OUTPUT"', target)) == []
+
+
+def test_heredoc_stdout_into_a_pipe_is_read_as_the_log(tmp_path):
+    # Fails closed (#511): the guard doesn't follow a pipeline's output, so
+    # `| jq .` is read like `| cat`, which prints the heredoc's stdout to the log.
+    assert check(tmp_path, ISSUE_507_GAP_2.replace('>> "$GITHUB_OUTPUT"', "| jq .")) == ["p"]
 
 
 def test_quoted_data_heredoc_is_not_shell(tmp_path):
@@ -2124,3 +2130,85 @@ def test_a_different_quote_f_string_field_keeps_its_reading(tmp_path):
     assert check(tmp_path, LOG_PY.format(line), env=P_ENV) == ["d", guard.LEADING]
     [call] = guard.print_calls("print(f\"{d['k']}\")", "py")
     assert not call.unknown and not call.to_stderr
+
+
+# --- #511: a heredoc whose stdout is piped into a command -------------------
+
+PIPED = [" | cat", " |& cat", " | tee out.log", " | jq . > out.json"]
+
+
+@pytest.mark.parametrize("opener", PIPED)
+@pytest.mark.parametrize("line, expected", [
+    ('print(f"::warning::{p}")', ["p"]),
+    ('print(f"x {p}")', ["p"]),
+    ("print(p)", ["p", guard.LEADING]),
+    ('sys.stdout.write(f"x {p}\\n")', ["p"]),
+])
+def test_a_python_heredoc_piped_into_a_command_reads_its_stdout_as_the_log(tmp_path, opener, line, expected):
+    # Develop flagged `::warning::` through the literal command on the line;
+    # with the strict reading the pipe hid every stdout print. `cat` prints it
+    # to the log at runtime, so a pipe is read as the log, failing closed.
+    run = LOG_PY.replace("<<'PY'", "<<'PY'" + opener).format(line)
+    assert check(tmp_path, run, env=P_ENV) == expected
+
+
+@pytest.mark.parametrize("opener", [" | cat", " |& cat"])
+@pytest.mark.parametrize("line", ["console.log(`::warning::${p}`);", "console.log(`x ${p}`);",
+                                  "process.stdout.write(`x ${p}\\n`);"])
+def test_a_node_heredoc_piped_into_a_command_reads_its_stdout_as_the_log(tmp_path, opener, line):
+    run = LOG_JS.replace("<<'JS'", "<<'JS'" + opener).format(line)
+    assert check(tmp_path, run, env=P_ENV) == ["p"]
+
+
+@pytest.mark.parametrize("opener", PIPED)
+@pytest.mark.parametrize("line", [
+    'print(f"x {shown(p)}")',
+    'print("fixed")',
+    'print("::notice::fixed", end="")',
+    'sys.stdout.write("x\\n")',
+])
+def test_a_masked_or_literal_print_piped_into_a_command_is_clean(tmp_path, opener, line):
+    assert check(tmp_path, SHOWN_PY.format(opener, line), env=P_ENV) == []
+
+
+@pytest.mark.parametrize("opener", [" | cat", " |& cat"])
+@pytest.mark.parametrize("line", ["console.log(`x ${shown(p)}`);", "console.log('fixed');"])
+def test_a_masked_or_literal_node_print_piped_into_a_command_is_clean(tmp_path, opener, line):
+    run = LOG_JS_SHOWN.replace("<<'JS'", "<<'JS'" + opener).format(line)
+    assert check(tmp_path, run, env=P_ENV) == []
+
+
+TEE_ENV = ' | tee -a "$GITHUB_OUTPUT"'
+
+
+def test_a_heredoc_teed_into_an_env_file_is_read_as_the_log_as_well(tmp_path):
+    # `tee` writes the env file and its stdout, the log: the entry is read as
+    # one (`shown(p)` is clean there) and as a log line, which it begins.
+    run = SHOWN_PY.format(TEE_ENV, "print(shown(p))")
+    assert check(tmp_path, run, env=P_ENV) == [guard.LEADING]
+    write(tmp_path, REL, workflow(run, env=P_ENV))
+    [body] = guard.bodies_of(tmp_path, tmp_path / REL)
+    checker = guard.Checker(body, [body], (), set())
+    k = next(k for k, u in enumerate(checker.units) if u.text.startswith("print("))
+    unit = checker.units[k]
+    assert unit.dest == "envfile" and unit.piped and unit.stdout_logged()
+
+
+@pytest.mark.parametrize("line, expected", [
+    ('print(f"v={p}")', ["p"]),
+    ('print(f"v={shown(p)}")', []),
+])
+def test_a_raw_entry_teed_into_an_env_file_is_a_finding(tmp_path, line, expected):
+    assert check(tmp_path, SHOWN_PY.format(TEE_ENV, line), env=P_ENV) == expected
+
+
+def test_a_redirected_env_file_heredoc_does_not_read_stdout_as_the_log(tmp_path):
+    # The env-file reading alone: no pipe, so stdout isn't the log and a
+    # masked entry doesn't begin a log line.
+    assert check(tmp_path, SHOWN_PY.format(' >> "$GITHUB_OUTPUT"', "print(shown(p))"), env=P_ENV) == []
+
+
+def test_a_heredoc_teed_into_the_summary_is_read_as_the_log_as_well(tmp_path):
+    run = SHOWN_PY.format(' | tee -a "$GITHUB_STEP_SUMMARY"', 'print(f"x {p}")')
+    # Read by the summary rule and by the log rule both.
+    assert sorted(check(tmp_path, run, env=P_ENV)) == ["p", "p"]

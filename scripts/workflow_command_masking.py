@@ -31,8 +31,10 @@ Predicate: EVERY line of a `run:` body that
     piped or redirected to a file, a Python `print(...)`, `raise SystemExit(...)`
     or `sys.stdout/stderr.write(...)`, a Node `console.*(...)` or
     `process.stdout/stderr.write(...)` -- stdout counting when the heredoc's
-    own stdout is not redirected; a stdout print into a plain file or a
-    pipe is not read. Such a print is read as strictly as an env-file line
+    own stdout is not redirected or is piped into a command (`| cat`, `|&
+    cat`, `| tee out.log`, also `| tee -a "$GITHUB_OUTPUT"` or the summary,
+    which tee writes and the log both); a stdout print into a plain file is not
+    read. Such a print is read as strictly as an env-file line
     (below, #511): every print call on the line, every argument that is not
     one plain string literal, `end=`, `sep=` and the continuation lines of
     the call, which tell its stream as well (`file=sys.stderr` on one makes
@@ -425,7 +427,13 @@ heredoc reading err towards a finding, #507):
   * a delimiter quoted in part (`<<P"Y"`): bash takes it as the quoted
     delimiter `PY`, the guard as the unquoted delimiter `P`, so a harmless
     body with `$1` is refused as `<unquoted heredoc>` -- quote the whole
-    delimiter.
+    delimiter;
+  * a stdout print of a Python or Node heredoc piped into a command that
+    doesn't print it (#511): `| jq . > out.json`, `| sort >> "$GITHUB_OUTPUT"`,
+    `| wc -l`, a pipe later on the opener's line (`python3 - <<'PY' && a |
+    b`): the guard doesn't follow a pipeline's output, so every pipe is read
+    as reaching the log -- mask the value, or redirect the heredoc's own
+    stdout (`python3 - <<'PY' > out.json`).
 
 Refused although harmless (the summary rule errs towards a finding):
 
@@ -891,6 +899,18 @@ class Logical:
     dest: str = "log"  # where a heredoc's stdout goes: log, file, envfile, summary, pipe
     origin: int = -1  # a heredoc line: the unit of the command that opened it
     expands: bool = False  # a heredoc line the shell expands: its delimiter is unquoted
+    piped: bool = False  # a heredoc line whose opener has a pipe: its stdout may reach the log
+
+    def stdout_logged(self) -> bool:
+        """A Python or Node heredoc line's stdout prints are read as log lines (#511).
+
+        Where the heredoc's stdout is the log, and -- failing closed -- where
+        its opener pipes it into a command, whatever that command does with
+        it: `| cat` and `| tee` print it to the log, and the guard doesn't
+        follow a pipeline's output (`| tee -a "$GITHUB_OUTPUT"` is read as an
+        env-file heredoc as well, `| jq . > out.json` as the log all the same).
+        """
+        return self.dest == "log" or self.piped
 
 
 def unquoted(text: str, fill: str = " ") -> str:
@@ -953,18 +973,19 @@ def logical_lines(lines: list[str]) -> list[Logical]:
     out: list[Logical] = []
     i = 0
     # The delimiter, the heredoc's lang and destination, its opener's unit,
-    # whether the shell expands it, and whether it strips leading tabs (`<<-`).
-    heredoc: tuple[str, str, str, int, bool, bool] | None = None
+    # whether the shell expands it, whether it strips leading tabs (`<<-`)
+    # and whether its opener pipes its stdout into a command.
+    heredoc: tuple[str, str, str, int, bool, bool, bool] | None = None
     while i < len(lines):
         if heredoc is not None:
-            delimiter, lang, dest, origin, expands, tabs = heredoc
+            delimiter, lang, dest, origin, expands, tabs, piped = heredoc
             # bash ends a heredoc only on a line that IS the delimiter -- no
             # leading or trailing space -- after stripping leading tabs for
             # `<<-` (and only tabs). `  PY` or `PY ` is a line of the heredoc.
             if (lines[i].lstrip("\t") if tabs else lines[i]) == delimiter:
                 heredoc = None
             else:
-                out.append(Logical(i, lines[i], lang, dest, origin, expands))
+                out.append(Logical(i, lines[i], lang, dest, origin, expands, piped))
             i += 1
             continue
         start, text = i, lines[i]
@@ -976,6 +997,7 @@ def logical_lines(lines: list[str]) -> list[Logical]:
         if match and not text.lstrip().startswith("#"):
             command = text[:match.start()]
             dest = destination(text[:match.start()] + text[match.end():])
+            piped = PIPE.search(unquoted(text[:match.start()] + " " + text[match.end():])) is not None
             # Quoted delimiter: text the shell leaves alone. Unquoted: the
             # shell expands it -- in a Python or Node heredoc too, before the
             # interpreter reads it (see UNQUOTED_NAME).
@@ -987,7 +1009,7 @@ def logical_lines(lines: list[str]) -> list[Logical]:
             else:
                 # An unquoted one reads like any other shell line.
                 lang = "sh-heredoc" if expands else "data"
-            heredoc = (match.group(3), lang, dest, len(out) - 1, expands, match.group(0).startswith("<<-"))
+            heredoc = (match.group(3), lang, dest, len(out) - 1, expands, match.group(0).startswith("<<-"), piped)
         i += 1
     return out
 
@@ -1498,7 +1520,7 @@ def sink_units(units: list[Logical]) -> set[int]:
             # read strictly, as for the step summary.
             if unit.text.strip():
                 sinks.add(k)
-        elif unit.lang in ("py", "js") and any(call.reaches_log(unit.dest)
+        elif unit.lang in ("py", "js") and any(call.reaches_log(unit.stdout_logged())
                                                 for call in print_calls(joined_text(units, k), unit.lang)):
             # stderr is the log; stdout counts where the heredoc sends it to
             # it. Every print call on the line, read strictly (#511), each
@@ -1780,9 +1802,9 @@ class PrintCall:
     # missed): stdout, stderr or a file.
     unknown: bool = False
 
-    def reaches_log(self, dest: str) -> bool:
-        """It prints to the log: to stderr, to a heredoc stdout that goes there, or -- unknown -- maybe either."""
-        return self.to_stderr or self.unknown or dest == "log"
+    def reaches_log(self, stdout: bool) -> bool:
+        """It prints to the log: to stderr, to a heredoc stdout read as the log (`stdout`), or -- unknown -- either."""
+        return self.to_stderr or self.unknown or stdout
 
     def read_by(self, stdout: bool, stderr: bool) -> bool:
         """A reading of the stdout prints, the stderr prints or both takes this call.
@@ -2559,7 +2581,7 @@ class Checker:
         """
         unit = self.units[k]
         names = self.strict_prints(k, ("shown",), self.shown.get(self.heredoc_id(k), False), self.joined(k),
-                                   stdout=unit.dest == "log", stderr=True)
+                                   stdout=unit.stdout_logged(), stderr=True)
         return [name for name in names if not self.allowed(name, k, shell=False)]
 
     def joined(self, k: int) -> str:
@@ -2649,7 +2671,7 @@ class Checker:
             # Its stdout prints are entries, read strictly; its stderr prints
             # are log lines, read below as on any other heredoc line.
             names += self.envfile_template(k)
-            if not any(call.reaches_log(unit.dest) for call in print_calls(self.joined(k), unit.lang)):
+            if not any(call.reaches_log(unit.stdout_logged()) for call in print_calls(self.joined(k), unit.lang)):
                 return names
         # Its log prints, read as strictly (#511).
         return names + self.log_template(k)
@@ -2657,7 +2679,7 @@ class Checker:
     def leading_print(self, k: int) -> bool:
         """A log print call of a Python or Node line begins a line with a value (`leading_print`)."""
         unit = self.units[k]
-        return any(call.reaches_log(unit.dest) and leading_print(call, unit.lang)
+        return any(call.reaches_log(unit.stdout_logged()) and leading_print(call, unit.lang)
                    for call in print_calls(self.joined(k), unit.lang))
 
 
