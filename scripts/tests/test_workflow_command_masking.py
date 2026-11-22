@@ -1785,3 +1785,38 @@ def test_a_name_also_bound_to_something_else_is_no_file_of_its_own(tmp_path, lin
 ])
 def test_file_stream(value, stream):
     assert guard.file_stream(value, frozenset({"out"})) == stream
+
+
+@pytest.mark.parametrize("opener", [" > /tmp/o", ' >> "$GITHUB_OUTPUT"', ' >> "$GITHUB_STEP_SUMMARY"'])
+@pytest.mark.parametrize("call", [
+    'print(\n    f"x {p}",\n    file=sys.stderr)',
+    'print("x",\n      p,\n      file=sys.stderr)',
+    'print("x", p,\n      end="\\n", file=sys.stderr)',
+    'print("x",\n      p,\n      file=sys.__stderr__)',
+    'print("x",\n      p,\n      file=err)',
+])
+def test_a_stderr_file_on_a_continuation_line_makes_the_call_a_log_line(tmp_path, opener, call):
+    # The stream is read from the joined call, not from its first line (#511):
+    # the call is a log line whatever the heredoc's stdout does.
+    run = SHOWN_PY.format(opener, f"err = sys.stderr\n{call}")
+    write(tmp_path, REL, workflow(run, env=P_ENV))
+    log = [f for f in guard.audit(tmp_path, ())[0] if "log line or env-file" in f["message"]]
+    [body] = guard.bodies_of(tmp_path, tmp_path / REL)
+    first = body.first_line + next(u.index for u in guard.Checker(body, [body], (), set()).units
+                                   if u.text.startswith("print("))
+    assert [(f["line"], f["message"].split("`")[1]) for f in log if f["line"] == first] == [(first, "p")]
+
+
+@pytest.mark.parametrize("opener", [" > /tmp/o", ' >> "$GITHUB_OUTPUT"'])
+def test_a_masked_stderr_call_over_lines_stays_clean(tmp_path, opener):
+    call = 'print("x",\n      shown(p),\n      file=sys.stderr)'
+    assert check(tmp_path, SHOWN_PY.format(opener, call), env=P_ENV) == []
+    shutil.rmtree(tmp_path / ".github")
+    # Its stdout twin into a file is no log line.
+    call = 'print("x",\n      p,\n      file=sys.stdout)'
+    assert check(tmp_path, SHOWN_PY.format(" > /tmp/o", call), env=P_ENV) == []
+
+
+def test_a_print_inside_a_string_literal_is_refused_although_harmless(tmp_path):
+    # Documented under "Refused although harmless": calls are found by name.
+    assert check(tmp_path, SHOWN_PY.format("", 'msg = "use print(p)"'), env=P_ENV) == ["p", guard.LEADING]

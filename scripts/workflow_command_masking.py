@@ -35,7 +35,8 @@ Predicate: EVERY line of a `run:` body that
     pipe is not read. Such a print is read as strictly as an env-file line
     (below, #511): every print call on the line, every argument that is not
     one plain string literal, `end=`, `sep=` and the continuation lines of
-    the call --
+    the call, which tell its stream as well (`file=sys.stderr` on one makes
+    the call a log print, whatever the heredoc's stdout does) --
   * is a line of a Python or Node heredoc whose stdout goes to one of the
     env files above (#507): redirected there (`>`, `>>`, `>|`, `>&`), piped into
     `tee` with the file among its arguments (`tee -a`, `tee --append`, `tee
@@ -392,6 +393,9 @@ heredoc reading err towards a finding, #507):
     that the heredoc also binds otherwise anywhere -- another assignment, a
     `for` or `with ... as` target, an attribute or augmented assignment
     (`f.mode = ...`, which reads as one) -- is read as stdout and stderr;
+  * a print call's text inside a string literal (`msg = "use print(p)"`):
+    print calls are found by name, not by a parser, so it reads as a print
+    of `p` -- on a log line, and in an env-file or summary heredoc;
   * a log print that follows one on its line ending without a line end
     (`print("x", end=""); print(shown(p))`): every print call is taken to
     start a line, so a value first in it is a `<leading value>`;
@@ -1432,6 +1436,27 @@ def blocks_of(units: list[Logical]) -> Blocks:
     return Blocks(segments_by, paths_by, kinds, spans, functions, ok)
 
 
+def joined_text(units: list[Logical], k: int) -> str:
+    """A Python or Node line, with the continuation lines of a print call it leaves open.
+
+    Up to JOINED_LINES of them, of the same heredoc. Every reading of a print
+    call -- which sink it reaches, which stream it writes, what it prints --
+    takes the joined call, so `file=sys.stderr` on a continuation line counts.
+    """
+    unit = units[k]
+    text = unit.text
+    opener = open_print(text, unit.lang)
+    if opener is not None:
+        depth, quote = bracket_state(text, opener)
+        end = k + 1
+        while depth and end < len(units) and end - k <= JOINED_LINES \
+                and units[end].origin == unit.origin and units[end].lang == unit.lang:
+            text += "\n" + units[end].text
+            depth, quote = bracket_state(text, len(text) - len(units[end].text) - 1, depth, quote)
+            end += 1
+    return text
+
+
 def sink_units(units: list[Logical]) -> set[int]:
     """Indices of units that emit a command, write an env file or print to the log."""
     redirected, sinks, _ = redirected_groups(units)
@@ -1458,9 +1483,11 @@ def sink_units(units: list[Logical]) -> set[int]:
             if unit.text.strip():
                 sinks.add(k)
         elif unit.lang in ("py", "js") and any(call.reaches_log(unit.dest)
-                                                for call in print_calls(text, unit.lang, files.get(unit.origin, frozenset()))):
+                                                for call in print_calls(joined_text(units, k), unit.lang,
+                                                                        files.get(unit.origin, frozenset()))):
             # stderr is the log; stdout counts where the heredoc sends it to
-            # it. Every print call on the line, read strictly (#511).
+            # it. Every print call on the line, read strictly (#511), each
+            # with its continuation lines: `file=sys.stderr` can sit on one.
             sinks.add(k)
     return sinks
 
@@ -2471,22 +2498,8 @@ class Checker:
         return [name for name in names if not self.allowed(name, k, shell=False)]
 
     def joined(self, k: int) -> str:
-        """A Python or Node line, with the continuation lines of a print call it leaves open.
-
-        Up to JOINED_LINES of them, of the same heredoc.
-        """
-        unit = self.units[k]
-        text = unit.text
-        opener = open_print(text, unit.lang)
-        if opener is not None:
-            depth, quote = bracket_state(text, opener)
-            end = k + 1
-            while depth and end < len(self.units) and end - k <= JOINED_LINES \
-                    and self.units[end].origin == unit.origin and self.units[end].lang == unit.lang:
-                text += "\n" + self.units[end].text
-                depth, quote = bracket_state(text, len(text) - len(self.units[end].text) - 1, depth, quote)
-                end += 1
-        return text
+        """`joined_text` of unit k."""
+        return joined_text(self.units, k)
 
     def strict_prints(self, k: int, calls: tuple[str, ...], defined: bool, text: str,
                       stdout: bool = True, stderr: bool = False) -> list[str]:
@@ -2566,7 +2579,7 @@ class Checker:
             # Its stdout prints are entries, read strictly; its stderr prints
             # are log lines, read below as on any other heredoc line.
             names += self.envfile_template(k)
-            if not any(call.reaches_log(unit.dest) for call in self.calls_on(k, unit.text)):
+            if not any(call.reaches_log(unit.dest) for call in self.calls_on(k, self.joined(k))):
                 return names
         # Its log prints, read as strictly (#511).
         return names + self.log_template(k)
