@@ -519,6 +519,116 @@ def test_a_hash_after_a_separator_starts_a_comment(tmp_path):
     assert check(tmp_path, run) == []
 
 
+# --- #513 (P2): sinks and destinations the guard read as elsewhere ----------
+
+# Stands for PY_HELPER, which is defined further down, in a parametrized run.
+ISSUE_513_PY_HELPER = "@PY_HELPER@\n"
+
+
+def issue_513_py(opener: str, line: str) -> str:
+    """A Python heredoc opened with `opener` after its `<<'PY'`, printing `line`."""
+    return (f"{HELPER}\npython3 - <<'PY'{opener}\nimport os, re, sys\n{ISSUE_513_PY_HELPER}"
+            f"p = os.environ['VALUE']\n{line}\nPY")
+
+
+def check_513(tmp_path, run: str) -> list[str]:
+    return check(tmp_path, run.replace(ISSUE_513_PY_HELPER, PY_HELPER))
+
+
+@pytest.mark.parametrize("pipe", ["| tee out.log", "| cat", "|& tee out.log", "| /usr/bin/tee -a out.log"])
+def test_issue_513_a_shell_print_piped_into_tee_or_cat_is_a_log_print(tmp_path, pipe):
+    # tee and cat print what they read: the `##[` reaches the log.
+    assert check(tmp_path, f'{HELPER}\necho "##[warning]$VALUE" {pipe}') == ["VALUE"]
+
+
+def test_issue_513_a_print_piped_into_another_command_stays_unread(tmp_path):
+    # Not covered: the guard doesn't follow what `grep` prints.
+    assert check(tmp_path, f'{HELPER}\necho "x $VALUE" | grep x') == []
+
+
+def test_issue_513_the_file_tee_writes_is_not_charged_to_the_print(tmp_path):
+    # The print's statement ends at the pipe: `$RUNNER_X` names tee's file.
+    assert check(tmp_path, f'{HELPER}\necho "x $(shown "$VALUE")" | tee "$RUNNER_X"') == []
+
+
+@pytest.mark.parametrize("opener", [
+    " > /dev/stderr", " >> /dev/stderr", " > /dev/stdout", " >/dev/fd/2", " > /proc/self/fd/2", " > >(cat)",
+    ' > "/dev/stderr"',
+])
+def test_issue_513_a_heredoc_redirected_to_a_standard_stream_prints_to_the_log(tmp_path, opener):
+    assert check_513(tmp_path, issue_513_py(opener, 'print("x", p)')) == ["p"]
+
+
+@pytest.mark.parametrize("redirect", ["> /dev/stderr", ">/dev/stdout", ">> /dev/fd/1", "> >(cat)"])
+def test_issue_513_a_shell_print_redirected_to_a_standard_stream_is_a_log_print(tmp_path, redirect):
+    assert check(tmp_path, f'{HELPER}\necho "x $VALUE" {redirect}') == ["VALUE"]
+
+
+def test_issue_513_a_heredoc_in_a_group_teed_into_an_env_file_is_read_as_the_log_as_well(tmp_path):
+    # The group's closer pipes its stdout into tee, which prints it: the
+    # entry begins a log line, as for `python3 - <<'PY' | tee -a ...`.
+    run = (f"{HELPER}\n{{ python3 - <<'PY'\nimport os, re, sys\n{PY_HELPER}p = os.environ['VALUE']\n"
+           "print(f\"{shown(p)}=x\")\nPY\n} | tee -a \"$GITHUB_OUTPUT\"")
+    assert check(tmp_path, run) == [guard.LEADING]
+
+
+def test_issue_513_a_heredoc_writing_only_stderr_to_an_env_file_prints_stdout_to_the_log(tmp_path):
+    # `2>>` sends stderr into the env file; stdout stays on the log, where
+    # the masked value begins the line.
+    assert check_513(tmp_path, issue_513_py(' 2>> "$GITHUB_OUTPUT"', "print(shown(p))")) == [guard.LEADING]
+
+
+def test_issue_513_a_print_redirected_to_the_summary_with_greater_ampersand_is_a_summary_write(tmp_path):
+    run = f'{HELPER}\necho "x $VALUE" >& "$GITHUB_STEP_SUMMARY"'
+    write(tmp_path, ".github/workflows/reusable-w.yaml", workflow(run))
+    findings, _ = guard.audit(tmp_path, ())
+    assert [f["message"].split("`")[1] for f in findings] == ["VALUE"]
+    assert "step-summary write" in findings[0]["message"]
+
+
+def test_issue_513_a_script_whose_name_holds_python_is_no_interpreter(tmp_path):
+    # Its unquoted heredoc is shell text, read as such -- not a Python
+    # heredoc with a `$` in it (`<unquoted heredoc>`).
+    assert check(tmp_path, f"{HELPER}\n./run-python-tests.sh <<EOT\n$VALUE\nEOT") == ["VALUE"]
+
+
+@pytest.mark.parametrize("command", [
+    "/usr/bin/python3 -", "python3.12 -", "uv run python3 -", "env node", "x=$(python3 -", "if ! node",
+])
+def test_issue_513_an_interpreter_named_as_a_word_still_reads_the_heredoc(tmp_path, command):
+    assert check(tmp_path, f"{command} <<PY\nprint('$VALUE')\nPY") == [guard.UNQUOTED_NAME]
+
+
+def test_issue_513_a_mask_in_a_substitution_closed_after_text_in_a_case_arm_is_a_finding(tmp_path):
+    # `x=$(shown "$x"))` closes the `y=$(` of the line above; the trailing `)`
+    # read as a case pattern, so the mask counted for the arm.
+    run = (f'{HELPER}\nx="$VALUE"\ncase a in\n  a)\n    y=$(\n      x=$(shown "$x"))\n    echo "x $x"\n'
+           '    ;;\nesac')
+    assert check(tmp_path, run) == ["x"]
+
+
+def test_issue_513_a_print_after_a_subshell_paren_is_a_log_print(tmp_path):
+    assert check(tmp_path, f'{HELPER}\nx="$VALUE"\n( echo "x $x" )') == ["x"]
+
+
+def test_issue_513_an_element_assignment_with_spaces_in_its_subscript_voids_the_mask(tmp_path):
+    # `x[1 + 1]=...` sets x[2]; it is an assignment to x all the same.
+    assert check(tmp_path, f'{HELPER}\nx=$(shown "$VALUE")\nx[1 + 1]="$VALUE"\necho "v: $x"') == ["x"]
+
+
+@pytest.mark.parametrize("run, expected", [
+    # Refused at f79d452 already: held here as regressions.
+    (issue_513_py(' >> "$GITHUB_OUTPUT"', 'print("x=" + p, file=sys.stdout if p else sys.stderr)'), ['"x=" + p']),
+    (f"{HELPER}\npython3 - <<'PY' |\nimport os, re, sys\n{ISSUE_513_PY_HELPER}p = os.environ['VALUE']\n"
+     "print('x=' + p)\nPY\ntee -a \"$GITHUB_OUTPUT\"", ["'x=' + p"]),
+    (issue_513_py(' | tee -a "$GITHUB_OUTPUT"', 'print(f"{shown(p)}=x")'), [guard.LEADING]),
+    (f"{HELPER}\n{{ python3 - <<'PY'\nimport os, re, sys\n{ISSUE_513_PY_HELPER}p = os.environ['VALUE']\n"
+     "print('x', p)\nPY\n} | cat", ["p"]),
+])
+def test_issue_513_forms_refused_before_stay_refused(tmp_path, run, expected):
+    assert check_513(tmp_path, run) == expected
+
+
 PY_PRINTS = "python3 - <<'PY' >> \"$GITHUB_OUTPUT\"\nimport os\np = os.environ['P']\n{}\nPY"
 
 
