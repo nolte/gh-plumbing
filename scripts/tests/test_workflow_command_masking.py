@@ -629,6 +629,148 @@ def test_issue_513_forms_refused_before_stay_refused(tmp_path, run, expected):
     assert check_513(tmp_path, run) == expected
 
 
+# --- #513 (P3): the heredoc reading and two shell sinks ---------------------
+
+
+def issue_513_js(opener: str, line: str) -> str:
+    """A Node heredoc opened with `opener` after its `<<'JS'`, defining `shown` and printing `line`."""
+    return f"{HELPER}\nnode - <<'JS'{opener}\n{guard.JS_SHOWN}\nconst p = process.env.VALUE;\n{line}\nJS"
+
+
+@pytest.mark.parametrize("run", [
+    issue_513_py("", 'shown = str\nprint(f"x {shown(p)}")'),
+    issue_513_py(' >> "$GITHUB_OUTPUT"', 'shown = str\nprint(f"x={shown(p)}")'),
+    issue_513_py("", 'shown: object = str\nprint(f"x {shown(p)}")'),
+    issue_513_py("", '(shown := str)\nprint(f"x {shown(p)}")'),
+    issue_513_py("", 'def shown(value):\n    return value\nprint(f"x {shown(p)}")'),
+    issue_513_py("", 'import builtins as shown\nprint(f"x {shown(p)}")'),
+    issue_513_py("", 'from builtins import str as shown\nprint(f"x {shown(p)}")'),
+    issue_513_py("", 'for shown in [str]:\n    pass\nprint(f"x {shown(p)}")'),
+    issue_513_py("", 'with open("/dev/null") as shown:\n    pass\nprint(f"x {shown(p)}")'),
+    issue_513_js("", "{ let shown = String; console.log(`x ${shown(p)}`); }"),
+    issue_513_js("", "function shown(v) { return v; }\nconsole.log(`x ${shown(p)}`);"),
+    issue_513_js(' >> "$GITHUB_OUTPUT"', "var shown = String;\nconsole.log(`x=${shown(p)}`);"),
+])
+def test_issue_513_a_heredoc_that_rebinds_shown_has_no_mask(tmp_path, run):
+    # The canonical definition proves nothing once anything else in the
+    # heredoc binds the name: the call is read as an unmasked value.
+    assert check_513(tmp_path, run) == ["shown"]
+
+
+def test_issue_513_a_python_shown_decorated_is_not_canonical(tmp_path):
+    run = (f"{HELPER}\npython3 - <<'PY'\nimport os, re, sys\n@lambda f: str\n{ISSUE_513_PY_HELPER}"
+           "p = os.environ['VALUE']\nprint(f\"x {shown(p)}\")\nPY")
+    assert check_513(tmp_path, run) == ["shown"]
+
+
+@pytest.mark.parametrize("rebind", ['shown() { echo "v$@"; }', "unset -f shown"])
+def test_issue_513_a_shell_shown_redefined_after_the_canonical_one_has_no_mask(tmp_path, rebind):
+    assert check(tmp_path, f'{HELPER}\n{rebind}\necho "x $(shown "$VALUE")"') == ["VALUE"]
+
+
+def test_issue_513_a_python_shown_must_return_on_its_first_body_line(tmp_path):
+    # `if value: return value` returns the raw value first.
+    helper = f"def shown(value):\n    if value: return value\n    {guard.PY_SHOWN_RETURN}\n"
+    run = issue_513_py("", 'print(f"x {shown(p)}")').replace(ISSUE_513_PY_HELPER, helper)
+    assert check(tmp_path, run) == ["shown"]
+
+
+def test_issue_513_comment_lines_before_the_canonical_return_keep_the_mask(tmp_path):
+    helper = f"def shown(value):\n    # masks a value\n\n    {guard.PY_SHOWN_RETURN}\n"
+    run = issue_513_py("", 'print(f"x {shown(p)}")').replace(ISSUE_513_PY_HELPER, helper)
+    assert check(tmp_path, run) == []
+
+
+@pytest.mark.parametrize("run", [
+    issue_513_py(' >> "$GITHUB_OUTPUT"', "sys.stdout.writelines([p])"),
+    issue_513_py(' >> "$GITHUB_OUTPUT"', "sys.stdout.buffer.write(p.encode())"),
+    issue_513_py(' >> "$GITHUB_OUTPUT"', "import json\njson.dump(p, sys.stdout)"),
+    f"{HELPER}\nnode - <<'JS' >> \"$GITHUB_OUTPUT\"\nconst p = process.env.VALUE;\nconsole['log'](p);\nJS",
+    issue_513_py(" > f.txt", "import functools\nlog = functools.partial(print, file=sys.stderr)\nlog(p)"),
+])
+def test_issue_513_a_stream_writer_the_strict_reading_does_not_name_is_refused(tmp_path, run):
+    assert check_513(tmp_path, run) == [guard.UNKNOWN_WRITER]
+
+
+def test_issue_513_a_stdout_writer_into_a_plain_file_stays_unread(tmp_path):
+    # The real tree's vbf.json step: stdout goes to a file, not a sink.
+    assert check_513(tmp_path, issue_513_py(" > vbf.json", "import json\njson.dump(p, sys.stdout)")) == []
+
+
+@pytest.mark.parametrize("run, expected", [
+    # `# )` closed the call early: `file=sys.stderr` went unread, and the
+    # masked value starts a stderr line on the log.
+    (issue_513_py(" > f.txt", "print(shown(p),  # )\n      file=sys.stderr)"), [guard.LEADING]),
+    (issue_513_py(" > f.txt", "print(p,  # )\n      file=sys.stderr)"), ["p", guard.LEADING]),
+    (issue_513_js(" > f.txt", "console.error(shown(p), // )\n  p);"), ["p", guard.LEADING]),
+    (issue_513_js(" > f.txt", "console.error(shown(p), /* ) */\n  p);"), ["p", guard.LEADING]),
+])
+def test_issue_513_a_comment_in_a_print_call_does_not_end_it(tmp_path, run, expected):
+    assert check_513(tmp_path, run) == expected
+
+
+def test_issue_513_a_comment_in_a_masked_multi_line_print_is_skipped(tmp_path):
+    # Refused before as the argument `# label`.
+    run = issue_513_py(' >> "$GITHUB_OUTPUT"', 'print(\n    "x=",  # label, )\n    shown(p),\n    sep="")')
+    assert check_513(tmp_path, run) == []
+
+
+def test_issue_513_a_hash_in_a_same_quote_field_hides_no_argument(tmp_path):
+    # PEP 701: the scan misreads the field, so the `#` reads as a comment;
+    # the call's arguments are read without comments as well.
+    run = issue_513_py("", 'd = {"#": 1}\nprint(f"x {shown(d["#"])}", p)')
+    assert "p" in check_513(tmp_path, run)
+
+
+def test_issue_513_a_bare_name_on_a_summary_print_continuation_line_is_read(tmp_path):
+    assert check_513(tmp_path, issue_513_py(' >> "$GITHUB_STEP_SUMMARY"', 'print("x",\n      p)')) == ["p"]
+
+
+@pytest.mark.parametrize("run", [
+    issue_513_py("", 'open(os.environ["GITHUB_ENV"], "a").write(f"K={p}\\n")'),
+    issue_513_py("", 'with open(os.environ["GITHUB_ENV"], "a") as fh:\n    fh.write(f"K={p}\\n")'),
+    issue_513_py("", 'open(os.getenv("GITHUB_STEP_SUMMARY"), "a").write(p)'),
+    f"{HELPER}\nnode - <<'JS'\nconst fs = require('fs');\n"
+    "fs.appendFileSync(process.env.GITHUB_OUTPUT, `k=${process.env.VALUE}\\n`);\nJS",
+])
+def test_issue_513_a_heredoc_that_names_an_env_file_is_refused(tmp_path, run):
+    assert check_513(tmp_path, run) == [guard.ENV_FILE_OPENED]
+
+
+def test_issue_513_a_heredoc_that_names_an_env_file_can_be_allowed(tmp_path):
+    run = issue_513_py("", 'open(os.environ["GITHUB_ENV"], "a").write("K=1\\n")')
+    write(tmp_path, REL, workflow(run.replace(ISSUE_513_PY_HELPER, PY_HELPER)))
+    entry = guard.Allowed(REL, guard.ENV_FILE_OPENED, reason="writes a literal")
+    assert names(tmp_path, [entry]) == []
+
+
+def test_issue_513_a_field_in_a_format_spec_is_a_value(tmp_path):
+    # `p` sets the fill (a line end is one) and the width.
+    assert check_513(tmp_path, issue_513_py("", 'print(f"ok {len(p):{p}}")')) == ["p"]
+    shutil.rmtree(tmp_path / ".github")
+    assert check_513(tmp_path, issue_513_py("", 'print(f"ok {len(p):>{len(p)}}")')) == []
+
+
+@pytest.mark.parametrize("run", [
+    f"{HELPER}\ncat <<EOF | tee out.log\n##[warning]$VALUE\nEOF",
+    f"{HELPER}\ncat <<EOF | tee out.log\nx ##[warning]$VALUE\nEOF",
+    # A shell heredoc's line that starts with `#` is data, not a comment.
+    f"{HELPER}\ncat <<EOF\n##[warning]$VALUE\nEOF",
+    f"{HELPER}\ncat <<EOF >> \"$GITHUB_OUTPUT\"\n#x=$VALUE\nEOF",
+    f"{HELPER}\ncat <<EOF >> \"$GITHUB_STEP_SUMMARY\"\n# $VALUE\nEOF",
+])
+def test_issue_513_a_shell_heredoc_piped_into_tee_or_starting_with_a_hash_is_read(tmp_path, run):
+    assert check(tmp_path, run) == ["VALUE"]
+
+
+def test_issue_513_a_shell_line_teed_into_an_env_file_keeps_the_line_start_rule(tmp_path):
+    # tee writes the entry and the log both: the masked value begins a log line.
+    run = f'{HELPER}\nx=$(shown "$VALUE")\necho "$x=1" | tee -a "$GITHUB_OUTPUT"'
+    assert check(tmp_path, run) == [guard.LEADING]
+    shutil.rmtree(tmp_path / ".github")
+    assert check(tmp_path, f'{HELPER}\nx=$(shown "$VALUE")\necho "k=$x" | tee -a "$GITHUB_OUTPUT"') == []
+
+
 PY_PRINTS = "python3 - <<'PY' >> \"$GITHUB_OUTPUT\"\nimport os\np = os.environ['P']\n{}\nPY"
 
 
@@ -1437,7 +1579,9 @@ def test_a_node_heredoc_into_the_summary_needs_md(tmp_path):
            "process.stdout.write(\n  `## T\\n${rows}\\n`\n);\nconsole.log(p);\nconsole.log('x' + p);\n"
            "console.error(`::error::${shown(p)}`);\nNODE")
     # `shown`: the log rule's finding for the stderr line, which it reads.
-    assert summary_names(tmp_path, raw) == ["shown", "k", "p", "rows", "p", "'x' + p"]
+    # `rows` twice: the write's line reads its call joined over the
+    # continuation line (#513), which is read on its own as well.
+    assert summary_names(tmp_path, raw) == ["shown", "k", "p", "rows", "rows", "p", "'x' + p"]
     shutil.rmtree(tmp_path / ".github")
     clean = (f"node <<'NODE' >> \"$GITHUB_STEP_SUMMARY\"\n{JS_MD}\nconst p = process.env.P;\n"
              "console.log('## T');\nconsole.log(`| ${mdCode(p)} | ${mdCode(p.length)} |`);\n"
@@ -2062,6 +2206,11 @@ UNKNOWN_FILES = [
 STREAM_PRELUDE = "from sys import stderr\nerr = sys.stderr\n"
 
 
+def opened(file_: str) -> list[str]:
+    """A heredoc that names an env file is refused on its own as well (#513)."""
+    return [guard.ENV_FILE_OPENED] if "GITHUB_OUTPUT" in file_ else []
+
+
 @pytest.mark.parametrize("opener", ["", ' >> "$GITHUB_OUTPUT"'])
 @pytest.mark.parametrize("file_", ["file=sys.__stderr__", "file=sys.__stdout__", "file=(sys.stderr)",
                                    "file=( sys.stdout )", *UNKNOWN_FILES])
@@ -2070,7 +2219,7 @@ def test_a_print_to_a_stream_the_guard_cant_rule_out_is_read(tmp_path, opener, f
     # `file=` but sys.stderr as stdout; the first cut of #511 dropped every
     # one but sys.stdout/sys.stderr.
     line = f'{STREAM_PRELUDE}print(f"x {{p}}", {file_})'
-    assert check(tmp_path, SHOWN_PY.format(opener, line), env=P_ENV) == ["p"]
+    assert check(tmp_path, SHOWN_PY.format(opener, line), env=P_ENV) == ["p", *opened(file_)]
 
 
 @pytest.mark.parametrize("file_", UNKNOWN_FILES)
@@ -2084,7 +2233,7 @@ def test_an_unknown_stream_of_an_env_file_heredoc_is_read_both_ways(tmp_path, fi
     assert checker.envfile_template(k) == ["p"]
     assert checker.log_template(k) == ["p"]
     assert checker.leading_print(k)
-    assert [n for _, n in names(tmp_path)] == ["p", guard.LEADING]
+    assert [n for _, n in names(tmp_path)] == ["p", guard.LEADING, *opened(file_)]
 
 
 def test_an_unknown_stream_of_a_summary_heredoc_is_read_both_ways(tmp_path):

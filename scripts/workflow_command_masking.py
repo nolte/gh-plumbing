@@ -29,7 +29,9 @@ Predicate: EVERY line of a `run:` body that
     is a line of it -- or
   * prints to the log: a shell `echo`/`printf` statement whose output is not
     redirected to a file nor piped into a command other than `tee` or `cat`
-    (`| tee out.log`, `|& cat` print it to the log, #513), a Python
+    (`| tee out.log`, `|& cat` print it to the log, #513) -- likewise a line
+    of a shell heredoc (`cat <<EOF | tee out.log`; a line of one that starts
+    with `#` is data, not a comment, #513) --, a Python
     `print(...)`, `raise SystemExit(...)` or `sys.stdout/stderr.write(...)`, a
     Node `console.*(...)` or `process.stdout/stderr.write(...)` -- stdout
     counting when the heredoc's own stdout is not redirected or is piped into
@@ -45,7 +47,9 @@ Predicate: EVERY line of a `run:` body that
     (below, #511): every print call on the line, every argument that is not
     one plain string literal, `end=`, `sep=` and the continuation lines of
     the call, which tell its stream as well (`file=sys.stderr` on one makes
-    the call a log print, whatever the heredoc's stdout does) --
+    the call a log print, whatever the heredoc's stdout does; a comment in
+    the call -- Python's `#`, Node's `//` and `/* */` -- is skipped, so a `)`
+    in it doesn't end the call, #513) --
   * is a line of a Python or Node heredoc whose stdout goes to one of the
     env files above (#507): redirected there (`>`, `>>`, `>|`, `>&`), piped into
     `tee` with the file among its arguments (`tee -a`, `tee --append`, `tee
@@ -57,7 +61,9 @@ Predicate: EVERY line of a `run:` body that
     argument of a stdout print that is not one plain string literal,
     Python's `end=` and `sep=`, the continuation lines of a call not closed
     on its line (up to JOINED_LINES of them), and every f-string or template-literal part outside a
-    stderr print must be `shown(...)` -- with the canonical definition in
+    stderr print -- a field nested in a format spec too (`{len(p):{p}}`: `p`
+    sets the fill, a line end included, and the width; #513) -- must be
+    `shown(...)` -- with the canonical definition in
     that heredoc -- or `len(...)`, or a name on ALLOWED. So `"v=" + p`,
     `"v=%s" % p` and `.format(p)` are findings there; its stderr prints are
     log lines, read as above, unless the line that opens the heredoc sends
@@ -75,9 +81,16 @@ value is a line end, and the mask turns every one into `?`:
     characters into `?` and every `##[` into `#?[`: `$(shown "$name")` in
     shell, `shown(...)` in a Python or Node heredoc -- and only where the body
     or heredoc defines `shown` exactly that way (SHELL_SHOWN, PY_SHOWN and
-    PY_SHOWN_RETURN, JS_SHOWN). Only those exact lines are the helper's own:
-    a line that merely starts `def shown(` is read like any other, prints and
-    all;
+    PY_SHOWN_RETURN, JS_SHOWN) -- in Python with PY_SHOWN_RETURN as the
+    first line of the body that isn't blank or a comment, and no decorator
+    above the `def` -- and nothing else there binds the name (#513): in shell
+    no other definition, `unset`, `alias` or `declare -f`/`export -f` of
+    `shown`; in a Python or Node heredoc no mention of `shown` other than a
+    call of it (`shown = str`, `shown: T = ...`, `shown := ...`, `import ...
+    as shown`, `from ... import shown`, `for shown in`, `with ... as shown`,
+    a second `def shown`, `let`/`var shown`, `function shown`, a parameter).
+    Only those exact lines are the helper's own: a line that merely starts
+    `def shown(` is read like any other, prints and all;
   * assigned from such a masked expansion (`x=$(shown "$x")`) by a
     statement that dominates the print (#507): the block holding the
     assignment -- an `if` branch, a loop body, a `case` arm, a `{ ...; }`
@@ -239,13 +252,7 @@ Not covered (each would need a parser this script doesn't have):
     checked, its output is not; #492 found `du` echoing a file name that way)
     -- and a print piped into a command other than `tee` or `cat`, on a log
     line (on a summary line both are refused as `<command output>`); nor a
-    print at the end of a pipeline (`true | echo "$V"`), nor a shell heredoc
-    piped into `tee` or `cat` (`cat <<EOF | tee out.log`): its lines aren't
-    read as log lines;
-  * the line-start rule on a shell line teed into an env file (`echo
-    "$x=1" | tee -a "$GITHUB_OUTPUT"`): it is read as an env-file write only,
-    though tee prints it to the log as well (a Python or Node heredoc teed
-    there is read as both);
+    print at the end of a pipeline (`true | echo "$V"`);
   * a summary write inside a command substitution: the body of `$(...)` is
     blanked before sinks are read, so `out=$(echo "$V" | tee -a
     "$GITHUB_STEP_SUMMARY")` and `x=$(echo "$V" >> "$GITHUB_STEP_SUMMARY")`
@@ -272,9 +279,11 @@ Not covered (each would need a parser this script doesn't have):
   * prints the selector doesn't see: `cat <<<"$V"`, `tee` or `cat` reading a
     file, `set -x` tracing, an EXIT trap or a function that prints and is
     called elsewhere, `logger`;
-  * `unset -f shown` or a later weak redefinition of `shown` after the
-    canonical one, and a canonical `shown` that is defined only after its
-    first use (the guard checks that the body defines it, not where);
+  * a canonical `shown` that is defined only after its first use (the guard
+    checks that the body or heredoc defines it, not where), and one rebound
+    in a way that doesn't name it: through `eval` or `source` (shell),
+    `globals()`, `exec` or `setattr` (Python), `globalThis[...]` or `eval`
+    (Node);
   * on a log line, what block dominance doesn't read (#507): an assignment
     the guard doesn't see as one -- through `eval`, `source`, a `trap`,
     `printf -v`, `wait -p`, `coproc NAME`, `exec {fd}>...`, `: "${x:=$V}"`
@@ -294,13 +303,9 @@ Not covered (each would need a parser this script doesn't have):
     substitution over lines; a `$(...)` over lines refuses (see above). The summary rule reads every
     assignment instead;
   * `shell: python` steps and other non-bash `shell:` values;
-  * in the step summary: a bare name passed to a Node or Python print on a
-    continuation line of the call (an f-string or template part there is
-    read; an env-file heredoc and a log print join the lines of such a
-    call), a heredoc
-    that opens the summary file itself (`fs.appendFileSync`,
-    `open(os.environ["GITHUB_STEP_SUMMARY"], "a")`) instead of printing to a
-    redirected stdout, and a summary written by a script run from a file --
+  * in the step summary: a heredoc that opens the summary file by a path
+    it doesn't get by naming `GITHUB_STEP_SUMMARY` (see the env-file entry
+    below), and a summary written by a script run from a file --
     scripts/docs_freshness.py, scripts/branch_protection_audit.py and
     scripts/required_check_triggers.py encode theirs with PY_MD's helpers,
     held by their own tests, not by this guard; a helper redefined through
@@ -347,9 +352,13 @@ Not covered (each would need a parser this script doesn't have):
   * `: "${x:=$V}"`, `printf -v`, `eval`, `${!n}`, `declare -n`, an alias or a
     variable holding `$GITHUB_OUTPUT` or `$GITHUB_STEP_SUMMARY`, a command
     prefix held in a variable, `node -e` / `python -c` one-liners;
-  * a Python or Node heredoc that opens an env file itself
-    (`open(os.environ["GITHUB_OUTPUT"], "a")`, `fs.appendFileSync`) instead
-    of printing to a redirected stdout: its writes are not read;
+  * a Python or Node heredoc that opens an env file or the summary itself
+    by a path it gets other than by naming the variable: a line that names
+    `GITHUB_ENV`, `GITHUB_OUTPUT`, `GITHUB_STATE`, `GITHUB_PATH` or
+    `GITHUB_STEP_SUMMARY` is refused (`<env file opened>`, #513), but a
+    name built at run time (`os.environ["GITHUB_" + k]`), a path passed in
+    from shell under another name, or one into the runner's file-commands
+    directory isn't seen, and what such a heredoc writes is not read;
   * an env-file entry in the multi-line form (`name<<DELIM`, value lines,
     `DELIM`): a masked value has no line end, but a value line that equals
     the delimiter ends the entry early, so the lines after it become entries
@@ -360,13 +369,18 @@ Not covered (each would need a parser this script doesn't have):
   * an array literal that spans lines (`kw=(` ... `)`): its words on the
     later lines read as statements, so a keyword there opens or closes a
     group (one closed on its own line is blanked);
-  * a print the Python or Node reading doesn't name: an alias of it
-    (`out = sys.stdout.write`, `const log = console.log`), `os.write(1, ...)`,
-    `print` passed or rebound, `process.stdout` behind another name;
-  * a write to a standard stream under another name in Python that isn't a
-    named print: `out = sys.stdout` then `out.write(...)`,
-    `sys.__stdout__.write(...)`, `from sys import stdout` then
-    `stdout.write(...)`. A print's `file=` is read (#511): `sys.stdout` and
+  * a write to a standard stream the Python or Node reading doesn't see by
+    name. A line that names `print` or `console` outside a print call the
+    strict reading names (`console['log'](p)`, `out = print`, `const log =
+    console.log`) is refused on every heredoc, and one that names
+    `sys.stdout`, `sys.__stdout__` or `process.stdout` outside one
+    (`sys.stdout.writelines([p])`, `sys.stdout.buffer.write(...)`,
+    `json.dump(p, sys.stdout)`, `out = sys.stdout`) where the heredoc's
+    stdout reaches the log, an env file or the summary (`<unknown writer>`,
+    #513); not covered: a stream reached without naming those
+    (`from sys import stdout`, `getattr(sys, "stdout")`, `os.write(1,
+    ...)`, `pprint.pprint`, `input(prompt)`, a child process that inherits
+    stdout, `globalThis["console"]`). A print's `file=` is read (#511): `sys.stdout` and
     `sys.__stdout__` are stdout, `sys.stderr` and `sys.__stderr__` stderr (in
     parentheses too); any other `file=` is read as stdout and as stderr both,
     so it reaches the log and, in an env-file or summary heredoc, that sink
@@ -383,9 +397,9 @@ Not covered (each would need a parser this script doesn't have):
     (`sys.stderr.write` and `SystemExit` are stderr by name), and text past
     the `)` is read as one more argument, a value. An
     argument after a backslash line continuation is read as written, so
-    `file=` or `**` there counts. Not covered there: `sys.stdout` or `sys.stderr` rebound (after
-    `sys.stdout = sys.stderr` an env-file heredoc's stdout prints reach the
-    log, but are read as entries only, without the line-start rule), and a
+    `file=` or `**` there counts. Not covered there: `sys.stderr` rebound
+    (`sys.stderr = open(...)`; a rebinding of `sys.stdout` names it, and is
+    refused where the heredoc's stdout reaches a sink, see above), and a
     write to a file the heredoc opens that isn't a named print
     (`f = open(...)` then `f.write(p)`), which isn't read at all;
   * a mask line that isn't a statement: `x=$(shown "$x")` on a line inside a
@@ -450,6 +464,14 @@ heredoc reading err towards a finding, #507):
     into a file reads as a log print of `p`, and a print with anything but
     `;` and the next print after its `)` on the line takes that text as a
     value as well -- keep the word out of the call's line, or mask the value;
+  * a mention of `print`, `console` or a stdout object outside a print
+    call the strict reading names that writes nothing (`sys.stdout.flush()`,
+    `"print"` in a string, an inline comment naming one), a heredoc line
+    that names an env-file variable only in text (`print("set
+    GITHUB_OUTPUT")`), and a mention of `shown` other than a call in a
+    Python or Node heredoc (`"shown"` in a string, `f(shown=1)`) or an
+    `export -f shown` in shell (#513) -- reword, or add `<unknown writer>`
+    or `<env file opened>` to ALLOWED with the reason;
   * a stderr print of a heredoc whose opener names `2>&1` or `|&` anywhere,
     also where stderr stays on the log (`2>&1 >> "$GITHUB_OUTPUT"`): read as
     an env-file entry and as a log line both;
@@ -535,6 +557,12 @@ SHELL_SHOWN = """shown() { local v="${1//[[:cntrl:]]/?}"; printf '%s' "${v//\\#\
 # The canonical definition line itself, nothing on it after the colon: a line that
 # only starts `def shown(` can hold a print of its own (`def shown(v): print(...)`).
 PY_SHOWN = re.compile(r"^\s*def shown\(value\):\s*$")
+# Any mention of `shown` in a Python or Node heredoc that is not a call of it
+# -- an assignment, an annotation, a walrus, an import, a loop or `with`
+# target, a parameter, a second definition -- outside the canonical lines:
+# the heredoc's canonical definition then proves nothing (#513).
+PY_SHOWN_NAME = re.compile(r"\bshown\b(?!\s*\()|\b(?:def|class)\s+shown\b")
+JS_SHOWN_NAME = re.compile(r"\bshown\b(?!\s*\()|\bfunction\b\s*\*?\s*shown\b")
 PY_SHOWN_RETURN = """return re.sub(r"[\\x00-\\x1f\\x7f-\\x9f]", "?", str(value)).replace("##[", "#?[")"""
 JS_SHOWN = ("const shown = (value) => String(value).replace(/[\\u0000-\\u001f\\u007f-\\u009f]/g, '?')"
             ".replace(/##\\[/g, '#?[');")
@@ -672,6 +700,11 @@ NAMED_SUBSTITUTION = re.compile(r"""\$\((?:shown|md_enc|md_code) "\$\{?""" + NAM
 SHELL_MD_REBIND = re.compile(
     r"""(?:^|[;&|{(]\s*)(?:function\s+md_(?:enc|code|pre)\b|md_(?:enc|code|pre)\s*\(\s*\))"""
     r"""|\b(?:unset|alias|unalias|declare\s+-f|readonly\s+-f|export\s+-f)\b[^;&|]*\bmd_(?:enc|code|pre)\b""")
+# The log mask the same way: `shown` defined, aliased, unset or rebound
+# anywhere but on its canonical line (#513).
+SHELL_SHOWN_REBIND = re.compile(
+    r"""(?:^|[;&|{(]\s*)(?:function\s+shown\b|shown\s*\(\s*\))"""
+    r"""|\b(?:unset|alias|unalias|declare\s+-f|readonly\s+-f|export\s+-f)\b[^;&|]*\bshown\b""")
 # Python and Node: any mention of a helper's name that is not a call of it.
 PY_MD_NAME = re.compile(r"\bmd_(?:enc|code|pre)\b(?!\s*\()|\bdef\s+md_(?:enc|code|pre)\b")
 JS_MD_NAME = re.compile(r"\bmd(?:Enc|Code|Pre)\b(?!\s*\()")
@@ -1238,6 +1271,11 @@ def is_comment(text: str) -> bool:
     return text.lstrip().startswith(("#", "//"))
 
 
+def is_comment_unit(unit: Logical) -> bool:
+    """A comment line: a shell heredoc's line is data the shell expands, `#` and all (#513)."""
+    return unit.lang != "sh-heredoc" and is_comment(unit.text)
+
+
 TO_STDERR = re.compile(r"(?<![0-9])>&\s*2|&>|/dev/std(?:err|out)")
 OPENERS = {"{", "for", "while", "until", "select", "if", "case"}
 CLOSERS = {"}", "done", "fi", "esac"}
@@ -1251,6 +1289,24 @@ GROUP_NAME = "<summary group>"
 # or a backtick: the shell expands it before the interpreter reads the line,
 # and the Python or Node reading doesn't see that expansion.
 UNQUOTED_NAME = "<unquoted heredoc>"
+# A Python or Node heredoc line that writes to a standard stream other than
+# through a named print (#513): `sys.stdout.writelines(...)`,
+# `json.dump(x, sys.stdout)`, `console['log'](...)`, `print` passed as a value.
+UNKNOWN_WRITER = "<unknown writer>"
+# What such a line names: stdout objects (read where the heredoc's stdout
+# reaches a sink), and a print or `console` (either stream: read on every
+# heredoc). A reference inside a print call the strict reading names is that
+# call's own.
+PY_STDOUT_REF = re.compile(r"\bsys\s*\.\s*(?:__)?stdout\b")
+JS_STDOUT_REF = re.compile(r"\bprocess\s*\.\s*stdout\b")
+PY_PRINT_REF = re.compile(r"\bprint\b")
+JS_PRINT_REF = re.compile(r"\bconsole\b")
+# A Python or Node heredoc line that names an env file or the step summary
+# (#513): it can open the file itself (`open(os.environ["GITHUB_ENV"], "a")`,
+# `fs.appendFileSync(process.env.GITHUB_OUTPUT, ...)`), and what it writes
+# there is no print the guard reads.
+ENV_FILE_OPENED = "<env file opened>"
+ENV_FILE_NAMED = re.compile(r"\bGITHUB_(?:ENV|OUTPUT|STATE|PATH|STEP_SUMMARY)\b")
 
 
 # `name=(...)`, `name+=(...)`: an array literal, whose words are data.
@@ -1624,12 +1680,13 @@ def joined_text(units: list[Logical], k: int) -> str:
     text = unit.text
     opener = open_print(text, unit.lang)
     if opener is not None:
-        depth, quote = bracket_state(text, opener)
+        depth, _ = bracket_state(text, opener, lang=unit.lang)
         end = k + 1
         while depth and end < len(units) and end - k <= JOINED_LINES \
                 and units[end].origin == unit.origin and units[end].lang == unit.lang:
             text += "\n" + units[end].text
-            depth, quote = bracket_state(text, len(text) - len(units[end].text) - 1, depth, quote)
+            # Read again from the call's `(`: a `/* ... */` can span the lines.
+            depth, _ = bracket_state(text, opener, lang=unit.lang)
             end += 1
     return text
 
@@ -1638,7 +1695,7 @@ def sink_units(units: list[Logical]) -> set[int]:
     """Indices of units that emit a command, write an env file or print to the log."""
     redirected, sinks, _, _ = redirected_groups(units)
     for k, unit in enumerate(units):
-        if unit.lang == "data" or is_comment(unit.text):
+        if unit.lang == "data" or is_comment_unit(unit):
             continue
         text = unit.text
         if COMMAND.search(text):
@@ -1652,7 +1709,9 @@ def sink_units(units: list[Logical]) -> set[int]:
                   and text.strip() != SHELL_SHOWN and text.strip() not in SHELL_MD):
                 sinks.add(k)
         elif unit.lang == "sh-heredoc":
-            if unit.dest in ("envfile", "log"):
+            # Piped into `tee` or `cat`, its lines are printed to the log (#513).
+            if unit.dest in ("envfile", "log") or (
+                    unit.dest == "pipe" and pipes_to_log(HEREDOC.sub(" ", units[unit.origin].text))):
                 sinks.add(k)
         elif unit.lang in ("py", "js") and unit.dest == "envfile":
             # Every line of a heredoc whose stdout goes to an env file (#507),
@@ -1736,6 +1795,8 @@ def template_exprs(text: str, lang: str) -> list[str]:
             j += 1
         expr = text[start:j - 1].strip()
         exprs.append(field_expr(expr) if lang == "py" else expr)
+        if lang == "py":
+            exprs += spec_fields(expr)
         i = j
 
 
@@ -1753,6 +1814,28 @@ def field_expr(field: str) -> str:
     """
     expr = FIELD_TAIL.split(field.strip())[0]
     return SELF_DOCUMENTING.sub("", expr).strip()
+
+
+def spec_fields(field: str) -> list[str]:
+    """The expressions of the replacement fields nested in a Python field's format spec (#513).
+
+    `{len(p):{p}}` formats with `p` as its spec: `p` sets the fill -- any
+    character, a line end too -- and the width, so it is a value printed
+    like any other. Node template literals have no spec.
+    """
+    tail = FIELD_TAIL.search(field.strip())
+    if not tail:
+        return []
+    spec = field.strip()[tail.start():]
+    out, i = [], 0
+    while (i := spec.find("{", i)) >= 0:
+        depth, j = 1, i + 1
+        while j < len(spec) and depth:
+            depth += {"{": 1, "}": -1}.get(spec[j], 0)
+            j += 1
+        out.append(field_expr(spec[i + 1:j - 1]))
+        i = j
+    return out
 
 
 def named_escapes(text: str) -> dict[int, int]:
@@ -1863,12 +1946,34 @@ def same_quote_field(text: str, start: int, end: int) -> bool:
     return False
 
 
-def call_args(text: str, opener_end: int) -> list[str]:
+def comment_end(text: str, i: int, lang: str | None) -> int | None:
+    """Index just past the comment that starts at i, outside a string; None if none starts there (#513).
+
+    Python's `#` and Node's `//` run to the line end (which stays text),
+    Node's `/* ... */` to its `*/` (or the end of the text). A Node `//` or
+    `/*` counts only after a blank, a bracket or a separator, so
+    one inside a regex literal (`/\\//`, `/[//]/`) is no comment. `lang` None
+    reads no comments.
+    """
+    if lang == "py" and text[i] == "#":
+        end = text.find("\n", i)
+        return len(text) if end < 0 else end
+    if lang == "js" and text.startswith(("//", "/*"), i) and (i == 0 or text[i - 1] in " \t\n,;(){}"):
+        if text.startswith("//", i):
+            end = text.find("\n", i)
+            return len(text) if end < 0 else end
+        end = text.find("*/", i + 2)
+        return len(text) if end < 0 else end + 2
+    return None
+
+
+def call_args(text: str, opener_end: int, lang: str | None = None) -> list[str]:
     """Top-level arguments of the call whose `(` ends at opener_end.
 
     A line continuation (a backslash and its line end) outside a quote reads
     as a space, so an argument on a continued line is read as written:
-    `file=sys.stderr`, `**kw` (#511).
+    `file=sys.stderr`, `**kw` (#511). A comment (`comment_end`, read where
+    `lang` is given) is dropped: a `)` or `,` in it ends nothing (#513).
     """
     args, depth, current, quote = [], 1, [], None
     i = opener_end
@@ -1877,6 +1982,9 @@ def call_args(text: str, opener_end: int) -> list[str]:
         if not quote and text.startswith("\\\n", i):
             current.append(" ")
             i += 2
+            continue
+        if not quote and (skip := comment_end(text, i, lang)) is not None:
+            i = skip
             continue
         if quote:
             if c == "\\":
@@ -1916,11 +2024,18 @@ def call_end(text: str, opener_end: int) -> int:
     return len(text) if close is None else close
 
 
-def call_close(text: str, opener_end: int) -> int | None:
-    """Index just past the `)` closing the call whose `(` ends at opener_end; None if the text doesn't close it."""
+def call_close(text: str, opener_end: int, lang: str | None = None) -> int | None:
+    """Index just past the `)` closing the call whose `(` ends at opener_end; None if the text doesn't close it.
+
+    A comment (`comment_end`, read where `lang` is given) is skipped: a `)` in
+    it closes nothing (#513).
+    """
     depth, quote, i = 1, None, opener_end
     while i < len(text):
         c = text[i]
+        if not quote and (skip := comment_end(text, i, lang)) is not None:
+            i = skip
+            continue
         if quote:
             if c == "\\":
                 i += 2
@@ -1949,18 +2064,22 @@ def open_print(text: str, lang: str) -> int | None:
     for m in (PY_STRICT_PRINT if lang == "py" else JS_STRICT_PRINT).finditer(text):
         if m.start() < last:
             continue  # inside an earlier call
-        close = call_close(text, m.end())
+        close = call_close(text, m.end(), lang)
         if close is None:
             return m.end()
         last = close
     return None
 
 
-def bracket_state(text: str, start: int, depth: int = 1, quote: str | None = None) -> tuple[int, str | None]:
-    """Bracket depth and open quote after reading text[start:], from the given state."""
+def bracket_state(text: str, start: int, depth: int = 1, quote: str | None = None,
+                  lang: str | None = None) -> tuple[int, str | None]:
+    """Bracket depth and open quote after reading text[start:], from the given state; comments skipped (`lang`)."""
     i = start
     while i < len(text) and depth:
         c = text[i]
+        if not quote and (skip := comment_end(text, i, lang)) is not None:
+            i = skip
+            continue
         if quote:
             if c == "\\":
                 i += 2
@@ -2072,14 +2191,20 @@ def print_calls(text: str, lang: str) -> list[PrintCall]:
     for m in (PY_STRICT_PRINT if lang == "py" else JS_STRICT_PRINT).finditer(text):
         if m.start() < last:
             continue  # inside an earlier call
-        args = call_args(text, m.end())
+        args = call_args(text, m.end(), lang)
+        name = re.sub(r"\s+", "", m.group(1))
+        close = call_close(text, m.end(), lang)
+        same_quote = lang == "py" and same_quote_field(text, m.end(), len(text) if close is None else close)
+        if same_quote:
+            # The quote scan misreads such a field, so a `#` in it may read as
+            # a comment and hide arguments: read them without comments too,
+            # and end the call where that reading does (#513).
+            args += [a for a in call_args(text, m.end()) if a not in args]
+            close = call_close(text, m.end())
         keyword = {a.split("=", 1)[0].strip(): a.split("=", 1)[1].strip()
                    for a in args if lang == "py" and KEYWORD_ARG.match(a)}
-        name = re.sub(r"\s+", "", m.group(1))
-        close = call_close(text, m.end())
         end = len(text) if close is None else close
-        if lang == "py" and (close is None or any(a.startswith("**") for a in args)
-                             or same_quote_field(text, m.end(), close)):
+        if lang == "py" and (close is None or any(a.startswith("**") for a in args) or same_quote):
             stream = "unknown"
         else:
             stream = file_stream(keyword["file"]) if "file" in keyword else "stdout"
@@ -2368,6 +2493,7 @@ class Checker:
         self.used = used
         self.units = logical_lines(body.lines)
         inherit_group_dest(self.units)
+        self._consumed: dict[int, list[tuple[int, int]]] | None = None
         self._heredoc_ids = list(range(len(self.units)))
         for j in range(1, len(self.units)):
             if self.units[j - 1].lang == self.units[j].lang:
@@ -2376,7 +2502,9 @@ class Checker:
         for j, unit in enumerate(self.units):
             for name, rhs in assignments(unit):
                 self.assigned.setdefault(name, []).append((j, rhs))
-        self.shell_shown = any(u.lang == "sh" and u.text.strip() == SHELL_SHOWN for u in self.units)
+        self.shell_shown = any(u.lang == "sh" and u.text.strip() == SHELL_SHOWN for u in self.units) \
+            and not any(u.lang == "sh" and u.text.strip() != SHELL_SHOWN and not is_comment(u.text)
+                        and SHELL_SHOWN_REBIND.search(u.text) for u in self.units)
         self.blocks = blocks_of(self.units)
         self._mask_paths: dict[tuple[str, int], tuple[int, ...] | None] = {}
         self._events: dict[str, tuple[list[tuple[int, bool]], set[int]]] = {}
@@ -2386,18 +2514,21 @@ class Checker:
             start, end = self.blocks.spans.get(b, (0, -1))
             for j in range(start, end + 1):
                 self.function_lines.setdefault(j, set()).add(b)
-        # Which Python/Node heredoc defines `shown` the canonical way.
+        # Which Python/Node heredoc defines `shown` the canonical way -- and
+        # nothing else in it binds the name (#513).
         self.shown: dict[int, bool] = {}
+        rebound: set[int] = set()
         for k, unit in enumerate(self.units):
             key = self.heredoc_id(k)
-            if unit.lang == "py":
-                ok = PY_SHOWN.match(unit.text) is not None and any(
-                    u.text.strip() == PY_SHOWN_RETURN for u in self.units[k + 1:k + 6] if u.lang == "py")
-            elif unit.lang == "js":
-                ok = unit.text.strip() == JS_SHOWN
-            else:
+            if unit.lang not in ("py", "js"):
                 continue
+            ok = self.canonical_shown(k)
+            if not ok and not is_comment(unit.text) and unit.text.strip() != PY_SHOWN_RETURN \
+                    and (PY_SHOWN_NAME if unit.lang == "py" else JS_SHOWN_NAME).search(unit.text):
+                rebound.add(key)
             self.shown[key] = self.shown.get(key, False) or ok
+        for key in rebound:
+            self.shown[key] = False
         # The summary helpers: every line of the canonical block, in the body
         # (shell) or in the same heredoc (Python, Node).
         self.shell_md = all(any(u.lang == "sh" and u.text.strip() == line for u in self.units) for line in SHELL_MD) \
@@ -2419,6 +2550,27 @@ class Checker:
                 own = [line for line in own if not line.startswith("#")]
                 self.md[key] = bool(at) and not any(PY_MD_NAME.search(line) for line in own)
 
+    def canonical_shown(self, k: int) -> bool:
+        """Unit k defines `shown` the canonical way.
+
+        Node: the line is JS_SHOWN. Python: the line is PY_SHOWN, the first
+        line of its body that isn't blank or a comment is PY_SHOWN_RETURN --
+        not one further down, below a statement that can return first
+        (#513) -- and no decorator stands above it (`@d` rebinds the name).
+        """
+        unit = self.units[k]
+        if unit.lang == "js":
+            return unit.text.strip() == JS_SHOWN
+        if unit.lang != "py" or PY_SHOWN.match(unit.text) is None:
+            return False
+        key = self.heredoc_id(k)
+        code = [j for j, u in enumerate(self.units)
+                if self.heredoc_id(j) == key and u.text.strip() and not is_comment(u.text)]
+        at = code.index(k)
+        body = self.units[code[at + 1]].text.strip() if at + 1 < len(code) else ""
+        above = self.units[code[at - 1]].text.strip() if at else ""
+        return body == PY_SHOWN_RETURN and not above.startswith("@")
+
     def helper_line(self, k: int) -> bool:
         """A line of a canonical helper's own definition, exactly as the canonical text has it.
 
@@ -2435,6 +2587,48 @@ class Checker:
             return text in [line.strip() for line in PY_MD.split("\n")] or text == PY_SHOWN_RETURN \
                 or PY_SHOWN.match(unit.text) is not None
         return False
+
+    def consumed(self) -> dict[int, list[tuple[int, int]]]:
+        """For each Python or Node unit, the column spans that print calls the strict reading names cover.
+
+        A call goes on over its continuation lines (`joined_text`), so its
+        span covers part of each.
+        """
+        if self._consumed is None:
+            self._consumed = {}
+            for k, unit in enumerate(self.units):
+                if unit.lang not in ("py", "js"):
+                    continue
+                text = self.joined(k)
+                start = 0
+                spans = []
+                for n, part in enumerate(text.split("\n")):
+                    spans.append((k + n, start, start + len(part)))
+                    start += len(part) + 1
+                for call in print_calls(text, unit.lang):
+                    for j, first, last in spans:
+                        if call.start < last and call.end > first:
+                            self._consumed.setdefault(j, []).append(
+                                (max(call.start, first) - first, min(call.end, last) - first))
+        return self._consumed
+
+    def unknown_writer(self, k: int) -> bool:
+        """A Python or Node line names a stream writer that no print call it is part of accounts for (#513).
+
+        A stdout object (`sys.stdout`, `sys.__stdout__`, `process.stdout`)
+        counts where the heredoc's stdout reaches a sink -- an env file, the
+        summary or the log --, a print or `console` everywhere: passed on or
+        reached by a subscript, it writes to a stream the guard can't tell.
+        """
+        unit = self.units[k]
+        if unit.lang not in ("py", "js") or is_comment(unit.text) or self.helper_line(k):
+            return False
+        refs = [PY_PRINT_REF if unit.lang == "py" else JS_PRINT_REF]
+        if unit.dest in ("envfile", "summary") or unit.stdout_logged():
+            refs.append(PY_STDOUT_REF if unit.lang == "py" else JS_STDOUT_REF)
+        covered = self.consumed().get(k, [])
+        return any(not any(a <= m.start() < b for a, b in covered)
+                   for ref in refs for m in ref.finditer(unit.text))
 
     def heredoc_id(self, k: int) -> int:
         """The first unit of the run of units in unit k's language that holds k."""
@@ -2678,7 +2872,7 @@ class Checker:
         _, _, grouped, _ = redirected_groups(self.units)
         out = []
         for k, unit in enumerate(self.units):
-            if is_comment(unit.text) or not unit.text.strip() or self.helper_line(k):
+            if is_comment_unit(unit) or not unit.text.strip() or self.helper_line(k):
                 continue
             if unit.lang == "sh" and (k in grouped or destination(unit.text) == "summary"):
                 out.append(k)
@@ -2820,11 +3014,13 @@ class Checker:
     def summary_template(self, k: int) -> list[str]:
         """Unclean values on a Python or Node line whose stdout reaches the summary.
 
-        Read strictly (`strict_prints`), with the summary helpers as the mask.
+        Read strictly (`strict_prints`), with the summary helpers as the mask,
+        and -- as on an env-file line -- a print call with its continuation
+        lines joined to it, so a bare name on one is read (#513).
         """
         unit = self.units[k]
         calls = JS_MD_CALL if unit.lang == "js" else PY_MD_CALL
-        return self.strict_prints(k, calls, self.md.get(self.heredoc_id(k), False), unit.text)
+        return self.strict_prints(k, calls, self.md.get(self.heredoc_id(k), False), self.joined(k))
 
     def envfile_template(self, k: int) -> list[str]:
         """Unclean values on a line of a Python or Node heredoc whose stdout goes to an env file (#507).
@@ -2967,12 +3163,14 @@ def leading_value(unit: Logical) -> bool:
 
     The runner trims leading whitespace before it looks for `::`, and no mask
     touches `::`, so such a value can start a command of its own. A literal
-    with at least one non-space character must come first.
+    with at least one non-space character must come first. A line piped
+    into `tee` or `cat` is printed to the log, wherever else tee writes it
+    (`echo "$x=1" | tee -a "$GITHUB_OUTPUT"`, #513).
     """
     text = unit.text
     if unit.lang == "sh":
         dest = destination(text)
-        if COMMAND.search(text) or not (dest == "log" or (dest == "pipe" and pipes_to_log(text))):
+        if COMMAND.search(text) or not (dest == "log" or pipes_to_log(text)):
             return False
         bare = unquoted(text)
         m = SHELL_PRINT.search(bare)
@@ -3029,6 +3227,23 @@ def audit_body(body: Body, siblings: list[Body] | None = None, entries: tuple[Al
                 f"`{UNQUOTED_NAME}`: this line of a Python or Node heredoc holds '$' or a backtick, and the "
                 "heredoc's delimiter is unquoted, so the shell expands it before the interpreter reads the "
                 "line. Quote the delimiter (<<'PY') and read a value from the environment instead."))
+    for k, unit in enumerate(checker.units):
+        if unit.lang not in ("py", "js") or is_comment(unit.text):
+            continue
+        line = body.first_line + unit.index
+        if checker.unknown_writer(k) and not checker.allowed(UNKNOWN_WRITER, k, shell=False):
+            findings.append(finding(
+                body.path, line, body.step,
+                f"`{UNKNOWN_WRITER}`: this line of a Python or Node heredoc names a print, console or stdout "
+                "outside a print call the guard reads (print, sys.stdout.write, sys.stderr.write, "
+                "console.<method>, process.stdout.write, process.stderr.write), so it can't read what reaches "
+                "the log, an env file or the summary. Print through one of those calls."))
+        if ENV_FILE_NAMED.search(unit.text) and not checker.allowed(ENV_FILE_OPENED, k, shell=False):
+            findings.append(finding(
+                body.path, line, body.step,
+                f"`{ENV_FILE_OPENED}`: this line of a Python or Node heredoc names an env file or the step "
+                "summary, so it can write there itself, which the guard doesn't read. Print to stdout and redirect "
+                "the heredoc there instead, or add it to ALLOWED with the reason it is constrained."))
     for k in unattributed_summary_closers(checker.units):
         findings.append(finding(
             body.path, body.first_line + checker.units[k].index, body.step,
