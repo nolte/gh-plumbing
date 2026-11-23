@@ -3084,3 +3084,100 @@ def test_issue_513_a_quoted_print_word_piped_into_tee_keeps_the_line_start_rule(
 def test_issue_513_an_echo_argument_word_is_read_as_a_print(tmp_path):
     # Refused although harmless: any `echo` word counts from there.
     assert check(tmp_path, 'grep -c echo "$VALUE"') == ["VALUE", guard.LEADING]
+
+
+# A line that writes an env file and the step summary is read by the summary
+# rule too, statement by statement, not only by the env-file rules (#513
+# review round 6): `$(shown ...)` is no Markdown encoding.
+MASKED = '"x $(shown "$VALUE")"'
+ON_ENV_FILE_LINES = [
+    f'echo {MASKED} {SUMMARY}; echo a >> "$GITHUB_OUTPUT"',
+    f'echo {MASKED} >& "$GITHUB_STEP_SUMMARY"; echo a >> "$GITHUB_OUTPUT"',
+    f'echo {MASKED} &> "$GITHUB_STEP_SUMMARY"; echo a >> "$GITHUB_OUTPUT"',
+    f'echo a >> "$GITHUB_ENV" && echo {MASKED} | tee -a "$GITHUB_STEP_SUMMARY"',
+    f'for i in 1; do echo {MASKED} 2>> "$GITHUB_OUTPUT"; done {SUMMARY}',
+    f'{{ echo {MASKED}; echo a >> "$GITHUB_ENV"; }} {SUMMARY}',
+    f'{{\n  echo {MASKED}; echo a >> "$GITHUB_ENV"\n}} {SUMMARY}',
+    f'{{\n  echo {MASKED}\n}} {SUMMARY} 2>> "$GITHUB_OUTPUT"',
+]
+
+
+@pytest.mark.parametrize("line", ON_ENV_FILE_LINES + [f"echo {MASKED} {SUMMARY}"])
+def test_issue_513_a_masked_value_on_a_summary_and_env_file_line_is_refused(tmp_path, line):
+    assert "VALUE" in check(tmp_path, f"{HELPER}\n{line}")
+
+
+@pytest.mark.parametrize("line", [line for line in ON_ENV_FILE_LINES if "| tee" not in line])
+def test_issue_513_a_masked_then_encoded_value_on_a_summary_and_env_file_line_is_clean(tmp_path, line):
+    run = f'{HELPER}\n{MD}\nM=$(shown "$VALUE")\n' + line.replace(MASKED, '"x $(md_code "$M")"')
+    assert check(tmp_path, run) == []
+
+
+@pytest.mark.parametrize("line", [
+    f'echo "v=$(shown "$VALUE")" >> "$GITHUB_OUTPUT"; echo fixed {SUMMARY}',
+    f'echo "v=$(shown "$VALUE")" >> "$GITHUB_ENV" & echo fixed >& "$GITHUB_STEP_SUMMARY"',
+    f'{{ echo fixed; echo "v=$(shown "$VALUE")" >> "$GITHUB_ENV"; }} {SUMMARY}',
+])
+def test_issue_513_a_masked_env_file_statement_beside_a_literal_summary_write_is_clean(tmp_path, line):
+    assert check(tmp_path, f"{HELPER}\n{line}") == []
+
+
+@pytest.mark.parametrize("line", [
+    f'echo "v=$VALUE" >> "$GITHUB_OUTPUT"; echo fixed {SUMMARY}',
+    f'echo "x $(md_code "$VALUE")" {SUMMARY}; echo "v=$VALUE" >> "$GITHUB_ENV"',
+])
+def test_issue_513_the_env_file_reading_of_a_summary_line_holds(tmp_path, line):
+    assert check(tmp_path, f"{HELPER}\n{MD}\n{line}") == ["VALUE"]
+
+
+def test_issue_513_a_stderr_append_inside_a_summary_loop_leaves_stdout_there(tmp_path):
+    # `2>> f` sends only stderr into f: the echo still prints to the summary.
+    assert check(tmp_path, f'for i in 1; do echo "x $VALUE" 2>> f; done {SUMMARY}') == ["VALUE"]
+
+
+@pytest.mark.parametrize("opener", [
+    f'cat <<EOF {SUMMARY} 2>> "$GITHUB_OUTPUT"',
+    f'cat <<EOF >> "$GITHUB_OUTPUT"; echo fixed {SUMMARY}',
+])
+def test_issue_513_a_heredoc_whose_opener_writes_an_env_file_and_the_summary_is_a_summary_heredoc(tmp_path, opener):
+    # Refused although harmless: the opener reads as a command other than a
+    # bare `cat`, and every heredoc line as a summary line.
+    assert check(tmp_path, f"{HELPER}\n{opener}\nx $(shown \"$VALUE\")\nEOF") == [guard.OUTPUT_NAME, "VALUE"]
+
+
+def test_issue_513_a_python_heredoc_whose_opener_writes_an_env_file_and_the_summary_is_read_for_it(tmp_path):
+    run = (f"python3 - <<'PY' {SUMMARY} 2>> \"$GITHUB_OUTPUT\"\nimport os\n{PY_HELPER}"
+           "v = os.environ['VALUE']\nprint(f\"x {shown(v)}\")\nPY")
+    assert check(tmp_path, run) == ["shown"]
+
+
+@pytest.mark.parametrize("line", ["v=$VALUE", "x ${VALUE}", "do x=$VALUE", "then $VALUE }"])
+def test_issue_513_a_summary_heredoc_line_shaped_like_a_statement_is_printed_text(tmp_path, line):
+    assert check(tmp_path, f"cat <<EOF {SUMMARY}\n{line}\nEOF") == ["VALUE"]
+
+
+def test_issue_513_an_encoded_value_on_a_summary_and_env_file_line_is_refused_by_the_env_file_rule(tmp_path):
+    # Refused although harmless: md_code is no mask for the env-file rule.
+    assert check(tmp_path, f'{MD}\necho "x $(md_code "$VALUE")" {SUMMARY}; echo a >> "$GITHUB_OUTPUT"') == ["VALUE"]
+
+
+@pytest.mark.parametrize("line", [
+    f'{{ echo "x $VALUE" >&2; }} >& "$GITHUB_STEP_SUMMARY"',
+    f'{{ echo "x $VALUE" > /dev/stderr; }} &> "$GITHUB_STEP_SUMMARY"',
+    f'{{ echo "x $VALUE" >&2; }} {SUMMARY}',
+    f'{{ echo "x $VALUE" >&1; }} {SUMMARY}',
+    f'{{ echo "x $VALUE" > "/dev/stdout"; }} {SUMMARY}',
+])
+def test_issue_513_a_print_to_a_standard_stream_inside_a_summary_group_is_a_summary_print(tmp_path, line):
+    # Under `>&`/`&>` stderr goes to the summary too; `>&1` and /dev/stdout
+    # are the group's stdout. Under `>>` stderr is the log, read here too.
+    assert "VALUE" in check(tmp_path, line)
+
+
+def test_issue_513_a_masked_print_to_stderr_inside_a_summary_group_is_refused(tmp_path):
+    # Refused although harmless: stderr is the log there, where the mask suffices.
+    assert check(tmp_path, f'{HELPER}\n{{ echo "x $(shown "$VALUE")" >&2; }} {SUMMARY}') == ["VALUE"]
+
+
+def test_issue_513_a_print_into_a_file_inside_a_summary_group_stays_unread(tmp_path):
+    assert check(tmp_path, f'{{ echo "x $VALUE" > f; }} {SUMMARY}') == []

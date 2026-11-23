@@ -223,11 +223,20 @@ also through `> >(tee ...)` and whatever else the line holds; a statement of
 a `{ ...; } >> "$GITHUB_STEP_SUMMARY"` group, a function body (`f() {`,
 `function f {`) or a `for`/`while`/`until`/`if` compound redirected or piped
 into `tee` there as a whole, its opening line included, unless it sends its
-own stdout elsewhere -- statements split at `;`, `&&`, `||` and a background
+own stdout into a file (to stderr or a standard stream it may still reach
+the summary: `>&2` under a closer's `>&`, `> /dev/stdout`, `> >(cat)`, #513)
+-- statements split at `;`, `&&`, `||` and a background
 `&` (`true & echo "$v" >> ...`, #513), openers and closers count anywhere at
 statement level (`echo "$v"; } >> ...` ends its group), and a closer redirected there whose
 opener the guard can't find is itself a finding (`<summary group>`); a line
-of a heredoc written there by a bare `cat`, or a Python or Node heredoc whose
+that writes an env file as well is read by both rules, the summary rule
+taking the statements that write the summary, and a heredoc whose opener's
+line writes the summary anywhere as a summary heredoc, whatever else it
+writes (`echo "x $(shown "$v")" >> "$GITHUB_STEP_SUMMARY"; echo a >>
+"$GITHUB_OUTPUT"`, `for ...; do echo "$v" 2>> "$GITHUB_OUTPUT"; done >>
+...`, #513); a line of a heredoc written there by a bare `cat` -- read as
+printed text whatever its shape (`v=$v`, `do $v`, `x ${v}`, #513) --, or a
+Python or Node heredoc whose
 stdout goes there (their stderr prints are read as log lines, though `2>&1`
 on the opener sends them into the summary too; that isn't read) -- also one opened
 inside such a group without a stdout redirect of its own -- may interpolate
@@ -353,13 +362,8 @@ Not covered (each would need a parser this script doesn't have):
     scripts/required_check_triggers.py encode theirs with PY_MD's helpers,
     held by their own tests, not by this guard; a helper redefined through
     `eval` or `source` (shell), `exec` or an import machinery call (Python)
-    or `require`/`eval` (Node); a `case` compound redirected there (its
-    arms read as commands, so that one errs towards a finding); and a line
-    that writes an env file as well (`echo "x $(shown "$V")" >>
-    "$GITHUB_STEP_SUMMARY"; echo a >> "$GITHUB_OUTPUT"`, or `2>>
-    "$GITHUB_OUTPUT"` inside a loop redirected there): it is read as an
-    env-file line, where `$(shown ...)` counts, so a value masked but not
-    encoded reaches the summary (#513, measured in review, not fixed);
+    or `require`/`eval` (Node); and a `case` compound redirected there (its
+    arms read as commands, so that one errs towards a finding);
   * on a log line, a Python or Node heredoc whose stdout the guard reads as
     going to a file though bash sends it to the log: `>&2 2>> f` sends stdout
     to the log's stderr and only then stderr to f, but the `>>` reads as a
@@ -613,7 +617,24 @@ Refused although harmless (the summary rule errs towards a finding):
     from its own start line and the outer group, not from the inner group;
   * an array assignment inside a group or compound redirected to the summary
     (`for n in a; do kw=(if for); echo "- $(md_code "$n")"; done >> ...`):
-    the statement reads as a command and is refused as `<command output>`.
+    the statement reads as a command and is refused as `<command output>`;
+  * a heredoc whose opener's line writes an env file as well as the summary
+    (`cat <<EOF >> "$GITHUB_STEP_SUMMARY" 2>> "$GITHUB_OUTPUT"`, `cat <<EOF
+    >> "$GITHUB_OUTPUT"; echo x >> "$GITHUB_STEP_SUMMARY"`, #513): the
+    opener reads as a command other than a bare `cat` (`<command output>`),
+    and every line of the heredoc as a summary line, though only one
+    statement writes there -- put the other write on a line of its own;
+  * on a line that writes an env file and the summary, a value encoded for
+    the summary but not masked (`echo "x $(md_code "$V")" >>
+    "$GITHUB_STEP_SUMMARY"; echo a >> "$GITHUB_OUTPUT"`): the env-file rule
+    reads every print of the line and doesn't take `md_code` as a mask --
+    encode a masked value (`m=$(shown "$V")` on a line of its own, then
+    `$(md_code "$m")`), or put the writes on lines of their own;
+  * a print to stderr inside a group or compound redirected to the summary
+    by `>>` (`{ echo "x $(shown "$V")" >&2; } >> "$GITHUB_STEP_SUMMARY"`,
+    #513): its text reaches the log, where the mask suffices, but it is
+    read as a summary line, whatever the closer's redirect -- print it
+    outside the group.
 
 Reads only. Exits non-zero on any finding, and on any file it can't read or
 parse.
@@ -645,8 +666,10 @@ SUMMARY_FILE = re.compile(
     r"""(?:(?:>>|>&|>\|?)\s*|""" + TEE_TO + r"""|\bdd\b[^|;&\n]*?\bof=)["']?\$\{?GITHUB_STEP_SUMMARY\b\}?["']?""")
 # A pipe, not `||` and not the `|` of `>|`.
 PIPE = re.compile(r"(?<![|>])\|(?!\|)")
-# A stdout redirect elsewhere: `> f`, `>> f`, `>| f`, `>&2`, `&> f`.
-STDOUT_ELSEWHERE = re.compile(r"(?<![0-9<])>>?\|?|(?<![0-9])>&\s*2|&>")
+# A stdout redirect elsewhere: `> f`, `>> f`, `>| f`, `>&2`, `&> f` -- not
+# the second `>` of another descriptor's `2>> f`, which leaves stdout where
+# it was (#513).
+STDOUT_ELSEWHERE = re.compile(r"(?<![0-9<>])>>?\|?|(?<![0-9])>&\s*2|&>")
 SUMMARY_TEE = re.compile(r"""(?:""" + TEE_TO + r"""|\bdd\b[^|;&\n]*?\bof=)["']?\$\{?GITHUB_STEP_SUMMARY\b""")
 # `<<EOF`, `<<-EOF`, `<<'EOF'`, `<<"EOF"`, `<<\EOF`; a delimiter may hold `-` and `.`.
 # Groups: 1 a backslash, 2 a quote, 3 the delimiter; quoted when 1 or 2 is set.
@@ -1104,6 +1127,10 @@ class Logical:
     # An env-file heredoc line whose opener writes only another file
     # descriptor there (`2>> "$GITHUB_OUTPUT"`): its stdout is the log (#513).
     fd_logged: bool = False
+    # A heredoc line whose opener writes the step summary as well as the
+    # destination above (`>> "$GITHUB_STEP_SUMMARY" 2>> "$GITHUB_OUTPUT"`):
+    # the summary rule reads it too (#513).
+    summary: bool = False
 
     def stdout_logged(self) -> bool:
         """A Python or Node heredoc line's stdout prints are read as log lines (#511).
@@ -1170,6 +1197,9 @@ def _unquoted(text: str, fill: str) -> tuple[str, int]:
 # A stdout redirect whose target is the log after all: a standard stream by
 # its path, or a process substitution (`> >(cat)`), whose output the guard
 # doesn't follow (#513).
+# A redirect of stdout to stderr or to a standard stream, anywhere in a
+# statement, quoted or not (`>&2`, `>&1`, `> "/dev/stderr"`, `> >(cat)`).
+STD_STREAM = re.compile(r"""(?<![0-9])>&\s*[12]\b|/dev/std(?:out|err)\b|/dev/fd/0*[12]\b|/proc/self/fd/0*[12]\b|>\(""")
 LOG_TARGET = re.compile(r"""\s*(?:["']?(?:/dev/std(?:out|err)|/dev/fd/0*[12]|/proc/self/fd/0*[12])\b|>\()""")
 
 
@@ -1184,10 +1214,7 @@ def destination(text: str) -> str:
     bare = unquoted(text)
     if ENV_FILE.search(text):
         return "envfile"
-    if SUMMARY_TEE.search(text):
-        return "summary"
-    # A pipeline into the summary still ends there.
-    if any(SUMMARY_FILE.match(text, m.start()) for m in re.finditer(r"(?<![0-9<])>", bare)):
+    if writes_summary(text):
         return "summary"
     if PIPE.search(bare):
         return "pipe"
@@ -1199,6 +1226,19 @@ def destination(text: str) -> str:
             return "envfile"
         return "file"
     return "log"
+
+
+def writes_summary(text: str) -> bool:
+    """A shell line writes the step summary somewhere: a redirect there or a `tee`/`dd` into it.
+
+    `destination` names one sink per line and an env file comes first, so a
+    line that writes both reads as an env-file line there; the summary rule
+    asks this instead, so such a line is read by both (#513). A pipeline into
+    the summary still ends there.
+    """
+    if SUMMARY_TEE.search(text):
+        return True
+    return any(SUMMARY_FILE.match(text, m.start()) for m in re.finditer(r"(?<![0-9<])>", unquoted(text)))
 
 
 def pipes_to_log(text: str) -> bool:
@@ -1231,19 +1271,20 @@ def logical_lines(lines: list[str]) -> list[Logical]:
     i = 0
     # The delimiter, the heredoc's lang and destination, its opener's unit,
     # whether the shell expands it, whether it strips leading tabs (`<<-`),
-    # whether its opener pipes its stdout into a command and whether only
-    # another file descriptor than stdout goes to an env file.
-    heredoc: tuple[str, str, str, int, bool, bool, bool, bool] | None = None
+    # whether its opener pipes its stdout into a command, whether only
+    # another file descriptor than stdout goes to an env file and whether its
+    # opener's line writes the step summary.
+    heredoc: tuple[str, str, str, int, bool, bool, bool, bool, bool] | None = None
     while i < len(lines):
         if heredoc is not None:
-            delimiter, lang, dest, origin, expands, tabs, piped, fd_logged = heredoc
+            delimiter, lang, dest, origin, expands, tabs, piped, fd_logged, summary = heredoc
             # bash ends a heredoc only on a line that IS the delimiter -- no
             # leading or trailing space -- after stripping leading tabs for
             # `<<-` (and only tabs). `  PY` or `PY ` is a line of the heredoc.
             if (lines[i].lstrip("\t") if tabs else lines[i]) == delimiter:
                 heredoc = None
             else:
-                out.append(Logical(i, lines[i], lang, dest, origin, expands, piped, fd_logged))
+                out.append(Logical(i, lines[i], lang, dest, origin, expands, piped, fd_logged, summary))
             i += 1
             continue
         start, text = i, lines[i]
@@ -1269,8 +1310,10 @@ def logical_lines(lines: list[str]) -> list[Logical]:
             else:
                 # An unquoted one reads like any other shell line.
                 lang = "sh-heredoc" if expands else "data"
+            # The whole line, not the heredoc's own statement: the summary
+            # rule errs towards a finding (#513).
             heredoc = (match.group(3), lang, dest, len(out) - 1, expands, match.group(0).startswith("<<-"), piped,
-                       fd_logged)
+                       fd_logged, writes_summary(rest))
         i += 1
     return out
 
@@ -3131,15 +3174,21 @@ class Checker:
         return True
 
     def summary_units(self) -> list[int]:
-        """Units whose output reaches `$GITHUB_STEP_SUMMARY`."""
+        """Units whose output reaches `$GITHUB_STEP_SUMMARY`.
+
+        A shell line by any summary write it holds, not by `destination`,
+        which reads a line that writes an env file as well as an env-file
+        line only; `summary_shell` then reads the statements that write there.
+        A heredoc line likewise by its opener's line (#513).
+        """
         _, _, grouped, _ = redirected_groups(self.units)
         out = []
         for k, unit in enumerate(self.units):
             if is_comment_unit(unit) or not unit.text.strip() or self.helper_line(k):
                 continue
-            if unit.lang == "sh" and (k in grouped or destination(unit.text) == "summary"):
+            if unit.lang == "sh" and (k in grouped or writes_summary(unit.text)):
                 out.append(k)
-            elif unit.lang in ("sh-heredoc", "py", "js") and unit.dest == "summary":
+            elif unit.lang in ("sh-heredoc", "py", "js") and (unit.dest == "summary" or unit.summary):
                 out.append(k)
         return out
 
@@ -3153,8 +3202,11 @@ class Checker:
         unit = self.units[k]
         if unit.lang == "sh-heredoc":
             # Text the shell expands: a single quote is literal, `$x` after it
-            # expands.
-            return self.summary_statements([("echo", SUMMARY_FILE.sub("", unit.text).replace("'", " "))], k)
+            # expands. Read as the argument of an `echo`, so a line shaped
+            # like a statement prints all the same: `v=$V`, `do $V`, `x
+            # ${V}` (whose `}` a statement's reading drops) (#513).
+            text = SUMMARY_FILE.sub("", unit.text).replace("'", " ")
+            return self.summary_statements([("echo", f'echo "{text}"')], k)
         text = unit.text
         _, _, grouped, _ = redirected_groups(self.units)
         heredoc = HEREDOC.search(text)
@@ -3194,7 +3246,12 @@ class Checker:
                 continue
             here = SUMMARY_FILE.search(statement) or SUMMARY_TEE.search(statement)
             grouped_here = k in grouped or i in inline
-            if not here and (not grouped_here or STDOUT_ELSEWHERE.search(statement_bare)):
+            # Inside the group, stdout sent to stderr or a standard stream
+            # may still reach the summary (`>&`/`&>` on the closer sends
+            # stderr there too; `> /dev/stdout` and `> >(cat)` print to the
+            # group's stdout): only a redirect into a file takes it out (#513).
+            elsewhere = STDOUT_ELSEWHERE.search(statement_bare) and not STD_STREAM.search(statement)
+            if not here and (not grouped_here or elsewhere):
                 continue
             # A pipeline: the summary gets the last command's output; every
             # part is still read for the names it prints.
@@ -3206,6 +3263,10 @@ class Checker:
             if len(pieces) > 1:
                 names.append(OUTPUT_NAME)
             for piece in pieces:
+                # Another descriptor's write into an env file (`} >> ... 2>>
+                # "$GITHUB_OUTPUT"`) is no command word; its stdout prints
+                # are read all the same (#513).
+                piece = OTHER_FD_TO_ENV_FILE.sub(" ", piece)
                 piece = SUMMARY_FILE.sub("", re.sub(r">\(\s*tee\b[^)]*\)", "", piece))
                 names += self.summary_statements([(self.statement_head(piece), piece)], k)
         return names
