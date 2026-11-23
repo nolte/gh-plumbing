@@ -131,8 +131,8 @@ value is a line end, and the mask turns every one into `?`:
     `a/b()`, `f+()`), since bash takes it as one --
     wherever it opens (same line or a later one) and whatever it is (`{
     ...; }`, `( ... )`, `if`, a loop, `case`). Where a closer has no
-    matching opener, a block stays open -- a `$(...)` or a quoted string
-    over several lines reads that way -- or a function definition has a
+    matching opener, a block stays open -- a quoted string over several
+    lines can read that way -- or a function definition has a
     body the guard doesn't read, no block is attributed in that body and no
     masked assignment covers anything there (errs towards a finding);
   * refused earlier in the same body by the canonical check
@@ -226,8 +226,9 @@ other than the helper are a finding named `<command output>`, since what a
 command prints is controlled text the guard can't read. In a Python or Node
 heredoc, every print call on a line counts (`print (` with a space, and every
 `console` method -- all but `error`, `warn`, `trace` and `assert` write to
-stdout): every argument of a stdout print that is not one plain string
-literal, Python's `end=` and `sep=`, and every f-string or template-literal
+stdout), with the continuation lines of a call not closed on its line (up
+to JOINED_LINES, #513): every argument of a stdout print that is not one
+plain string literal, Python's `end=` and `sep=`, and every f-string or template-literal
 part on the line outside a stderr print must be a call of the helper. Whether
 a print goes to stderr is read from its name or its `file=` argument, never
 from other text on the line. An env-file heredoc is read the same way, with
@@ -252,7 +253,10 @@ Not covered (each would need a parser this script doesn't have):
     checked, its output is not; #492 found `du` echoing a file name that way)
     -- and a print piped into a command other than `tee` or `cat`, on a log
     line (on a summary line both are refused as `<command output>`); nor a
-    print at the end of a pipeline (`true | echo "$V"`);
+    print at the end of a pipeline (`true | echo "##[warning]$V"`, #513):
+    a log line's sink is read per line, and a line with a `|` reads as
+    piped into the command after it, so a print that is that command is
+    passed over -- reading it needs the pipeline's members told apart;
   * a summary write inside a command substitution: the body of `$(...)` is
     blanked before sinks are read, so `out=$(echo "$V" | tee -a
     "$GITHUB_STEP_SUMMARY")` and `x=$(echo "$V" >> "$GITHUB_STEP_SUMMARY")`
@@ -264,7 +268,12 @@ Not covered (each would need a parser this script doesn't have):
   * a leading value the line-start rule can't see: an `echo` whose first word
     is built by a command substitution or a variable holding the whole
     message, and a call site of a helper such as fork-guard's or setup-vale's
-    `finish` (both on ALLOWED, read by hand);
+    `finish` (both on ALLOWED, read by hand); nor is the rule applied to a
+    line of a shell heredoc whose destination is the log (`cat <<EOF`, then
+    `$(shown "$V") x`, then `EOF`; #513): a shell heredoc often feeds a
+    command's stdin (`while read`, `grep`), where a line-start rule would
+    refuse harmless input, and telling the two apart needs knowing what the
+    command prints;
   * a refusal that isn't at body level: the canonical `if` inside a function
     that is never called or only called through `$(...)`, inside `( ... )`,
     or inside `if false; then` -- the guard reads it as if it always ran;
@@ -324,8 +333,9 @@ Not covered (each would need a parser this script doesn't have):
     its lines are data, with an unquoted one shell text; nor a delimiter
     that starts with a digit or holds a character other than a letter, a
     digit, `_`, `-` or `.`;
-  * in an env-file heredoc or a log print, a bare name on a continuation
-    line of a print call more than JOINED_LINES lines below its start; in an
+  * in an env-file or summary heredoc or a log print, a bare name on a
+    continuation line of a print call more than JOINED_LINES lines below
+    its start; in an
     env-file heredoc, a stderr print in
     a heredoc whose stderr reaches the env file other than through a
     redirect on the line that opens it -- through a redirect of an enclosing
@@ -333,9 +343,20 @@ Not covered (each would need a parser this script doesn't have):
     `exec 2>> "$GITHUB_OUTPUT"`, another file descriptor (`3>>"$GITHUB_OUTPUT"
     2>&3`) or a process substitution (`2> >(tee -a "$GITHUB_OUTPUT")`): read
     as a log line only;
-  * in a heredoc whose stderr goes to an env file, stderr written other than
-    by a named print: by `logging`, `warnings.warn` or an uncaught `raise`
-    (its traceback), and every print after `sys.stderr = sys.stdout`;
+  * stderr written other than by a named print, which is read neither as a
+    log line nor, in a heredoc whose stderr goes to an env file, as an entry
+    (#513): in Python `logging.warning(p)`, `warnings.warn(p)`, an uncaught
+    `raise ValueError(p)` (its traceback), `assert False, p`, `sys.exit(p)`,
+    `os.write(2, ...)`, a print or stderr writer under another name (`w =
+    sys.stderr.write`, `say = vars(builtins)["pr" + "int"]`), and every print
+    after `sys.stderr = sys.stdout`; in Node `throw new Error(p)`,
+    `process.emitWarning(p)`, `fs.writeSync(2, ...)` and a stderr writer
+    under another name (`process.stderr.write.bind(process.stderr)`). The
+    set is open-ended: telling it apart needs a Python and a JavaScript
+    parser. An alias that names `print` or `console` is refused as
+    `<unknown writer>` instead (`say = print`, `functools.partial(print,
+    file=sys.stderr)`, `console["error"]`, `const e = console.error`, see
+    below);
   * an interpreter fed by a pipe (`cat <<PY | python3 -`): the heredoc is
     `cat`'s, read as data or shell text, and the interpreter's own stdout is
     not followed; nor a redirect written before the command (`<<'PY' python3
@@ -405,7 +426,11 @@ Not covered (each would need a parser this script doesn't have):
   * a mask line that isn't a statement: `x=$(shown "$x")` on a line inside a
     quoted string over several lines or inside a backtick command
     substitution is read as a statement of its own, as a keyword there is
-    (see block dominance above), so it can cover a print it never reaches;
+    (see block dominance above), so it can cover a print it never reaches
+    -- `x="$V"`, `msg="`, `x=$(shown "$x")`, `"`, `echo "x $x"` (or the
+    same with `msg='` ... `'`) prints the raw value and passes (#513):
+    `assignments()` reads line by line, and telling a string line from a
+    statement needs quote tracking across lines;
   * for the constant rule, whether an assignment runs where it stands: a
     literal assignment in a pipeline (`true | N=1`), in the background
     (`N=1 &`), in a function that is never called or under `if false` still
@@ -426,7 +451,10 @@ heredoc reading err towards a finding, #507):
     encloses the print, instead;
   * every masked assignment in a body whose blocks the guard can't attribute
     -- also one with a `$(`, `<(` or `>(` left open on a line, a substitution
-    over lines (#513);
+    over lines (#513): any `y=$(` or `done < <(` whose `)` stands on a later
+    line voids every mask in the body, even one outside the substitution
+    (`x=$(shown "$V")` on a line of its own, then `y=$(`, `date`, `)`, then
+    `echo "x $x"`) -- keep a substitution on one line;
   * a mask after a subshell's `(` on the same line (`( x=$(shown "$V");
     echo "x $x" )`): an assignment after a `(` on the same line is read as
     unknown -- open the subshell on a line of its own instead -- and a raw
