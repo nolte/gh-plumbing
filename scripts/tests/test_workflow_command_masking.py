@@ -2800,3 +2800,94 @@ def test_a_heredoc_teed_into_the_summary_is_read_as_the_log_as_well(tmp_path):
     run = SHOWN_PY.format(' | tee -a "$GITHUB_STEP_SUMMARY"', 'print(f"x {p}")')
     # Read by the summary rule and by the log rule both.
     assert sorted(check(tmp_path, run, env=P_ENV)) == ["p", "p"]
+
+
+# --- #513 (review round 2): interpreter suffixes, first interpreter, ------
+# --- string-aware decorator walk, tee process substitutions, every print ---
+
+
+@pytest.mark.parametrize("command", [
+    "python3.13t -", "python3.14t -", "python3.13d -", "python3.13td -", "python3.12m -", "python3.7m -",
+    "python3.13t.exe -", "pypy3.10t -", "/usr/bin/python3.13t -", "${PY:-python3.13t} -",
+])
+def test_issue_513_an_interpreter_with_a_build_suffix_reads_the_heredoc(tmp_path, command):
+    # A free-threaded (`t`), debug (`d`) or pymalloc (`m`) CPython build is
+    # still Python: its heredoc is read.
+    run = f"{command} <<'PY'\n{PY_513_BODY}print(f\"::error::{{p}}\")\nPY"
+    assert check(tmp_path, run) == ["p"]
+
+
+@pytest.mark.parametrize("script", ["./run-python-tests.sh", "./pypy-setup.bash", "node-env.zsh"])
+def test_issue_513_a_shell_script_named_after_an_interpreter_is_no_interpreter(tmp_path, script):
+    assert check(tmp_path, f"{HELPER}\n{script} <<EOT\n$VALUE\nEOT") == ["VALUE"]
+
+
+def test_issue_513_the_first_interpreter_word_decides_the_heredoc_language(tmp_path):
+    run = "node - python3 <<'JS'\nconsole.log(\"::error::\" + process.env.VALUE);\nJS"
+    assert check(tmp_path, run) == ['"::error::" + process.env.VALUE']
+    shutil.rmtree(tmp_path / ".github")
+    assert check(tmp_path, f"python3 - node <<'PY'\n{PY_513_BODY}print(f\"::error::{{p}}\")\nPY") == ["p"]
+
+
+@pytest.mark.parametrize("command", ["env X=node python3 -", "PY=python3; $PY -"])
+def test_issue_513_an_assigned_interpreter_name_decides_only_without_another(tmp_path, command):
+    assert check(tmp_path, f"{command} <<'PY'\n{PY_513_BODY}print(f\"::error::{{p}}\")\nPY") == ["p"]
+
+
+@pytest.mark.parametrize("decorator", ['@(lambda f:\n    "(" and str)', "@(lambda f:\n    str)  # ("])
+def test_issue_513_a_bracket_in_a_string_or_comment_does_not_end_the_decorator_walk(tmp_path, decorator):
+    run = (f"{HELPER}\npython3 - <<'PY'\nimport os, re, sys\n{decorator}\n{ISSUE_513_PY_HELPER}"
+           "p = os.environ['VALUE']\nprint(f\"x {shown(p)}\")\nPY")
+    assert check_513(tmp_path, run) == ["shown"]
+
+
+def test_issue_513_a_bracket_in_a_string_above_the_python_shown_keeps_it_canonical(tmp_path):
+    run = (f"{HELPER}\npython3 - <<'PY'\nimport os, re, sys\nx = (\n    \")\")\n{ISSUE_513_PY_HELPER}"
+           "p = os.environ['VALUE']\nprint(f\"x {shown(p)}\")\nPY")
+    assert check_513(tmp_path, run) == []
+
+
+@pytest.mark.parametrize("line", [
+    'echo x | tee >(printf "%s\\n" "$VALUE")',
+    'echo x | tee >(sed "s/x/$VALUE/")',
+    'echo x | tee f | tee >(cat; echo "$VALUE")',
+])
+def test_issue_513_a_process_substitution_among_tee_s_words_prints(tmp_path, line):
+    assert check(tmp_path, f"{HELPER}\n{line}") == ["VALUE"]
+
+
+def test_issue_513_tee_s_file_words_stay_unprinted(tmp_path):
+    assert check(tmp_path, f'{HELPER}\necho x | tee "$VALUE"') == []
+
+
+@pytest.mark.parametrize("line", [
+    'echo x; echo "$VALUE"',
+    'echo x | tee f; echo "$VALUE"',
+    'echo x | tee f && echo "$VALUE"',
+    'echo x > f; echo "$VALUE"',
+])
+def test_issue_513_every_print_of_a_line_is_read(tmp_path, line):
+    # Not only the first: the second print reaches the log, and its value
+    # begins the printed line.
+    assert check(tmp_path, f"{HELPER}\n{line}") == ["VALUE", guard.LEADING]
+
+
+@pytest.mark.parametrize("line", [
+    'echo x > f; echo "y $(shown "$VALUE")"',
+    '{ echo a; echo "x $VALUE"; } > f',
+    '( echo "x $VALUE" ) > f',
+    'if true; then echo "x $VALUE"; fi > f',
+    'case "$a" in x) echo "y $VALUE" ;; esac > f',
+    '{ { echo "x $VALUE"; } | tee x; } > f',
+])
+def test_issue_513_a_later_print_masked_or_redirected_with_its_group_is_clean(tmp_path, line):
+    assert check(tmp_path, f"{HELPER}\n{line}") == []
+
+
+@pytest.mark.parametrize("line", [
+    '{ echo a; } > f; echo "x $VALUE"',
+    'echo "x $VALUE"; foo | sed s/a/b/',
+    '( echo "x $VALUE" ) | tee f',
+])
+def test_issue_513_a_print_outside_a_redirected_group_or_pipeline_is_a_log_print(tmp_path, line):
+    assert check(tmp_path, f"{HELPER}\n{line}") == ["VALUE"]
