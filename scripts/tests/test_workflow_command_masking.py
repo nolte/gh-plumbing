@@ -401,6 +401,43 @@ def test_a_mask_after_a_line_that_ends_its_list_still_covers(tmp_path):
     assert check(tmp_path, run) == []
 
 
+# --- #513: forms the block and assignment reading let through ---------------
+
+
+def test_issue_513_a_mask_in_a_substitution_over_lines_in_a_case_arm_is_a_finding(tmp_path):
+    # The substitution's lone `)` read as a case pattern, so the mask inside
+    # `$( ... )` counted for the arm; bash prints the raw value. A pattern is
+    # never empty: the `)` now leaves the body unattributed, as at top level.
+    run = (f'{HELPER}\nx="$VALUE"\ncase a in\n  a)\n    y=$(\n      x=$(shown "$x")\n    )\n'
+           '    echo "x $x"\n    ;;\nesac')
+    assert check(tmp_path, run) == ["x"]
+    shutil.rmtree(tmp_path / ".github")
+    # A pattern on a line of its own still opens the arm the mask covers.
+    run = f'{HELPER}\nx="$VALUE"\ncase a in\n  a)\n    x=$(shown "$x")\n    echo "x $x"\n    ;;\nesac'
+    assert check(tmp_path, run) == []
+
+
+def test_issue_513_a_print_right_after_a_case_pattern_is_a_log_print(tmp_path):
+    assert check(tmp_path, f'{HELPER}\nx="$VALUE"\ncase "$1" in b) echo "x $x" ;; esac') == ["x"]
+
+
+def test_issue_513_a_mask_after_a_line_ending_in_a_stderr_pipe_is_conditional(tmp_path):
+    # `|&` is a pipe: the mask on the next line runs in the pipeline's subshell.
+    run = f'{HELPER}\nx="$VALUE"\ntrue |&\nx=$(shown "$x")\necho "v: $x"'
+    assert check(tmp_path, run) == ["x"]
+
+
+@pytest.mark.parametrize("raw", ['declare x[0]="$VALUE"', 'typeset x[0]="$VALUE"'])
+def test_issue_513_an_indexed_declare_assignment_voids_the_mask(tmp_path, raw):
+    assert check(tmp_path, f'{HELPER}\nx=$(shown "$VALUE")\n{raw}\necho "v: $x"') == ["x"]
+
+
+def test_issue_513_an_assignment_with_a_nested_subscript_voids_the_mask(tmp_path):
+    # `\[[^\]\s]*\]` stopped at the inner `]`, so `x[${a[0]}]=` was no assignment.
+    run = f'{HELPER}\nx=$(shown "$VALUE")\nx[${{a[0]}}]="$VALUE"\necho "v: $x"'
+    assert check(tmp_path, run) == ["x"]
+
+
 @pytest.mark.parametrize("raw", [
     'case a in\n  a) x="$VALUE" ;;\nesac',
     'case a in a) x="$VALUE";; esac',

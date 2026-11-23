@@ -85,11 +85,13 @@ value is a line end, and the mask turns every one into `?`:
     the print is passed over, not counted. The assignment must be a
     statement of its own, run unconditionally where it stands: not after
     `&&` or `||` -- also not at the start of a line after one that ends in
-    `&&`, `||` or `|` --, not in a pipeline or in the background, not a
+    `&&`, `||`, `|` or `|&` --, not in a pipeline or in the background, not a
     prefix of a command (`x=$(shown "$x") cmd` sets x for cmd only), not
     after a `(` on the same line (see the constant rule), not to an element
     (`x[1]=$(shown "$x")` sets one element, `$x` is `x[0]`: it is an
-    unmasked assignment), and the last assignment to the name on its line. Since a function body runs where
+    unmasked assignment -- also through `declare`/`typeset x[0]=...`, and
+    with a nested subscript, `x[${a[0]}]=...`), and the last assignment
+    to the name on its line. Since a function body runs where
     the function is called, not where it stands, a print inside one the
     mask is outside of is not covered, and an unmasked assignment to the
     name inside a function body the print is outside of voids every mask of
@@ -97,7 +99,10 @@ value is a line end, and the mask turns every one into `?`:
     that an unmasked assignment follows inside a loop enclosing the print
     but not the mask (the next pass prints it). Blocks are read statement by
     statement from their keywords (`if`/`then`/`elif`/`else`/`fi`, `for`/`while`/`until`/`select`
-    ... `done`, `case`/`;;`/`esac`, `{`/`}`, `(`/`)`). A function body is
+    ... `done`, `case`/`;;`/`esac`, `{`/`}`, `(`/`)`); in a `case` a `)`
+    ends a pattern only where something stands before it on its segment --
+    a pattern is never empty, so a `)` alone closes what the guard didn't
+    see open, as at top level (see below). A function body is
     the compound command after `f()`, `f ()` or `function f` [`()`] --
     before an empty `()` any single word is a function's name (`x@y()`,
     `a/b()`, `f+()`), since bash takes it as one --
@@ -124,7 +129,8 @@ value is a line end, and the mask turns every one into `?`:
     `case a in (x=lit) ...` -- is never read as a literal, while one after
     the pattern's closing `)`, as in `(a) mode=fast ;;`, is a statement of
     the arm and is), nor assignment words before a command (`a=1 x=lit cmd`
-    sets x for cmd only); `x+=...` and `x[0]=...` count as assignments, and
+    sets x for cmd only); `x+=...`, `x[0]=...` and `x[${a[0]}]=...` count as
+    assignments (after `declare` or `typeset` too), and
     so does a second assignment word (`a=1 x="$v"`), one after `typeset`,
     `time`, `elif`, `while`, `until` or a case pattern's `)` (`a) x="$v"
     ;;`); `(( x==1 ))` is arithmetic, not one;
@@ -512,19 +518,25 @@ EXIT_STATEMENT = re.compile(r"^exit(?:\s+[0-9]+)?\s*$")
 STATEMENT_START = (r"(?:^|[;&|]\s*|\b(?:then|do|else|elif|if|while|until|time)\s+|!\s+|(?<!\$)\{\s+"
                    r"|(?<![$<>(])\((?!\()\s*|\)\s*)")
 RHS = r"""("(?:[^"\\]|\\.)*"|'[^']*'|\$\((?:[^()]|\([^()]*\))*\)|[^\s;]*)"""
-# `x=`, `x+=`, `x[0]=`.
-TARGET = r"([A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]\s]*\])?(\+?)="
+# An element's subscript: up to the first `]` that `=` or `+=` follows, so a
+# nested one (`x[${a[0]}]=`) is read whole, not cut at its inner `]`.
+SUBSCRIPT = r"\[\S*?\]"
+# `x=`, `x+=`, `x[0]=`, `x[${a[0]}]=`.
+TARGET = r"([A-Za-z_][A-Za-z0-9_]*)(?:" + SUBSCRIPT + r")?(\+?)="
 ASSIGNMENT = re.compile(
     STATEMENT_START + r"(?:(?:local|readonly|export|declare|typeset)(?:\s+-\w+)*\s+)?" + TARGET + RHS)
 # A further assignment word after one (`a=1 x="$v"`).
 CHAINED = re.compile(r"\s+" + TARGET + RHS)
 DECLARE_LIST = re.compile(r"""^\s*(?:local|readonly|declare|export|typeset)\b""")
-DECLARED = re.compile(r"""\s([A-Za-z_][A-Za-z0-9_]*)(\+?)=("(?:[^"\\]|\\.)*"|'[^']*'|[^\s;]*)""")
+# `declare x=...`, `typeset x+=...`, `declare x[0]=...` (group 2: the subscript).
+DECLARED = re.compile(r"""\s([A-Za-z_][A-Za-z0-9_]*)(""" + SUBSCRIPT + r""")?(\+?)=("(?:[^"\\]|\\.)*"|'[^']*'|[^\s;]*)""")
 # Commands whose words name variables they set: every name-shaped word after
 # them is taken as a target (an option's argument too -- `read -p prompt`).
 READERS = ("read", "mapfile", "readarray", "getopts", "let")
 LOOP_OR_READ = re.compile(r"""\b(?:(?:for|select)\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\b|read\s+(?:-[A-Za-z]+\s+(?:''\s+)?)*([A-Za-z_][A-Za-z0-9_]*)|mapfile\s+(?:-\w+\s+)*([A-Za-z_][A-Za-z0-9_]*))""")
-SHELL_PRINT = re.compile(r"(?:^\s*|[;&|]\s*|\b(?:then|do|else|if|!)\s+|\{\s+)(echo|printf)\b(?!\s+-v\b)")
+# An `echo`/`printf` that starts a statement -- after a case pattern's `)` too
+# (`b) echo "x $x" ;;`).
+SHELL_PRINT = re.compile(r"(?:^\s*|[;&|)]\s*|\b(?:then|do|else|if|!)\s+|\{\s+)(echo|printf)\b(?!\s+-v\b)")
 STATEMENT_END = re.compile(r";|&&|\|\||\bthen\b|\bdo\b")
 # How a Python or Node print is read, on every sink (step summary, env file,
 # log -- #511): a space before the call's `(` too, and every `console` method
@@ -1056,8 +1068,9 @@ def assignments(unit: Logical) -> list[tuple[str, str | None]]:
 
     `x+=...` is reported with a leading `+`, so it is never a mask or a
     plain assignment and an appended raw value keeps the name unclean. So is
-    an indexed one (`x[1]=...`): it sets one element, and `$x` is `x[0]`, so
-    `x[1]=$(shown "$x")` masks nothing; it still counts for the constant rule.
+    an indexed one (`x[1]=...`, `declare x[1]=...`, `x[${a[0]}]=...`): it
+    sets one element, and `$x` is `x[0]`, so `x[1]=$(shown "$x")` masks
+    nothing; it still counts for the constant rule.
     """
     if unit.lang != "sh" or unit.text.lstrip().startswith("#"):
         return []
@@ -1065,7 +1078,7 @@ def assignments(unit: Logical) -> list[tuple[str, str | None]]:
     text = unit.text.strip()
     if DECLARE_LIST.match(text):
         for m in DECLARED.finditer(" " + text):
-            found.append((m.group(1), ("+" if m.group(2) else "") + m.group(3)))
+            found.append((m.group(1), ("+" if m.group(2) or m.group(3) else "") + m.group(4)))
     else:
         bare = unquoted(text, "x")
         for m in ASSIGNMENT.finditer(text):
@@ -1395,7 +1408,7 @@ def blocks_of(units: list[Logical]) -> Blocks:
         segments = statements_of(code_of(unit.text))
         paths: list[tuple[int, ...]] = []
         parens = -1  # the segment whose `(` is a definition's `()`
-        for i, (_, bare, separator) in enumerate(segments):
+        for i, (text, bare, separator) in enumerate(segments):
             words = bare.split()
             path: tuple[int, ...] | None = None
             if i == parens + 1 and parens >= 0:
@@ -1465,8 +1478,11 @@ def blocks_of(units: list[Logical]) -> Blocks:
                     header, body = False, True
                 push("subshell")
             elif separator == ")":
-                # Outside a subshell, `)` ends a case pattern.
-                if not (stack and kinds[stack[-1]] in ("arm", "case")):
+                # Outside a subshell, `)` ends a case pattern -- unless nothing
+                # stands before it: a pattern is never empty, so a `)` alone
+                # closes something the guard didn't see open (a `$(` over
+                # lines) and leaves the body unattributed, as at top level.
+                if not (stack and kinds[stack[-1]] in ("arm", "case") and text.strip()):
                     pop("subshell")
             elif separator == ";" and i + 1 < len(segments) and not segments[i + 1][1].strip() \
                     and segments[i + 1][2] in (";", "&"):
@@ -2364,9 +2380,10 @@ class Checker:
         The assignment must be a statement of its own -- not a `cond && x=...`,
         `cond || x=...`, a pipeline element, a background job or a prefix of a
         command (`x=$(shown "$x") cmd` sets x for cmd only) -- and the last
-        assignment to the name on its line. A line that ends in `&&`, `||` or
-        `|` continues its list on the next line, so a mask that starts a line
-        after one is conditional too; one ending in `&` doesn't.
+        assignment to the name on its line. A line that ends in `&&`, `||`,
+        `|` or `|&` continues its list on the next line, so a mask that starts
+        a line after one is conditional too (after a pipe it runs in a
+        subshell); one ending in `&` doesn't.
         """
         segments = self.blocks.segments.get(j)
         if segments is None:
@@ -2378,6 +2395,9 @@ class Checker:
                 continue  # not a shell statement line (heredoc text, comment, blank)
             if len(previous) > 1 and not previous[-1][1].strip() and previous[-2][2] in ("&&", "||", "|"):
                 carried = previous[-2][2]  # `cmd &` ends its list: the next line runs anyway
+            elif (len(previous) > 2 and not previous[-1][1].strip() and previous[-2][2] == "&"
+                  and not previous[-2][0].strip() and previous[-3][2] == "|"):
+                carried = "|"  # `cmd |&`, which `statements_of` splits into `|` and `&`: a pipe
             break
         found: tuple[int, ...] | None = None
         for i, (text, _, separator) in enumerate(segments):
