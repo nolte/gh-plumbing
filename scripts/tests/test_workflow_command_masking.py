@@ -586,10 +586,15 @@ def test_issue_513_a_print_redirected_to_the_summary_with_greater_ampersand_is_a
     assert "step-summary write" in findings[0]["message"]
 
 
-def test_issue_513_a_script_whose_name_holds_python_is_no_interpreter(tmp_path):
-    # Its unquoted heredoc is shell text, read as such -- not a Python
-    # heredoc with a `$` in it (`<unquoted heredoc>`).
-    assert check(tmp_path, f"{HELPER}\n./run-python-tests.sh <<EOT\n$VALUE\nEOT") == ["VALUE"]
+@pytest.mark.parametrize("script", ["./run-python-tests.sh", "./pypy-setup.bash", "node-env.zsh"])
+def test_issue_513_a_script_whose_name_holds_an_interpreter_reads_as_that_interpreter(tmp_path, script):
+    # #513 c8, kept as develop reads it (refused although harmless): the text
+    # before `<<` names an interpreter, so the unquoted heredoc is that
+    # interpreter's code with a `$` in it, the quoted one its code.
+    assert check(tmp_path, f"{HELPER}\n{script} <<EOT\n$VALUE\nEOT") == [guard.UNQUOTED_NAME]
+    shutil.rmtree(tmp_path / ".github")
+    body = "console.log(process.env.VALUE)" if "node" in script else "import os\nprint(os.environ['VALUE'])"
+    assert check(tmp_path, f"{script} <<'EOT'\n{body}\nEOT")[-1] == guard.LEADING
 
 
 @pytest.mark.parametrize("command", [
@@ -813,7 +818,7 @@ def test_issue_513_an_env_file_heredoc_of_an_interpreter_inside_a_longer_word_is
     assert check(tmp_path, run) == expected
 
 
-@pytest.mark.parametrize("command", ["node.exe -", "nodejs -", "bunx node -", "exec node -"])
+@pytest.mark.parametrize("command", ["node.exe -", "bunx node -", "exec node -"])
 def test_issue_513_a_node_interpreter_variant_reads_the_heredoc(tmp_path, command):
     run = f"{command} <<'JS'\nconst p = process.env.VALUE;\nconsole.log(`::error::${{p}}`);\nJS"
     assert check(tmp_path, run) == ["p"]
@@ -2817,20 +2822,15 @@ def test_issue_513_an_interpreter_with_a_build_suffix_reads_the_heredoc(tmp_path
     assert check(tmp_path, run) == ["p"]
 
 
-@pytest.mark.parametrize("script", ["./run-python-tests.sh", "./pypy-setup.bash", "node-env.zsh"])
-def test_issue_513_a_shell_script_named_after_an_interpreter_is_no_interpreter(tmp_path, script):
-    assert check(tmp_path, f"{HELPER}\n{script} <<EOT\n$VALUE\nEOT") == ["VALUE"]
-
-
-def test_issue_513_the_first_interpreter_word_decides_the_heredoc_language(tmp_path):
-    run = "node - python3 <<'JS'\nconsole.log(\"::error::\" + process.env.VALUE);\nJS"
-    assert check(tmp_path, run) == ['"::error::" + process.env.VALUE']
-    shutil.rmtree(tmp_path / ".github")
-    assert check(tmp_path, f"python3 - node <<'PY'\n{PY_513_BODY}print(f\"::error::{{p}}\")\nPY") == ["p"]
+@pytest.mark.parametrize("command", ["node - python3", "python3 - node"])
+def test_issue_513_a_python_name_anywhere_before_the_heredoc_reads_it_as_python(tmp_path, command):
+    # As on develop: Python is searched for first over the whole text before
+    # the `<<`, so `node - python3` is read as Python (refused although harmless).
+    assert check(tmp_path, f"{command} <<'PY'\n{PY_513_BODY}print(f\"::error::{{p}}\")\nPY") == ["p"]
 
 
 @pytest.mark.parametrize("command", ["env X=node python3 -", "PY=python3; $PY -"])
-def test_issue_513_an_assigned_interpreter_name_decides_only_without_another(tmp_path, command):
+def test_issue_513_an_interpreter_name_in_an_assignment_reads_the_heredoc(tmp_path, command):
     assert check(tmp_path, f"{command} <<'PY'\n{PY_513_BODY}print(f\"::error::{{p}}\")\nPY") == ["p"]
 
 
@@ -2903,20 +2903,22 @@ ISSUE_513_PY_ENV_BODY = "import os\nprint(os.environ['VALUE'])\n"
     "cat nodes.txt | python3 -", "./bin/bunyan x | python3 -", "denormalize x && python3 -",
     "cd deno-app; python3 -", "nodeinfo | python3 -", "y=$(node -v; python3 -",
 ])
-def test_issue_513_a_node_name_in_an_earlier_command_leaves_the_heredoc_python(tmp_path, command):
-    # Only the heredoc's own simple command names its interpreter.
+def test_issue_513_a_node_name_beside_a_python_one_leaves_the_heredoc_python(tmp_path, command):
+    # Python is searched for first over the whole text before the `<<`.
     run = f"{command} <<'PY'\n{ISSUE_513_PY_ENV_BODY}PY"
     assert check(tmp_path, run) == ["os.environ", guard.LEADING]
 
 
 @pytest.mark.parametrize("command", ["python_version=3 node -", "pythonpath=x node -", "cat pythonic.json | node -"])
-def test_issue_513_a_python_name_outside_the_heredoc_s_command_leaves_it_node(tmp_path, command):
+def test_issue_513_python_inside_a_longer_word_leaves_the_heredoc_node(tmp_path, command):
+    # PY_INTERPRETER needs a word end after the name: `python_version`,
+    # `pythonpath` and `pythonic` name no interpreter.
     run = f"{command} <<'JS'\nconsole.log(process.env.VALUE)\nJS"
     assert check(tmp_path, run) == ["process.env.VALUE", guard.LEADING]
 
 
 @pytest.mark.parametrize("command", ['f() { python3 "$@"; }; f -', 'PY=python3; "$PY" -'])
-def test_issue_513_a_command_run_from_a_parameter_or_function_reads_the_line(tmp_path, command):
+def test_issue_513_an_interpreter_named_anywhere_on_the_line_reads_the_heredoc(tmp_path, command):
     run = f"{command} <<'PY'\n{ISSUE_513_PY_ENV_BODY}PY"
     assert check(tmp_path, run) == ["os.environ", guard.LEADING]
 
@@ -2945,3 +2947,65 @@ def test_issue_513_a_later_print_teed_into_an_env_file_keeps_the_line_start_rule
 
 def test_issue_513_a_later_print_teed_into_an_env_file_with_a_literal_first_is_clean(tmp_path):
     assert check(tmp_path, f'{HELPER}\necho a; echo "x=$(shown "$VALUE")" | tee -a "$GITHUB_ENV"') == []
+
+
+# --- #513 (review round 4): interpreter detection as on develop; every ------
+# --- print of a line piped into tee or cat read by the line-start rule -------
+
+# Forms that a narrower interpreter reading of earlier rounds let through:
+# each is refused as on develop, its heredoc read as Python.
+ISSUE_513_INTERPRETER_BLOCKERS = [
+    "node --version; python3 -", "ls node_modules && python3 -", "jq . nodes.json | python3 -",
+    "node_version=20 python3 -", "bundle exec rake && python3 -", "docker exec -i node python3 -",
+    "kubectl exec -i node-0 -- python3 -", "ssh node-a 'python3 -'", "sudo -u bun python3 -",
+    "env -C node python3 -", "case $x in (node) python3 -", "/opt/node/bin/python3 -", "./node/python3 -",
+    "node-env/bin/python -", 'PY=python3; env "$PY" -', "PY=python3; sudo $PY -",
+    'PY=python3; timeout 5 "$PY" -', "python3 - ${X//;/,}", "python3 - ${X:-a|b}", "python3 - ${X//&/x}",
+    "python3 - <&0", "python3 - 3<&0", "python3 - $[1|2]", "python3 - $'a\\';b'", "python3.13t -",
+    "python3.12m -", "python3.13t.exe -", "pypy3.10 -", "${PY:-python3} -", "python.exe -", "python3-dbg -",
+    "node - python3", "python3 - node", "./run-python-tests.sh",
+]
+
+
+@pytest.mark.parametrize("command", ISSUE_513_INTERPRETER_BLOCKERS)
+def test_issue_513_an_interpreter_blocker_of_the_review_rounds_is_refused(tmp_path, command):
+    assert check(tmp_path, f"{command} <<'PY'\n{ISSUE_513_PY_ENV_BODY}PY") == ["os.environ", guard.LEADING]
+
+
+@pytest.mark.parametrize("command", ['NODE=node; env "$NODE" -', "pythonpath=x node -", "cat pythonic.json | node -"])
+def test_issue_513_a_node_blocker_of_the_review_rounds_is_refused(tmp_path, command):
+    run = f"{command} <<'JS'\nconsole.log(process.env.VALUE)\nJS"
+    assert check(tmp_path, run) == ["process.env.VALUE", guard.LEADING]
+
+
+@pytest.mark.parametrize("sink", [' >> "$GITHUB_OUTPUT"', ' >> "$GITHUB_STEP_SUMMARY"'])
+@pytest.mark.parametrize("command", [
+    "docker exec -i node python3 -", "PY=python3; sudo $PY -", "python3 - ${X:-a|b}", "/opt/node/bin/python3 -",
+])
+def test_issue_513_an_interpreter_blocker_into_an_env_file_or_the_summary_is_refused(tmp_path, command, sink):
+    assert "os.environ" in check(tmp_path, f"{command} <<'PY'{sink}\n{ISSUE_513_PY_ENV_BODY}PY")
+
+
+@pytest.mark.parametrize("line", [
+    'echo a; { echo "$M=1"; } | tee -a "$GITHUB_ENV"',
+    'echo a; ( echo "$M=1" ) | tee -a "$GITHUB_ENV"',
+    'echo a; if true; then echo "$M=1"; fi | tee -a "$GITHUB_ENV"',
+    'command echo "$M=1" | tee -a "$GITHUB_ENV"',
+    'echo a; time echo "$M=1" | tee -a "$GITHUB_ENV"',
+    'echo a; { echo "$M=1"; } | tee -a "$GITHUB_OUTPUT"',
+    'echo a; { printf "%s=1\\n" "$M"; } | tee -a "$GITHUB_ENV"',
+    'echo a; { /bin/echo "$M=1"; } | cat',
+])
+def test_issue_513_every_print_of_a_line_piped_into_tee_keeps_the_line_start_rule(tmp_path, line):
+    # tee prints the entry to the log as well; which print feeds the pipe
+    # isn't told apart, so every print of the line is read from its start.
+    assert check(tmp_path, f'{HELPER}\nM=$(shown "$VALUE")\n{line}') == [guard.LEADING]
+
+
+@pytest.mark.parametrize("line", [
+    'echo a; { echo "x=$M"; } | tee -a "$GITHUB_ENV"',
+    'command echo "x=$M" | tee -a "$GITHUB_ENV"',
+    'echo a; if true; then echo "x=$M"; fi | tee -a "$GITHUB_ENV"',
+])
+def test_issue_513_every_print_of_a_teed_line_with_a_literal_first_is_clean(tmp_path, line):
+    assert check(tmp_path, f'{HELPER}\nM=$(shown "$VALUE")\n{line}') == []

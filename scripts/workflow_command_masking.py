@@ -184,6 +184,12 @@ Two rules hold per line, whatever its names:
     literal with a non-space character must come first (`echo "x $v"`,
     `printf 'gh: %s'`, `print(f"  - {v}")`); the few lines that start with a
     value are on ALLOWED under the name `<leading value>`, with the reason.
+    In shell it holds for every print of the line whose output reaches the
+    log, and on a line where anything pipes into `tee` or `cat` -- which
+    print it to the log, an env-file or summary write too -- for every
+    `echo`/`printf` word of the line, after a prefix (`command echo`, `time
+    echo`) or inside a group, subshell or compound (`echo a; { echo
+    "$x=1"; } | tee -a "$GITHUB_ENV"`) as well, failing closed (#513).
     In a Python or Node heredoc this holds for every log print call on the
     line (#511), each taken to start a line, and after every line end the
     printed text holds: a line-end escape in a literal (`f"ok\\n{v}"`;
@@ -344,23 +350,9 @@ Not covered (each would need a parser this script doesn't have):
     going to a file though bash sends it to the log: `>&2 2>> f` sends stdout
     to the log's stderr and only then stderr to f, but the `>>` reads as a
     stdout redirect, so its stdout prints are not read (#511 found it);
-  * a heredoc fed to an interpreter the guard doesn't name -- only the
-    simple command that carries the `<<` (the text before it after the last
-    unquoted `|`, `|&`, `;`, `&&`, `||` or `&`, or after the `$(`, `(` or
-    backtick it stands in), its leading assignments skipped, is searched,
-    for `python` or `pypy` with a version, `node`, `nodejs`, `deno` or `bun`
-    as a word, a path, a suffix or an expansion around it allowed
-    (`/usr/bin/python3`, `${PY:-python3}`, `python.exe`, `python3-dbg`,
-    `python3.13t`, `python3.12m`, `sudo python3`), but not in a word that
-    ends in `.sh`, `.bash` or `.zsh` (`./run-python-tests.sh`, #513); the
-    first name in it decides (`node - python3` is read as Node), a value
-    assigned (`env X=node python3`) only where no other word names one; a
-    name in an earlier command of the line decides nothing (`node
-    --version; python3 -` is read as Python, #513), unless the command is
-    run from a parameter or by a function or alias the line defines
-    (`PY=python3; $PY -`) -- (`ruby`, `perl`, `php`, `uv run -` without the
-    word `python`, a name inside a longer word: `mypython`, `pythonw`, or one
-    set on an earlier line: `PY=python3`, then `$PY -`): with a quoted delimiter
+  * a heredoc fed to an interpreter the guard doesn't name -- only
+    `python*`, `pypy*`, `node`, `deno` and `bun` are read (`ruby`, `perl`,
+    `php`, `uv run -` without the word `python`): with a quoted delimiter
     its lines are data, with an unquoted one shell text; nor a delimiter
     that starts with a digit or holds a character other than a letter, a
     digit, `_`, `-` or `.`;
@@ -521,6 +513,11 @@ heredoc reading err towards a finding, #507):
   * a print call's text inside a string literal (`msg = "use print(p)"`):
     print calls are found by name, not by a parser, so it reads as a print
     of `p` -- on a log line, and in an env-file or summary heredoc;
+  * on a shell line where anything pipes into `tee` or `cat`, a print that
+    begins with a value but doesn't feed that pipe (`echo "$(shown "$V")" >
+    f; echo a | tee -a "$GITHUB_ENV"`): every `echo`/`printf` word of such
+    a line is read by the line-start rule (#513) -- put it on a line of its
+    own;
   * a log print that follows one on its line ending without a line end
     (`print("x", end=""); print(shown(p))`): every print call is taken to
     start a line, so a value first in it is a `<leading value>`;
@@ -576,7 +573,17 @@ heredoc reading err towards a finding, #507):
     of an earlier line -- a decorator of another function (`@staticmethod`,
     `def f():`, `    return 'a'`), a line of a triple-quoted string --
     voids the definition -- define `shown` above every decorator, or put a
-    plain statement without quotes or brackets right above the `def`.
+    plain statement without quotes or brackets right above the `def`;
+  * a heredoc read as the code of an interpreter it isn't fed to: the text
+    before the `<<` is searched for an interpreter's name anywhere, Python
+    first, so a heredoc fed to a command whose name holds one
+    (`./run-python-tests.sh <<EOT`, #513 c8) is read as that interpreter's
+    code, and one fed to `node - python3` as Python -- kept as the guard
+    has always read it, because every narrower reading tried in review
+    lost real interpreters (#513): with an unquoted delimiter such a
+    heredoc's `$` lines are refused, with a quoted one its prints are read
+    as Python or Node -- rename the script, or keep the interpreter's name
+    off the line.
 
 Refused although harmless (the summary rule errs towards a finding):
 
@@ -625,20 +632,9 @@ SUMMARY_TEE = re.compile(r"""(?:""" + TEE_TO + r"""|\bdd\b[^|;&\n]*?\bof=)["']?\
 # `<<EOF`, `<<-EOF`, `<<'EOF'`, `<<"EOF"`, `<<\EOF`; a delimiter may hold `-` and `.`.
 # Groups: 1 a backslash, 2 a quote, 3 the delimiter; quoted when 1 or 2 is set.
 HEREDOC = re.compile(r"""(?<!<)<<-?\s*(\\?)(['"]?)([A-Za-z_][A-Za-z0-9_.-]*)\2""")
-# The interpreters whose heredoc is read as Python or as JavaScript, searched
-# for as a word (`python3.12`, `python3.13t`, `python.exe`, `${PY:-python3}`,
-# `/usr/bin/env python3`) in the heredoc's own simple command only -- see
-# `interpreter_of`.
+# The interpreters whose heredoc is read as Python or as JavaScript.
 PY_INTERPRETER = re.compile(r"\b(?:python|pypy)[0-9.]*\b")
-JS_INTERPRETER = re.compile(r"\b(?:node(?:js)?|deno|bun)\b")
-# The leading assignment words of a simple command (`NAME=value`, `NAME+=value`).
-LEADING_ASSIGNMENTS = re.compile(
-    r"""^\s*(?:[A-Za-z_][A-Za-z0-9_]*\+?=(?:"(?:[^"\\]|\\.)*"|'[^']*'|\\.|[^\s"'\\])*\s+)*""")
-# The shell word around a name, and the two kinds `interpreter_of` reads apart:
-# a shell script (`./run-python-tests.sh`, #513) and an assignment (`X=node`).
-SHELL_WORD = r"""[^\s;&|<>()]"""
-SCRIPT_WORD = re.compile(r"""\.(?:sh|bash|zsh)["']*$""")
-ASSIGNMENT_WORD = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")
+JS_INTERPRETER = re.compile(r"\b(?:node|deno|bun)\b")
 # `$name`, `${name...}`, `$1`; `${{` is an expression, `${#` a length.
 SHELL_REF = re.compile(r"\$(?:\{(?!\{)(#?)([A-Za-z_][A-Za-z0-9_]*|[0-9])([^}]*)\}|([A-Za-z_][A-Za-z0-9_]*|[0-9]))")
 # `$(shown "$x")`, `$(shown "${x}")`, `$(shown "$1")`.
@@ -1205,92 +1201,6 @@ def pipes_to_log(text: str) -> bool:
     return False
 
 
-def own_command(command: str) -> str:
-    """The simple command a heredoc's `<<` belongs to: the text before the `<<`
-    after its last unquoted `|`, `|&`, `;`, `&&`, `||` or `&`, or after the
-    `$(`, `<(`, `(` or backtick it stands in, its leading assignment words
-    dropped (#513).
-    """
-    # The stack holds, per open substitution or subshell, the start and quote
-    # outside it and what closes it.
-    start, quote, stack, i = 0, None, [], 0
-    while i < len(command):
-        c = command[i]
-        if c == "\\" and quote != "'":
-            i += 2
-            continue
-        if quote is None and command.startswith(("&&", "||", "|&"), i):
-            start = i = i + 2
-            continue
-        if quote == "'":
-            quote = None if c == "'" else quote
-        elif c == "`" and stack and stack[-1][2] == "`":
-            start, quote, _ = stack.pop()
-        elif c == "`" or command.startswith("$(", i) or (quote is None and command.startswith(("<(", ">(", "("), i)):
-            opener = "`" if c == "`" else ")"
-            stack.append((start, quote, opener))
-            width = 2 if c in "$<>" else 1
-            start, quote, i = i + width, None, i + width
-            continue
-        elif quote == '"':
-            quote = None if c == '"' else quote
-        elif c in "'\"":
-            quote = c
-        elif c == ")":
-            # Unopened on the line: a `case` pattern's, after which a command starts.
-            start, quote = stack.pop()[:2] if stack and stack[-1][2] == ")" else (i + 1, None)
-        elif c in ";\n" or (c == "&" and command[i - 1:i] != ">" and command[i + 1:i + 2] != ">"):
-            start = i + 1
-        elif c == "|" and command[i - 1:i] != ">":
-            start = i + 1
-        i += 1
-    return LEADING_ASSIGNMENTS.sub("", command[start:], count=1)
-
-
-def interpreter_of(command: str) -> str | None:
-    """`py` or `js` if the simple command of a heredoc's `<<` names an interpreter.
-
-    `command` is the text before the `<<`. Only its own simple command is
-    searched (`own_command`): a name in an earlier command of the line
-    (`node --version; python3 -`, `jq . nodes.json | python3 -`) or in a
-    leading assignment (`node_version=20 python3 -`) decides nothing (#513).
-    In it, `python`/`pypy` (with a version) and `node`/`nodejs`/`deno`/`bun`
-    are searched for as words -- a path, a suffix or an expansion around
-    them allowed (`python3.13t`, `python.exe`, `python3-dbg`,
-    `${PY:-python3}`, `sudo python3`) -- but not in a word ending in a shell
-    script's extension (`./run-python-tests.sh`). The first name decides
-    (`node - python3` is Node); one in an assignment word only where no
-    other word names one (`env X=node python3` is Python). A command run
-    from a parameter (`$PY -`), or named by a function or alias the text
-    defines (`f() { python3 "$@"; }; f -`), whose own words name none is
-    searched over the whole text before the `<<` (`PY=python3; $PY -`),
-    failing closed.
-    """
-    own = own_command(command)
-
-    def search(text: str) -> str | None:
-        found: dict[bool, tuple[int, str]] = {}
-        for regex, lang in ((PY_INTERPRETER, "py"), (JS_INTERPRETER, "js")):
-            for m in regex.finditer(text):
-                left = re.search(SHELL_WORD + "*$", text[:m.start()]).group()
-                word = left + re.match(SHELL_WORD + "*", text[m.start():]).group()
-                if SCRIPT_WORD.search(word):
-                    continue
-                assigned = ASSIGNMENT_WORD.match(word) is not None and "=" in left
-                if assigned not in found or m.start() < found[assigned][0]:
-                    found[assigned] = (m.start(), lang)
-        best = found.get(False) or found.get(True)
-        return best[1] if best else None
-
-    lang = search(own)
-    word = (own.split() or [""])[0]
-    name = re.escape(word)
-    defined = rf"(?:^|[\s;&|(){{}}])(?:function\s+{name}\b|{name}\s*\(\s*\)|alias\s+{name}=)"
-    if lang is None and (re.match(r"""["']?\$""", word) or (word and re.search(defined, command))):
-        lang = search(command)
-    return lang
-
-
 # A stdout redirect into an env file of a file descriptor other than stdout
 # (`2>> "$GITHUB_OUTPUT"`): stdout stays where the rest of the line sends it.
 OTHER_FD_TO_ENV_FILE = re.compile(
@@ -1333,8 +1243,13 @@ def logical_lines(lines: list[str]) -> list[Logical]:
             # shell expands it -- in a Python or Node heredoc too, before the
             # interpreter reads it (see UNQUOTED_NAME).
             expands = not (match.group(1) or match.group(2))
-            # An unquoted one that no interpreter reads is like any other shell line.
-            lang = interpreter_of(command) or ("sh-heredoc" if expands else "data")
+            if PY_INTERPRETER.search(command):
+                lang = "py"
+            elif JS_INTERPRETER.search(command):
+                lang = "js"
+            else:
+                # An unquoted one reads like any other shell line.
+                lang = "sh-heredoc" if expands else "data"
             heredoc = (match.group(3), lang, dest, len(out) - 1, expands, match.group(0).startswith("<<-"), piped,
                        fd_logged)
         i += 1
@@ -3167,7 +3082,8 @@ class Checker:
             # The heredoc's own lines are read where they stand; a bare `cat`
             # prints them unchanged, anything else prints its own output.
             command = SUMMARY_FILE.sub("", text[:heredoc.start()] + text[heredoc.end():]).strip()
-            if interpreter_of(text[:heredoc.start()]) or re.fullmatch(r"cat(?:\s+-)?", command):
+            interpreter = PY_INTERPRETER.search(command) or JS_INTERPRETER.search(command)
+            if interpreter or re.fullmatch(r"cat(?:\s+-)?", command):
                 return []
             return [OUTPUT_NAME]
         bare = unquoted(text)
@@ -3439,6 +3355,11 @@ def _literal_head(quoted: str) -> str | None:
     return None
 
 
+# An `echo`/`printf` word anywhere on a line, after a prefix such as
+# `command`, `builtin` or `time` too, or run by its path (`/bin/echo`).
+ANY_SHELL_PRINT = re.compile(r"(?<![\w.$-])(echo|printf)\b(?![-.])(?!\s+-v\b)")
+
+
 def leading_value(unit: Logical) -> bool:
     """A shell log line whose printed text begins with an interpolated value.
 
@@ -3448,26 +3369,25 @@ def leading_value(unit: Logical) -> bool:
     into `tee` or `cat` is printed to the log, wherever else tee writes it
     (`echo "$x=1" | tee -a "$GITHUB_OUTPUT"`, #513). Every print of the line
     whose output reaches the log is read, each from its own start (`echo x >
-    f; echo "$x"`, `logged_prints`, #513), and so is every print whose own
-    pipeline pipes into `tee` or `cat` (`echo a; echo "$x" | tee -a
-    "$GITHUB_ENV"`, #513).
+    f; echo "$x"`, `logged_prints`, #513), and on a line where anything
+    pipes into `tee` or `cat`, every `echo`/`printf` word of the line is
+    (`echo a; { echo "$x=1"; } | tee -a "$GITHUB_ENV"`, `command echo
+    "$x=1" | tee ...`, #513).
     """
     text = unit.text
     if unit.lang != "sh" or COMMAND.search(text):
         return False
     prints = [m for m, _ in logged_prints(text)]
     bare = ARRAY_LITERAL.sub(lambda m: " " * len(m.group()), unquoted(text))
-    if pipes_to_log(text) and (first := SHELL_PRINT.search(bare)):
-        prints.append(first)  # tee prints an env-file or summary write as well
-    # And the print of every pipeline that itself pipes into `tee` or `cat`
-    # (`echo a; echo "$x" | tee -a "$GITHUB_ENV"`, #513).
-    starts = [0] + [m.end() for m in PIPELINE_SPLIT.finditer(bare)]
-    ends = [m.start() for m in PIPELINE_SPLIT.finditer(bare)] + [len(bare)]
-    found = list(SHELL_PRINT.finditer(bare))
-    for a, b in zip(starts, ends):
-        m = next((p for p in found if a <= p.start(1) < b), None)
-        if m and pipes_to_log(text[a:b]):
-            prints.append(m)
+    if pipes_to_log(text):
+        # Something on the line pipes into `tee` or `cat`, which print to the
+        # log what an env-file or summary write sends them as well. Which
+        # print feeds that pipe isn't told apart -- a group, subshell or
+        # compound before it (`echo a; { echo "$x=1"; } | tee -a
+        # "$GITHUB_ENV"`), a prefix (`command echo`, `time echo`) -- so every
+        # print word of the line is read from its own start, failing closed
+        # (#513).
+        prints.extend(ANY_SHELL_PRINT.finditer(bare))
     return any(_leads(text, m) for m in prints)
 
 
