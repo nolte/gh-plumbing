@@ -29,7 +29,13 @@ Predicate: EVERY line of a `run:` body that
     is a line of it -- or
   * prints to the log: a shell `echo`/`printf` statement whose output is not
     redirected to a file nor piped into a command other than `tee` or `cat`
-    (`| tee out.log`, `|& cat` print it to the log, #513) -- every such
+    (`| tee out.log`, `|& cat` print it to the log, #513) -- one after a
+    prefix, by its path or with its word quoted or escaped too (`time echo`,
+    `command echo`, `env X=1 echo`, `sudo -u u echo`, `xargs echo`,
+    `/bin/echo`, `"echo"`, `\\echo`, `e\\cho`), and a `cat <<<` here-string,
+    failing closed: every word of the pipeline that is `echo` or `printf`
+    once its quotes, backslashes and path are removed is read as a print
+    from there (#513) -- every such
     statement of the line, not only the first, each read by its own
     pipeline's redirects and those of a group, compound or subshell the line
     closes around it (`echo x > f; echo "$V"`, `echo x | tee f && echo
@@ -188,8 +194,9 @@ Two rules hold per line, whatever its names:
     log, and on a line where anything pipes into `tee` or `cat` -- which
     print it to the log, an env-file or summary write too -- for every
     `echo`/`printf` word of the line, after a prefix (`command echo`, `time
-    echo`) or inside a group, subshell or compound (`echo a; { echo
-    "$x=1"; } | tee -a "$GITHUB_ENV"`) as well, failing closed (#513).
+    echo`), quoted or escaped (`"echo"`, `\\echo`) or inside a group,
+    subshell or compound (`echo a; { echo "$x=1"; } | tee -a
+    "$GITHUB_ENV"`) as well, failing closed (#513).
     In a Python or Node heredoc this holds for every log print call on the
     line (#511), each taken to start a line, and after every line end the
     printed text holds: a line-end escape in a literal (`f"ok\\n{v}"`;
@@ -216,8 +223,9 @@ also through `> >(tee ...)` and whatever else the line holds; a statement of
 a `{ ...; } >> "$GITHUB_STEP_SUMMARY"` group, a function body (`f() {`,
 `function f {`) or a `for`/`while`/`until`/`if` compound redirected or piped
 into `tee` there as a whole, its opening line included, unless it sends its
-own stdout elsewhere -- openers and closers count anywhere at statement level
-(`echo "$v"; } >> ...` ends its group), and a closer redirected there whose
+own stdout elsewhere -- statements split at `;`, `&&`, `||` and a background
+`&` (`true & echo "$v" >> ...`, #513), openers and closers count anywhere at
+statement level (`echo "$v"; } >> ...` ends its group), and a closer redirected there whose
 opener the guard can't find is itself a finding (`<summary group>`); a line
 of a heredoc written there by a bare `cat`, or a Python or Node heredoc whose
 stdout goes there (their stderr prints are read as log lines, though `2>&1`
@@ -308,8 +316,9 @@ Not covered (each would need a parser this script doesn't have):
   * line ends produced after masking: `printf "$(shown "$V")\n"` or
     `printf '%b'` with the masked value in the format, and `echo -e`, turn
     backslash escapes in the value back into control characters;
-  * prints the selector doesn't see: `cat <<<"$V"`, `tee` or `cat` reading a
-    file, `set -x` tracing, an EXIT trap or a function that prints and is
+  * prints the selector doesn't see: `tee` or `cat` reading a file, a
+    here-string fed to a command other than `cat` (`tr a b <<<"$V"`; a
+    `cat <<<"$V"` is read as a print, #513), `set -x` tracing, an EXIT trap or a function that prints and is
     called elsewhere, `logger`;
   * a canonical `shown` that is defined only after its first use (the guard
     checks that the body or heredoc defines it, not where), and one rebound
@@ -344,8 +353,13 @@ Not covered (each would need a parser this script doesn't have):
     scripts/required_check_triggers.py encode theirs with PY_MD's helpers,
     held by their own tests, not by this guard; a helper redefined through
     `eval` or `source` (shell), `exec` or an import machinery call (Python)
-    or `require`/`eval` (Node); and a `case` compound redirected there (its
-    arms read as commands, so that one errs towards a finding);
+    or `require`/`eval` (Node); a `case` compound redirected there (its
+    arms read as commands, so that one errs towards a finding); and a line
+    that writes an env file as well (`echo "x $(shown "$V")" >>
+    "$GITHUB_STEP_SUMMARY"; echo a >> "$GITHUB_OUTPUT"`, or `2>>
+    "$GITHUB_OUTPUT"` inside a loop redirected there): it is read as an
+    env-file line, where `$(shown ...)` counts, so a value masked but not
+    encoded reaches the summary (#513, measured in review, not fixed);
   * on a log line, a Python or Node heredoc whose stdout the guard reads as
     going to a file though bash sends it to the log: `>&2 2>> f` sends stdout
     to the log's stderr and only then stderr to f, but the `>>` reads as a
@@ -562,6 +576,11 @@ heredoc reading err towards a finding, #507):
     the redirect target of a `tee` or `cat` it pipes into (`echo x | cat >
     "$p"`: charged to the print, #513), or among a `tee`'s words after a
     process substitution (`| tee >(cat) "$p"`);
+  * an `echo` or `printf` word that isn't the command of its pipeline
+    (`grep -c echo "$V"`, `git commit -m echo -m "$V"`), and a `cat` word
+    with a `<<<` after it on its pipeline that isn't cat's: every such word
+    is read as a print from there, so the words after it are printed text
+    (#513) -- quote the word with other text (`"echo it"`), or mask the value;
   * `shown()` or `function shown` named inside quoted text in a shell body
     (`echo "call shown() first"`): read as another definition of `shown`,
     so it voids the mask of the whole body (#513) -- reword the text;
@@ -1449,7 +1468,62 @@ def reaches_log(text: str) -> bool:
     return dest == "log" or (dest == "pipe" and pipes_to_log(text))
 
 
-def logged_prints(text: str) -> list[tuple[re.Match, int]]:
+@dataclass(frozen=True)
+class PrintWord:
+    """A print found by `print_words`, read like a SHELL_PRINT match: `group(1)`, `start(1)`, `end()`."""
+
+    word: str
+    begin: int
+    stop: int
+
+    def group(self, _: int = 0) -> str:
+        return self.word
+
+    def start(self, _: int = 0) -> int:
+        return self.begin
+
+    def end(self, _: int = 0) -> int:
+        return self.stop
+
+
+# A shell word in `unquoted(text, "x")`, where a quoted string, an escape and a
+# `$(...)` are blanked with word characters, so `"echo"` and `e\cho` stay one word.
+SHELL_WORD = re.compile(r"[^\s;&|()<>]+")
+HERE_STRING = re.compile(r"<<<")
+
+
+def print_words(text: str, a: int = 0, b: int | None = None) -> list[PrintWord]:
+    """Every word of `text[a:b]` that runs `echo`, `printf` or a `cat <<<` here-string, failing closed (#513).
+
+    Read word by word, not by command position, so a prefix doesn't hide one
+    (`time`, `!`, `command`, `builtin`, `env X=1`, `sudo -u u`, `nohup`,
+    `exec`, `eval`, `xargs`, `nice`, `timeout 5`): a word that, with its
+    quotes and backslashes removed and its path cut off, is `echo` or
+    `printf` (`/bin/echo`, `"echo"`, `'echo'`, `\\echo`, `e\\cho`) is read as
+    a print from there -- an argument word `echo` too. A `printf -v` assigns
+    and prints nothing. A `cat` word followed by `<<<` on the segment prints
+    the here-string: read as an `echo` of the text after the `<<<`.
+    """
+    b = len(text) if b is None else b
+    words = ARRAY_LITERAL.sub(lambda m: " " * len(m.group()), unquoted(text, "x"))
+    bare = ARRAY_LITERAL.sub(lambda m: " " * len(m.group()), unquoted(text))
+    out = []
+    for w in SHELL_WORD.finditer(words, a, b):
+        plain = re.sub(r"""\$(?=['"])""", "", text[w.start():w.end()])
+        plain = re.sub(r"\\(.)", r"\1", plain).replace('"', "").replace("'", "")
+        name = plain.rsplit("/", 1)[-1]
+        if name == "printf" and re.match(r"\s+-v\b", text[w.end():b]):
+            continue
+        if name in ("echo", "printf"):
+            out.append(PrintWord(name, w.start(), w.end()))
+        elif name == "cat":
+            here = HERE_STRING.search(bare, w.end(), b)
+            if here:
+                out.append(PrintWord("echo", w.start(), here.end()))
+    return out
+
+
+def logged_prints(text: str) -> list[tuple[re.Match | PrintWord, int]]:
     """(match, end) of every `echo`/`printf` statement of a shell line whose output reaches the log (#513).
 
     Every print of the line counts, not only the first (`echo x > f; echo
@@ -1457,8 +1531,10 @@ def logged_prints(text: str) -> list[tuple[re.Match, int]]:
     at `;`, `&&`, `||`, `&`, `(` and `)` -- and with the redirect of every
     group, compound or subshell on the line that encloses it (`{ echo "$V";
     } > f` is a file's). Failing closed: a print whose enclosing group the
-    line doesn't close is read by its own pipeline alone. `end` is where its
-    statement ends (SHELL_PRINT's `match.start(1)` is where it starts).
+    line doesn't close is read by its own pipeline alone. A print is a
+    SHELL_PRINT match or a `print_words` word -- after a prefix, by its
+    path, quoted or a `cat <<<` (#513) --, each of a pipeline. `end` is where
+    its statement ends (`match.start(1)` is where it starts).
     """
     bare = ARRAY_LITERAL.sub(lambda m: " " * len(m.group()), unquoted(text))
     pieces, start = [], 0
@@ -1466,8 +1542,8 @@ def logged_prints(text: str) -> list[tuple[re.Match, int]]:
         pieces.append((start, m.start(), m.group()))
         start = m.end()
     pieces.append((start, len(bare), ""))
-    prints = list(SHELL_PRINT.finditer(bare))
-    logged: dict[int, tuple[re.Match, int]] = {}
+    prints: list[re.Match | PrintWord] = list(SHELL_PRINT.finditer(bare))
+    logged: dict[int, tuple[re.Match | PrintWord, int]] = {}
     top: list[int] = []
     stack: list[tuple[bool, list[int]]] = []  # (a subshell's `(`, the logged prints inside)
 
@@ -1486,11 +1562,15 @@ def logged_prints(text: str) -> list[tuple[re.Match, int]]:
             # Only the last closer of `} }` carries the segment's redirect.
             close(stack.pop()[1], text[a:b] if c == closes - 1 else "")
         stack += [(False, []) for _ in range(opens)]
-        m = next((p for p in prints if a <= p.start(1) < b), None)
-        if m and reaches_log(text[a:b]):
-            end = STATEMENT_END.search(bare, m.end(), b)
-            logged[m.start(1)] = (m, end.start() if end else b)
-            (stack[-1][1] if stack else top).append(m.start(1))
+        if reaches_log(text[a:b]):
+            # Every print word of the pipeline, each to its statement's end:
+            # one after a prefix, by its path or quoted too (`print_words`).
+            found = {p.start(1): p for p in [*print_words(text, a, b), *prints] if a <= p.start(1) < b}
+            for at in sorted(found):
+                m = found[at]
+                end = STATEMENT_END.search(bare, m.end(), b)
+                logged[at] = (m, end.start() if end else b)
+                (stack[-1][1] if stack else top).append(at)
         if sep == "(":
             stack.append((True, []))
         elif sep == ")" and stack and stack[-1][0]:
@@ -3089,7 +3169,9 @@ class Checker:
         bare = unquoted(text)
         names: list[str] = []
         statements, start = [], 0
-        for m in [*re.finditer(r";|&&|\|\|", bare), None]:
+        # A background `&` ends a statement too (`true & echo "$v" >> ...`,
+        # #513), not the `&` of `&&`, `>&`, `&>`, `<&` or `|&`.
+        for m in [*re.finditer(r";|&&|\|\||(?<![<>&|])&(?![>&])", bare), None]:
             end = m.start() if m else len(text)
             statements.append((text[start:end], bare[start:end]))
             start = m.end() if m else len(text)
@@ -3388,10 +3470,12 @@ def leading_value(unit: Logical) -> bool:
         # print word of the line is read from its own start, failing closed
         # (#513).
         prints.extend(ANY_SHELL_PRINT.finditer(bare))
+        # Quoted or escaped too (`"echo"`, `'echo'`, `\\echo`, `e\\cho`).
+        prints.extend(print_words(text))
     return any(_leads(text, m) for m in prints)
 
 
-def _leads(text: str, m: re.Match) -> bool:
+def _leads(text: str, m: re.Match | PrintWord) -> bool:
     """The print SHELL_PRINT matched as `m` begins its printed text with a value."""
     rest = text[m.end():].lstrip()
     if m.group(1) == "echo":

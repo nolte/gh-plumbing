@@ -844,7 +844,8 @@ def test_issue_513_interpreter_words_keep_reading_the_heredoc(tmp_path, command)
 ])
 def test_issue_513_a_shell_shown_redefined_after_a_keyword_has_no_mask(tmp_path, prefix, before, after):
     run = f'{HELPER}\n{before}{prefix}shown() {{ cat <<<"$1"; }}{after}\necho "x $(shown "$VALUE")"'
-    assert check(tmp_path, run) == ["VALUE"]
+    # The redefinition's `cat <<<"$1"` is a log print of its own, `$1` first (#513).
+    assert check(tmp_path, run) == ["1", "<leading value>", "VALUE"]
 
 
 @pytest.mark.parametrize("decorator", ["@(lambda f:\n    str)", "@lambda f: \\\n    str"])
@@ -3009,3 +3010,77 @@ def test_issue_513_every_print_of_a_line_piped_into_tee_keeps_the_line_start_rul
 ])
 def test_issue_513_every_print_of_a_teed_line_with_a_literal_first_is_clean(tmp_path, line):
     assert check(tmp_path, f'{HELPER}\nM=$(shown "$VALUE")\n{line}') == []
+
+
+# --- review round 5: prefixed prints and the background `&` (#513) ----------
+
+PREFIXED_PRINTS = [
+    "time echo", "/bin/echo", "command echo", "builtin echo", "env echo", "env X=1 echo", "sudo echo",
+    "sudo -u root echo", "nohup echo", "exec echo", "\\echo", '"echo"', "'echo'", "e\\cho", "! echo", "eval echo",
+    "xargs echo", "nice -n 5 echo", "timeout 5 echo", "/usr/bin/printf '%s\\n'", 'builtin printf "%s\\n"',
+    "command printf 'x %s\\n'", "cat <<<",
+]
+
+
+@pytest.mark.parametrize("sink", ["", " >&2"])
+@pytest.mark.parametrize("value", ['"$VALUE"', '"x $VALUE"'])
+@pytest.mark.parametrize("before", ["", "echo a & ", 'echo "x $(shown "$VALUE")" & ', "echo a; "])
+@pytest.mark.parametrize("command", PREFIXED_PRINTS)
+def test_issue_513_a_prefixed_pathed_or_quoted_print_is_read_as_a_log_print(tmp_path, command, before, value, sink):
+    # A print after a prefix, by its path or with its word quoted runs all
+    # the same, also after a background `&` (#513 review round 5).
+    assert "VALUE" in check(tmp_path, f"{HELPER}\n{before}{command} {value}{sink}")
+
+
+@pytest.mark.parametrize("before", ["", "echo a & "])
+@pytest.mark.parametrize("command", [c for c in PREFIXED_PRINTS if "'%s" not in c and '"%s' not in c])
+def test_issue_513_a_prefixed_print_of_a_masked_value_is_clean(tmp_path, command, before):
+    value = '"x $(shown "$VALUE")"'
+    assert check(tmp_path, f"{HELPER}\n{before}{command} {value}") == []
+
+
+@pytest.mark.parametrize("command", ["time echo", "/bin/echo", '"echo"', "\\echo", "cat <<<"])
+def test_issue_513_a_prefixed_print_that_begins_with_a_masked_value_leads(tmp_path, command):
+    assert check(tmp_path, f'{HELPER}\n{command} "$(shown "$VALUE")"') == [guard.LEADING]
+
+
+def test_issue_513_a_prefixed_print_into_a_file_stays_unread(tmp_path):
+    assert check(tmp_path, f'{HELPER}\necho a & time echo "$VALUE" > out.txt') == []
+
+
+@pytest.mark.parametrize("line", [
+    'true & echo "x $VALUE" >& "$GITHUB_STEP_SUMMARY"',
+    'true & echo "x $VALUE" &> "$GITHUB_STEP_SUMMARY"',
+    'true & printf "%s" "$VALUE" >& "$GITHUB_STEP_SUMMARY"',
+    'true & echo "$VALUE" >& "$GITHUB_STEP_SUMMARY"',
+    'true & echo "x $VALUE" >> "$GITHUB_STEP_SUMMARY"',
+    ': & echo "x $VALUE" >> "$GITHUB_STEP_SUMMARY"',
+    'cd d & echo "x $VALUE" >> "$GITHUB_STEP_SUMMARY"',
+    'true & { echo "x $VALUE"; } >> "$GITHUB_STEP_SUMMARY"',
+    'true & echo "x $VALUE" >> $GITHUB_STEP_SUMMARY',
+])
+def test_issue_513_a_summary_write_after_a_background_command_is_read(tmp_path, line):
+    assert "VALUE" in check(tmp_path, line)
+
+
+@pytest.mark.parametrize("line", [
+    'true & echo "x $(md_code "$VALUE")" >> "$GITHUB_STEP_SUMMARY"',
+    'true && echo "x $(md_code "$VALUE")" >& "$GITHUB_STEP_SUMMARY"',
+    'echo "x $(md_code "$VALUE")" >> "$GITHUB_STEP_SUMMARY" 2>&1',
+])
+def test_issue_513_a_summary_write_after_a_background_command_encoded_is_clean(tmp_path, line):
+    assert check(tmp_path, "\n".join(guard.SHELL_MD) + "\n" + line) == []
+
+
+@pytest.mark.parametrize("sink", [
+    '| tee -a "$GITHUB_ENV"', '| cat >> "$GITHUB_ENV"', '| tee -a "$GITHUB_OUTPUT" >/dev/null',
+])
+@pytest.mark.parametrize("command", ['"echo"', "'echo'", "\\echo", "e\\cho", '"printf" "%s=1\\n"'])
+def test_issue_513_a_quoted_print_word_piped_into_tee_keeps_the_line_start_rule(tmp_path, command, sink):
+    value = '"$M"' if "printf" in command else '"$M=1"'
+    assert check(tmp_path, f'{HELPER}\nM=$(shown "$VALUE")\n{command} {value} {sink}') == [guard.LEADING]
+
+
+def test_issue_513_an_echo_argument_word_is_read_as_a_print(tmp_path):
+    # Refused although harmless: any `echo` word counts from there.
+    assert check(tmp_path, 'grep -c echo "$VALUE"') == ["VALUE", guard.LEADING]
