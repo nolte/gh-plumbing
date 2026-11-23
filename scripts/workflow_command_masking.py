@@ -97,7 +97,8 @@ value is a line end, and the mask turns every one into `?`:
     first line of the body that isn't blank or a comment, and no decorator
     above the `def` (one continued over bracketed or backslash-joined lines
     too: `@(lambda f:`, `    str)`, its brackets counted outside strings and
-    comments: `    "(" and str)`, `    str)  # (`) -- and nothing else there binds the
+    comments: `    "(" and str)`, `    str)  # (`, and none proven through a
+    line with a quote: `    f"{"("}" and str)`) -- and nothing else there binds the
     name (#513): in shell no other definition (wherever `shown()` or
     `function shown` stands after a blank or an operator: `a) shown() {`,
     `then shown() {`, `! shown() {`, `time shown() {`), `unset`, `alias` or `declare -f`/`export -f` of
@@ -343,16 +344,23 @@ Not covered (each would need a parser this script doesn't have):
     going to a file though bash sends it to the log: `>&2 2>> f` sends stdout
     to the log's stderr and only then stderr to f, but the `>>` reads as a
     stdout redirect, so its stdout prints are not read (#511 found it);
-  * a heredoc fed to an interpreter the guard doesn't name -- only a word
-    of the command before the `<<` whose base name (after the last `/`, or
-    after the `NAME:-` of a default) starts with `python`, `pypy`, `node`,
-    `deno` or `bun` is read, whatever follows the name (`/usr/bin/python3`,
-    `${PY:-python3}`, `python.exe`, `python3-dbg`, `python3.13t`,
-    `python3.12m`, `nodejs`), failing closed, but not one that ends in
-    `.sh`, `.bash` or `.zsh` (`./run-python-tests.sh`, #513), and the first
-    such word decides (`node - python3` is read as Node), a value assigned
-    (`env X=node python3`) only where no other word names one -- (`ruby`,
-    `perl`, `php`, `uv run -` without the word `python`): with a quoted delimiter
+  * a heredoc fed to an interpreter the guard doesn't name -- only the
+    simple command that carries the `<<` (the text before it after the last
+    unquoted `|`, `|&`, `;`, `&&`, `||` or `&`, or after the `$(`, `(` or
+    backtick it stands in), its leading assignments skipped, is searched,
+    for `python` or `pypy` with a version, `node`, `nodejs`, `deno` or `bun`
+    as a word, a path, a suffix or an expansion around it allowed
+    (`/usr/bin/python3`, `${PY:-python3}`, `python.exe`, `python3-dbg`,
+    `python3.13t`, `python3.12m`, `sudo python3`), but not in a word that
+    ends in `.sh`, `.bash` or `.zsh` (`./run-python-tests.sh`, #513); the
+    first name in it decides (`node - python3` is read as Node), a value
+    assigned (`env X=node python3`) only where no other word names one; a
+    name in an earlier command of the line decides nothing (`node
+    --version; python3 -` is read as Python, #513), unless the command is
+    run from a parameter or by a function or alias the line defines
+    (`PY=python3; $PY -`) -- (`ruby`, `perl`, `php`, `uv run -` without the
+    word `python`, a name inside a longer word: `mypython`, `pythonw`, or one
+    set on an earlier line: `PY=python3`, then `$PY -`): with a quoted delimiter
     its lines are data, with an unquoted one shell text; nor a delimiter
     that starts with a digit or holds a character other than a letter, a
     digit, `_`, `-` or `.`;
@@ -546,9 +554,12 @@ heredoc reading err towards a finding, #507):
     b`): the guard doesn't follow a pipeline's output, so every pipe is read
     as reaching the log -- mask the value, or redirect the heredoc's own
     stdout (`python3 - <<'PY' > out.json`); likewise a shell print piped into
-    `cat` or `tee` that writes elsewhere after all (`| cat > f`, `| tee f |
-    sort > g`), and a line with a redirect to a standard stream or a process
-    substitution beside one to a file (`> /dev/stderr > f`, `> >(cat > f)`,
+    `cat` or `tee` that writes elsewhere after all (`| cat > f`, `| cat >
+    g`, `| tee f > g`, `| tee f | sort > g`) or among whose `tee` words a
+    quoted `">("` stands (`| tee ">(" f`: read as a process substitution),
+    a print after an `exec` that sends stdout to a file (`exec > f; echo
+    "$V"`: read as a log print), and a line with a redirect to a standard
+    stream or a process substitution beside one to a file (`> /dev/stderr > f`, `> >(cat > f)`,
     #513), and a name in the words of a command a print pipes into, other
     than a `tee`'s, that it doesn't print (`| tee f | grep -q "$p"`), or in
     the redirect target of a `tee` or `cat` it pipes into (`echo x | cat >
@@ -558,12 +569,14 @@ heredoc reading err towards a finding, #507):
     (`echo "call shown() first"`): read as another definition of `shown`,
     so it voids the mask of the whole body (#513) -- reword the text;
   * a decorator walk over foreign lines: walking up from a canonical `def
-    shown`, lines are read one by one, so a line of a triple-quoted string
-    over lines above it -- its opening or closing triple quote reads as a
-    string left open, a `)` in it as a bracket -- keeps the walk going over the unbalanced lines above,
-    and an `@` at the start of any of them, up to where the brackets
-    balance, voids the definition (#513) -- put a plain statement between
-    the string and the `def`.
+    shown`, lines are read one by one and the walk stops only at a line at
+    most as indented as the `def` where the brackets of the lines walked
+    balance and none of them holds a quote (#513), so a string literal or a
+    bracket left open on any line between the `def` and an `@` at the start
+    of an earlier line -- a decorator of another function (`@staticmethod`,
+    `def f():`, `    return 'a'`), a line of a triple-quoted string --
+    voids the definition -- define `shown` above every decorator, or put a
+    plain statement without quotes or brackets right above the `def`.
 
 Refused although harmless (the summary rule errs towards a finding):
 
@@ -612,20 +625,20 @@ SUMMARY_TEE = re.compile(r"""(?:""" + TEE_TO + r"""|\bdd\b[^|;&\n]*?\bof=)["']?\
 # `<<EOF`, `<<-EOF`, `<<'EOF'`, `<<"EOF"`, `<<\EOF`; a delimiter may hold `-` and `.`.
 # Groups: 1 a backslash, 2 a quote, 3 the delimiter; quoted when 1 or 2 is set.
 HEREDOC = re.compile(r"""(?<!<)<<-?\s*(\\?)(['"]?)([A-Za-z_][A-Za-z0-9_.-]*)\2""")
-# The interpreters whose heredoc is read as Python or as JavaScript: a word of
-# the command before the `<<` whose base name STARTS with the name, whatever
-# follows (`/usr/bin/python3`, `python3.12`, `python3.13t`, `python3.12m`,
-# `python.exe`, `python3-dbg`, `python3*`, `python3,python2`, `nodejs`),
-# failing closed, unless the word ends in a shell script's extension
-# (`./run-python-tests.sh`, #513) -- see `interpreter_of`.
-PY_INTERPRETER = re.compile(r"(?:python|pypy)")
-JS_INTERPRETER = re.compile(r"(?:node|deno|bun)")
-# What `interpreter_of` also reads a word without: the parameter name and
-# operator of a default (`PY:-` of `${PY:-python3}`).
-DEFAULT_PREFIX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*:?[-=?+]")
-SCRIPT_WORD = re.compile(r"\.(?:sh|bash|zsh)$")
-# What separates the words `interpreter_of` reads: blanks, operators, quotes.
-COMMAND_WORD = re.compile(r"""[^\s;&|(){}<>`$'"=]+""")
+# The interpreters whose heredoc is read as Python or as JavaScript, searched
+# for as a word (`python3.12`, `python3.13t`, `python.exe`, `${PY:-python3}`,
+# `/usr/bin/env python3`) in the heredoc's own simple command only -- see
+# `interpreter_of`.
+PY_INTERPRETER = re.compile(r"\b(?:python|pypy)[0-9.]*\b")
+JS_INTERPRETER = re.compile(r"\b(?:node(?:js)?|deno|bun)\b")
+# The leading assignment words of a simple command (`NAME=value`, `NAME+=value`).
+LEADING_ASSIGNMENTS = re.compile(
+    r"""^\s*(?:[A-Za-z_][A-Za-z0-9_]*\+?=(?:"(?:[^"\\]|\\.)*"|'[^']*'|\\.|[^\s"'\\])*\s+)*""")
+# The shell word around a name, and the two kinds `interpreter_of` reads apart:
+# a shell script (`./run-python-tests.sh`, #513) and an assignment (`X=node`).
+SHELL_WORD = r"""[^\s;&|<>()]"""
+SCRIPT_WORD = re.compile(r"""\.(?:sh|bash|zsh)["']*$""")
+ASSIGNMENT_WORD = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")
 # `$name`, `${name...}`, `$1`; `${{` is an expression, `${#` a length.
 SHELL_REF = re.compile(r"\$(?:\{(?!\{)(#?)([A-Za-z_][A-Za-z0-9_]*|[0-9])([^}]*)\}|([A-Za-z_][A-Za-z0-9_]*|[0-9]))")
 # `$(shown "$x")`, `$(shown "${x}")`, `$(shown "$1")`.
@@ -1192,29 +1205,90 @@ def pipes_to_log(text: str) -> bool:
     return False
 
 
-def interpreter_of(command: str) -> str | None:
-    """`py` or `js` if a word of the command before a heredoc's `<<` names an interpreter.
-
-    A word names one when its base name -- after the last `/`, or after the
-    `NAME:-` of a default (`${PY:-python3}`) -- starts with the name, its
-    path allowed (`/usr/bin/python3`, `python3.12`, `python3.13t`, `env
-    node`, `python.exe`, `python3-dbg`), failing closed -- unless it ends in
-    a shell script's extension (#513): `./run-python-tests.sh` names none.
-    The first such word in command order decides (`node - python3` is Node),
-    an assignment's value only where no other word names one (`env X=node
-    python3` is Python, `PY=python3; $PY -` too).
+def own_command(command: str) -> str:
+    """The simple command a heredoc's `<<` belongs to: the text before the `<<`
+    after its last unquoted `|`, `|&`, `;`, `&&`, `||` or `&`, or after the
+    `$(`, `<(`, `(` or backtick it stands in, its leading assignment words
+    dropped (#513).
     """
-    found: dict[bool, str] = {}
-    for m in COMMAND_WORD.finditer(command):
-        base = m.group().rsplit("/", 1)[-1]
-        if SCRIPT_WORD.search(base):
+    # The stack holds, per open substitution or subshell, the start and quote
+    # outside it and what closes it.
+    start, quote, stack, i = 0, None, [], 0
+    while i < len(command):
+        c = command[i]
+        if c == "\\" and quote != "'":
+            i += 2
             continue
-        for name in (base, DEFAULT_PREFIX.sub("", base)):
-            lang = "py" if PY_INTERPRETER.match(name) else "js" if JS_INTERPRETER.match(name) else None
-            if lang:
-                found.setdefault(command[m.start() - 1:m.start()] == "=", lang)
-                break
-    return found.get(False) or found.get(True)
+        if quote is None and command.startswith(("&&", "||", "|&"), i):
+            start = i = i + 2
+            continue
+        if quote == "'":
+            quote = None if c == "'" else quote
+        elif c == "`" and stack and stack[-1][2] == "`":
+            start, quote, _ = stack.pop()
+        elif c == "`" or command.startswith("$(", i) or (quote is None and command.startswith(("<(", ">(", "("), i)):
+            opener = "`" if c == "`" else ")"
+            stack.append((start, quote, opener))
+            width = 2 if c in "$<>" else 1
+            start, quote, i = i + width, None, i + width
+            continue
+        elif quote == '"':
+            quote = None if c == '"' else quote
+        elif c in "'\"":
+            quote = c
+        elif c == ")":
+            # Unopened on the line: a `case` pattern's, after which a command starts.
+            start, quote = stack.pop()[:2] if stack and stack[-1][2] == ")" else (i + 1, None)
+        elif c in ";\n" or (c == "&" and command[i - 1:i] != ">" and command[i + 1:i + 2] != ">"):
+            start = i + 1
+        elif c == "|" and command[i - 1:i] != ">":
+            start = i + 1
+        i += 1
+    return LEADING_ASSIGNMENTS.sub("", command[start:], count=1)
+
+
+def interpreter_of(command: str) -> str | None:
+    """`py` or `js` if the simple command of a heredoc's `<<` names an interpreter.
+
+    `command` is the text before the `<<`. Only its own simple command is
+    searched (`own_command`): a name in an earlier command of the line
+    (`node --version; python3 -`, `jq . nodes.json | python3 -`) or in a
+    leading assignment (`node_version=20 python3 -`) decides nothing (#513).
+    In it, `python`/`pypy` (with a version) and `node`/`nodejs`/`deno`/`bun`
+    are searched for as words -- a path, a suffix or an expansion around
+    them allowed (`python3.13t`, `python.exe`, `python3-dbg`,
+    `${PY:-python3}`, `sudo python3`) -- but not in a word ending in a shell
+    script's extension (`./run-python-tests.sh`). The first name decides
+    (`node - python3` is Node); one in an assignment word only where no
+    other word names one (`env X=node python3` is Python). A command run
+    from a parameter (`$PY -`), or named by a function or alias the text
+    defines (`f() { python3 "$@"; }; f -`), whose own words name none is
+    searched over the whole text before the `<<` (`PY=python3; $PY -`),
+    failing closed.
+    """
+    own = own_command(command)
+
+    def search(text: str) -> str | None:
+        found: dict[bool, tuple[int, str]] = {}
+        for regex, lang in ((PY_INTERPRETER, "py"), (JS_INTERPRETER, "js")):
+            for m in regex.finditer(text):
+                left = re.search(SHELL_WORD + "*$", text[:m.start()]).group()
+                word = left + re.match(SHELL_WORD + "*", text[m.start():]).group()
+                if SCRIPT_WORD.search(word):
+                    continue
+                assigned = ASSIGNMENT_WORD.match(word) is not None and "=" in left
+                if assigned not in found or m.start() < found[assigned][0]:
+                    found[assigned] = (m.start(), lang)
+        best = found.get(False) or found.get(True)
+        return best[1] if best else None
+
+    lang = search(own)
+    word = (own.split() or [""])[0]
+    name = re.escape(word)
+    defined = rf"(?:^|[\s;&|(){{}}])(?:function\s+{name}\b|{name}\s*\(\s*\)|alias\s+{name}=)"
+    if lang is None and (re.match(r"""["']?\$""", word) or (word and re.search(defined, command))):
+        lang = search(command)
+    return lang
 
 
 # A stdout redirect into an env file of a file descriptor other than stdout
@@ -2727,11 +2801,13 @@ class Checker:
         (#513) -- and no decorator stands above it (`@d` rebinds the name),
         also not one continued over bracketed or backslash-joined lines
         (`@(lambda f:`, `    str)`). Failing closed: walking up from the
-        `def`, every code line is taken while the lines walked are not
-        bracket-balanced -- counted outside strings and comments, so `"("`
-        and `# (` don't balance a line (#513) -- or one leaves a string open
-        or the line above ends in a backslash, and an `@` at the start of any
-        of them voids it.
+        `def`, every code line is taken until one at most as indented as the
+        `def`, where the lines walked are bracket-balanced -- counted outside
+        strings and comments, so `"("` and `# (` don't balance a line (#513)
+        -- none of them holds a quote (a PEP 701 f-string nests them,
+        `f"{"("}"`, so no count through one is proven) and the line above
+        doesn't end in a backslash; an `@` at the start of any line taken
+        voids it, up to the heredoc's start.
         """
         unit = self.units[k]
         if unit.lang == "js":
@@ -2745,16 +2821,21 @@ class Checker:
         body = self.units[code[at + 1]].text.strip() if at + 1 < len(code) else ""
         if body != PY_SHOWN_RETURN:
             return False
-        depth = 0
+        depth, quoted, indent = 0, False, indent_of(unit.text)
         for j in range(at - 1, -1, -1):
-            above = self.units[code[j]].text.strip()
+            line = self.units[code[j]].text
+            above = line.strip()
             if above.startswith("@"):
                 return False
             # Brackets outside strings and comments (`    "(" and str)`,
-            # `    str)  # (`); a string left open on the line keeps walking.
-            left, quote = bracket_state(above, 0, depth=WALK_DEPTH, lang="py")
+            # `    str)  # (`). A quote on any line walked makes the count
+            # unproven -- a PEP 701 f-string nests quotes (`f"{"("}"`) -- so
+            # the walk goes on to the heredoc's start (#513).
+            left, _ = bracket_state(above, 0, depth=WALK_DEPTH, lang="py")
             depth += WALK_DEPTH - left
-            if not depth and not quote and not (j and self.units[code[j - 1]].text.rstrip().endswith("\\")):
+            quoted = quoted or "'" in above or '"' in above
+            if not depth and not quoted and indent_of(line) <= indent \
+                    and not (j and self.units[code[j - 1]].text.rstrip().endswith("\\")):
                 break
         return True
 
@@ -3086,7 +3167,7 @@ class Checker:
             # The heredoc's own lines are read where they stand; a bare `cat`
             # prints them unchanged, anything else prints its own output.
             command = SUMMARY_FILE.sub("", text[:heredoc.start()] + text[heredoc.end():]).strip()
-            if interpreter_of(command) or re.fullmatch(r"cat(?:\s+-)?", command):
+            if interpreter_of(text[:heredoc.start()]) or re.fullmatch(r"cat(?:\s+-)?", command):
                 return []
             return [OUTPUT_NAME]
         bare = unquoted(text)
@@ -3367,14 +3448,26 @@ def leading_value(unit: Logical) -> bool:
     into `tee` or `cat` is printed to the log, wherever else tee writes it
     (`echo "$x=1" | tee -a "$GITHUB_OUTPUT"`, #513). Every print of the line
     whose output reaches the log is read, each from its own start (`echo x >
-    f; echo "$x"`, `logged_prints`, #513).
+    f; echo "$x"`, `logged_prints`, #513), and so is every print whose own
+    pipeline pipes into `tee` or `cat` (`echo a; echo "$x" | tee -a
+    "$GITHUB_ENV"`, #513).
     """
     text = unit.text
     if unit.lang != "sh" or COMMAND.search(text):
         return False
     prints = [m for m, _ in logged_prints(text)]
-    if pipes_to_log(text) and (first := SHELL_PRINT.search(unquoted(text))):
+    bare = ARRAY_LITERAL.sub(lambda m: " " * len(m.group()), unquoted(text))
+    if pipes_to_log(text) and (first := SHELL_PRINT.search(bare)):
         prints.append(first)  # tee prints an env-file or summary write as well
+    # And the print of every pipeline that itself pipes into `tee` or `cat`
+    # (`echo a; echo "$x" | tee -a "$GITHUB_ENV"`, #513).
+    starts = [0] + [m.end() for m in PIPELINE_SPLIT.finditer(bare)]
+    ends = [m.start() for m in PIPELINE_SPLIT.finditer(bare)] + [len(bare)]
+    found = list(SHELL_PRINT.finditer(bare))
+    for a, b in zip(starts, ends):
+        m = next((p for p in found if a <= p.start(1) < b), None)
+        if m and pipes_to_log(text[a:b]):
+            prints.append(m)
     return any(_leads(text, m) for m in prints)
 
 

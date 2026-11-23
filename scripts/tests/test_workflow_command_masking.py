@@ -2891,3 +2891,57 @@ def test_issue_513_a_later_print_masked_or_redirected_with_its_group_is_clean(tm
 ])
 def test_issue_513_a_print_outside_a_redirected_group_or_pipeline_is_a_log_print(tmp_path, line):
     assert check(tmp_path, f"{HELPER}\n{line}") == ["VALUE"]
+
+
+ISSUE_513_PY_ENV_BODY = "import os\nprint(os.environ['VALUE'])\n"
+
+
+@pytest.mark.parametrize("command", [
+    "node --version; python3 -", "ls node_modules && python3 -", "jq . nodes.json | python3 -",
+    "node_version=20 python3 -", "bundle exec rake && python3 -", "node -e 'console.log(1)' | python3 -",
+    "node build.js && python3 -", "npm ci && node --version && python3 -", "cd bundle && python3 -",
+    "cat nodes.txt | python3 -", "./bin/bunyan x | python3 -", "denormalize x && python3 -",
+    "cd deno-app; python3 -", "nodeinfo | python3 -", "y=$(node -v; python3 -",
+])
+def test_issue_513_a_node_name_in_an_earlier_command_leaves_the_heredoc_python(tmp_path, command):
+    # Only the heredoc's own simple command names its interpreter.
+    run = f"{command} <<'PY'\n{ISSUE_513_PY_ENV_BODY}PY"
+    assert check(tmp_path, run) == ["os.environ", guard.LEADING]
+
+
+@pytest.mark.parametrize("command", ["python_version=3 node -", "pythonpath=x node -", "cat pythonic.json | node -"])
+def test_issue_513_a_python_name_outside_the_heredoc_s_command_leaves_it_node(tmp_path, command):
+    run = f"{command} <<'JS'\nconsole.log(process.env.VALUE)\nJS"
+    assert check(tmp_path, run) == ["process.env.VALUE", guard.LEADING]
+
+
+@pytest.mark.parametrize("command", ['f() { python3 "$@"; }; f -', 'PY=python3; "$PY" -'])
+def test_issue_513_a_command_run_from_a_parameter_or_function_reads_the_line(tmp_path, command):
+    run = f"{command} <<'PY'\n{ISSUE_513_PY_ENV_BODY}PY"
+    assert check(tmp_path, run) == ["os.environ", guard.LEADING]
+
+
+@pytest.mark.parametrize("decorator", [
+    '@(lambda f:\n    f"{"("}" and str)',
+    '@(lambda f:\nf"{"("}" and str)',
+    "@(lambda f:\nstr\n)",
+])
+def test_issue_513_a_decorator_continued_through_a_nested_f_string_is_not_canonical(tmp_path, decorator):
+    # A PEP 701 f-string nests quotes, so no bracket count through it proves
+    # where the decorator ends.
+    run = (f"{HELPER}\npython3 - <<'PY'\nimport os, re, sys\n{decorator}\n{ISSUE_513_PY_HELPER}"
+           "p = os.environ['VALUE']\nprint('x', shown(p))\nPY")
+    assert check_513(tmp_path, run) == ["shown"]
+
+
+@pytest.mark.parametrize("line", [
+    'echo a; echo "$(shown "$VALUE")" | tee -a "$GITHUB_ENV"',
+    'echo a > f; echo "$(shown "$VALUE")" | tee -a "$GITHUB_ENV"',
+    'echo a > f; echo "$(shown "$VALUE")" | tee -a "$GITHUB_OUTPUT"',
+])
+def test_issue_513_a_later_print_teed_into_an_env_file_keeps_the_line_start_rule(tmp_path, line):
+    assert check(tmp_path, f"{HELPER}\n{line}") == [guard.LEADING]
+
+
+def test_issue_513_a_later_print_teed_into_an_env_file_with_a_literal_first_is_clean(tmp_path):
+    assert check(tmp_path, f'{HELPER}\necho a; echo "x=$(shown "$VALUE")" | tee -a "$GITHUB_ENV"') == []
