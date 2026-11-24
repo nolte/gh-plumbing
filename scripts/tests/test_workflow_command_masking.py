@@ -401,6 +401,43 @@ def test_a_mask_after_a_line_that_ends_its_list_still_covers(tmp_path):
     assert check(tmp_path, run) == []
 
 
+# --- #513: forms the block and assignment reading let through ---------------
+
+
+def test_issue_513_a_mask_in_a_substitution_over_lines_in_a_case_arm_is_a_finding(tmp_path):
+    # The substitution's lone `)` read as a case pattern, so the mask inside
+    # `$( ... )` counted for the arm; bash prints the raw value. A pattern is
+    # never empty: the `)` now leaves the body unattributed, as at top level.
+    run = (f'{HELPER}\nx="$VALUE"\ncase a in\n  a)\n    y=$(\n      x=$(shown "$x")\n    )\n'
+           '    echo "x $x"\n    ;;\nesac')
+    assert check(tmp_path, run) == ["x"]
+    shutil.rmtree(tmp_path / ".github")
+    # A pattern on a line of its own still opens the arm the mask covers.
+    run = f'{HELPER}\nx="$VALUE"\ncase a in\n  a)\n    x=$(shown "$x")\n    echo "x $x"\n    ;;\nesac'
+    assert check(tmp_path, run) == []
+
+
+def test_issue_513_a_print_right_after_a_case_pattern_is_a_log_print(tmp_path):
+    assert check(tmp_path, f'{HELPER}\nx="$VALUE"\ncase "$1" in b) echo "x $x" ;; esac') == ["x"]
+
+
+def test_issue_513_a_mask_after_a_line_ending_in_a_stderr_pipe_is_conditional(tmp_path):
+    # `|&` is a pipe: the mask on the next line runs in the pipeline's subshell.
+    run = f'{HELPER}\nx="$VALUE"\ntrue |&\nx=$(shown "$x")\necho "v: $x"'
+    assert check(tmp_path, run) == ["x"]
+
+
+@pytest.mark.parametrize("raw", ['declare x[0]="$VALUE"', 'typeset x[0]="$VALUE"'])
+def test_issue_513_an_indexed_declare_assignment_voids_the_mask(tmp_path, raw):
+    assert check(tmp_path, f'{HELPER}\nx=$(shown "$VALUE")\n{raw}\necho "v: $x"') == ["x"]
+
+
+def test_issue_513_an_assignment_with_a_nested_subscript_voids_the_mask(tmp_path):
+    # `\[[^\]\s]*\]` stopped at the inner `]`, so `x[${a[0]}]=` was no assignment.
+    run = f'{HELPER}\nx=$(shown "$VALUE")\nx[${{a[0]}}]="$VALUE"\necho "v: $x"'
+    assert check(tmp_path, run) == ["x"]
+
+
 @pytest.mark.parametrize("raw", [
     'case a in\n  a) x="$VALUE" ;;\nesac',
     'case a in a) x="$VALUE";; esac',
@@ -480,6 +517,365 @@ def test_a_quoted_hash_right_after_a_quote_starts_no_comment(tmp_path):
 def test_a_hash_after_a_separator_starts_a_comment(tmp_path):
     run = f'{HELPER}\nx="$VALUE"\nx=$(shown "$x");# fi\necho "::error::$x"'
     assert check(tmp_path, run) == []
+
+
+# --- #513 (P2): sinks and destinations the guard read as elsewhere ----------
+
+# Stands for PY_HELPER, which is defined further down, in a parametrized run.
+ISSUE_513_PY_HELPER = "@PY_HELPER@\n"
+
+
+def issue_513_py(opener: str, line: str) -> str:
+    """A Python heredoc opened with `opener` after its `<<'PY'`, printing `line`."""
+    return (f"{HELPER}\npython3 - <<'PY'{opener}\nimport os, re, sys\n{ISSUE_513_PY_HELPER}"
+            f"p = os.environ['VALUE']\n{line}\nPY")
+
+
+def check_513(tmp_path, run: str) -> list[str]:
+    return check(tmp_path, run.replace(ISSUE_513_PY_HELPER, PY_HELPER))
+
+
+@pytest.mark.parametrize("pipe", ["| tee out.log", "| cat", "|& tee out.log", "| /usr/bin/tee -a out.log"])
+def test_issue_513_a_shell_print_piped_into_tee_or_cat_is_a_log_print(tmp_path, pipe):
+    # tee and cat print what they read: the `##[` reaches the log.
+    assert check(tmp_path, f'{HELPER}\necho "##[warning]$VALUE" {pipe}') == ["VALUE"]
+
+
+def test_issue_513_a_print_piped_into_another_command_stays_unread(tmp_path):
+    # Not covered: the guard doesn't follow what `grep` prints.
+    assert check(tmp_path, f'{HELPER}\necho "x $VALUE" | grep x') == []
+
+
+def test_issue_513_the_file_tee_writes_is_not_charged_to_the_print(tmp_path):
+    # The print's statement ends at the pipe: `$RUNNER_X` names tee's file.
+    assert check(tmp_path, f'{HELPER}\necho "x $(shown "$VALUE")" | tee "$RUNNER_X"') == []
+
+
+@pytest.mark.parametrize("opener", [
+    " > /dev/stderr", " >> /dev/stderr", " > /dev/stdout", " >/dev/fd/2", " > /proc/self/fd/2", " > >(cat)",
+    ' > "/dev/stderr"',
+])
+def test_issue_513_a_heredoc_redirected_to_a_standard_stream_prints_to_the_log(tmp_path, opener):
+    assert check_513(tmp_path, issue_513_py(opener, 'print("x", p)')) == ["p"]
+
+
+@pytest.mark.parametrize("redirect", ["> /dev/stderr", ">/dev/stdout", ">> /dev/fd/1", "> >(cat)"])
+def test_issue_513_a_shell_print_redirected_to_a_standard_stream_is_a_log_print(tmp_path, redirect):
+    assert check(tmp_path, f'{HELPER}\necho "x $VALUE" {redirect}') == ["VALUE"]
+
+
+def test_issue_513_a_heredoc_in_a_group_teed_into_an_env_file_is_read_as_the_log_as_well(tmp_path):
+    # The group's closer pipes its stdout into tee, which prints it: the
+    # entry begins a log line, as for `python3 - <<'PY' | tee -a ...`.
+    run = (f"{HELPER}\n{{ python3 - <<'PY'\nimport os, re, sys\n{PY_HELPER}p = os.environ['VALUE']\n"
+           "print(f\"{shown(p)}=x\")\nPY\n} | tee -a \"$GITHUB_OUTPUT\"")
+    assert check(tmp_path, run) == [guard.LEADING]
+
+
+def test_issue_513_a_heredoc_writing_only_stderr_to_an_env_file_prints_stdout_to_the_log(tmp_path):
+    # `2>>` sends stderr into the env file; stdout stays on the log, where
+    # the masked value begins the line.
+    assert check_513(tmp_path, issue_513_py(' 2>> "$GITHUB_OUTPUT"', "print(shown(p))")) == [guard.LEADING]
+
+
+def test_issue_513_a_print_redirected_to_the_summary_with_greater_ampersand_is_a_summary_write(tmp_path):
+    run = f'{HELPER}\necho "x $VALUE" >& "$GITHUB_STEP_SUMMARY"'
+    write(tmp_path, ".github/workflows/reusable-w.yaml", workflow(run))
+    findings, _ = guard.audit(tmp_path, ())
+    assert [f["message"].split("`")[1] for f in findings] == ["VALUE"]
+    assert "step-summary write" in findings[0]["message"]
+
+
+@pytest.mark.parametrize("script", ["./run-python-tests.sh", "./pypy-setup.bash", "node-env.zsh"])
+def test_issue_513_a_script_whose_name_holds_an_interpreter_reads_as_that_interpreter(tmp_path, script):
+    # #513 c8, kept as develop reads it (refused although harmless): the text
+    # before `<<` names an interpreter, so the unquoted heredoc is that
+    # interpreter's code with a `$` in it, the quoted one its code.
+    assert check(tmp_path, f"{HELPER}\n{script} <<EOT\n$VALUE\nEOT") == [guard.UNQUOTED_NAME]
+    shutil.rmtree(tmp_path / ".github")
+    body = "console.log(process.env.VALUE)" if "node" in script else "import os\nprint(os.environ['VALUE'])"
+    assert check(tmp_path, f"{script} <<'EOT'\n{body}\nEOT")[-1] == guard.LEADING
+
+
+@pytest.mark.parametrize("command", [
+    "/usr/bin/python3 -", "python3.12 -", "uv run python3 -", "env node", "x=$(python3 -", "if ! node",
+])
+def test_issue_513_an_interpreter_named_as_a_word_still_reads_the_heredoc(tmp_path, command):
+    assert check(tmp_path, f"{command} <<PY\nprint('$VALUE')\nPY") == [guard.UNQUOTED_NAME]
+
+
+def test_issue_513_a_mask_in_a_substitution_closed_after_text_in_a_case_arm_is_a_finding(tmp_path):
+    # `x=$(shown "$x"))` closes the `y=$(` of the line above; the trailing `)`
+    # read as a case pattern, so the mask counted for the arm.
+    run = (f'{HELPER}\nx="$VALUE"\ncase a in\n  a)\n    y=$(\n      x=$(shown "$x"))\n    echo "x $x"\n'
+           '    ;;\nesac')
+    assert check(tmp_path, run) == ["x"]
+
+
+def test_issue_513_a_print_after_a_subshell_paren_is_a_log_print(tmp_path):
+    assert check(tmp_path, f'{HELPER}\nx="$VALUE"\n( echo "x $x" )') == ["x"]
+
+
+def test_issue_513_an_element_assignment_with_spaces_in_its_subscript_voids_the_mask(tmp_path):
+    # `x[1 + 1]=...` sets x[2]; it is an assignment to x all the same.
+    assert check(tmp_path, f'{HELPER}\nx=$(shown "$VALUE")\nx[1 + 1]="$VALUE"\necho "v: $x"') == ["x"]
+
+
+@pytest.mark.parametrize("run, expected", [
+    # Refused at f79d452 already: held here as regressions.
+    (issue_513_py(' >> "$GITHUB_OUTPUT"', 'print("x=" + p, file=sys.stdout if p else sys.stderr)'), ['"x=" + p']),
+    (f"{HELPER}\npython3 - <<'PY' |\nimport os, re, sys\n{ISSUE_513_PY_HELPER}p = os.environ['VALUE']\n"
+     "print('x=' + p)\nPY\ntee -a \"$GITHUB_OUTPUT\"", ["'x=' + p"]),
+    (issue_513_py(' | tee -a "$GITHUB_OUTPUT"', 'print(f"{shown(p)}=x")'), [guard.LEADING]),
+    (f"{HELPER}\n{{ python3 - <<'PY'\nimport os, re, sys\n{ISSUE_513_PY_HELPER}p = os.environ['VALUE']\n"
+     "print('x', p)\nPY\n} | cat", ["p"]),
+])
+def test_issue_513_forms_refused_before_stay_refused(tmp_path, run, expected):
+    assert check_513(tmp_path, run) == expected
+
+
+# --- #513 (P3): the heredoc reading and two shell sinks ---------------------
+
+
+def issue_513_js(opener: str, line: str) -> str:
+    """A Node heredoc opened with `opener` after its `<<'JS'`, defining `shown` and printing `line`."""
+    return f"{HELPER}\nnode - <<'JS'{opener}\n{guard.JS_SHOWN}\nconst p = process.env.VALUE;\n{line}\nJS"
+
+
+@pytest.mark.parametrize("run", [
+    issue_513_py("", 'shown = str\nprint(f"x {shown(p)}")'),
+    issue_513_py(' >> "$GITHUB_OUTPUT"', 'shown = str\nprint(f"x={shown(p)}")'),
+    issue_513_py("", 'shown: object = str\nprint(f"x {shown(p)}")'),
+    issue_513_py("", '(shown := str)\nprint(f"x {shown(p)}")'),
+    issue_513_py("", 'def shown(value):\n    return value\nprint(f"x {shown(p)}")'),
+    issue_513_py("", 'import builtins as shown\nprint(f"x {shown(p)}")'),
+    issue_513_py("", 'from builtins import str as shown\nprint(f"x {shown(p)}")'),
+    issue_513_py("", 'for shown in [str]:\n    pass\nprint(f"x {shown(p)}")'),
+    issue_513_py("", 'with open("/dev/null") as shown:\n    pass\nprint(f"x {shown(p)}")'),
+    issue_513_js("", "{ let shown = String; console.log(`x ${shown(p)}`); }"),
+    issue_513_js("", "function shown(v) { return v; }\nconsole.log(`x ${shown(p)}`);"),
+    issue_513_js(' >> "$GITHUB_OUTPUT"', "var shown = String;\nconsole.log(`x=${shown(p)}`);"),
+])
+def test_issue_513_a_heredoc_that_rebinds_shown_has_no_mask(tmp_path, run):
+    # The canonical definition proves nothing once anything else in the
+    # heredoc binds the name: the call is read as an unmasked value.
+    assert check_513(tmp_path, run) == ["shown"]
+
+
+def test_issue_513_a_python_shown_decorated_is_not_canonical(tmp_path):
+    run = (f"{HELPER}\npython3 - <<'PY'\nimport os, re, sys\n@lambda f: str\n{ISSUE_513_PY_HELPER}"
+           "p = os.environ['VALUE']\nprint(f\"x {shown(p)}\")\nPY")
+    assert check_513(tmp_path, run) == ["shown"]
+
+
+@pytest.mark.parametrize("rebind", ['shown() { echo "v$@"; }', "unset -f shown"])
+def test_issue_513_a_shell_shown_redefined_after_the_canonical_one_has_no_mask(tmp_path, rebind):
+    assert check(tmp_path, f'{HELPER}\n{rebind}\necho "x $(shown "$VALUE")"') == ["VALUE"]
+
+
+def test_issue_513_a_python_shown_must_return_on_its_first_body_line(tmp_path):
+    # `if value: return value` returns the raw value first.
+    helper = f"def shown(value):\n    if value: return value\n    {guard.PY_SHOWN_RETURN}\n"
+    run = issue_513_py("", 'print(f"x {shown(p)}")').replace(ISSUE_513_PY_HELPER, helper)
+    assert check(tmp_path, run) == ["shown"]
+
+
+def test_issue_513_comment_lines_before_the_canonical_return_keep_the_mask(tmp_path):
+    helper = f"def shown(value):\n    # masks a value\n\n    {guard.PY_SHOWN_RETURN}\n"
+    run = issue_513_py("", 'print(f"x {shown(p)}")').replace(ISSUE_513_PY_HELPER, helper)
+    assert check(tmp_path, run) == []
+
+
+@pytest.mark.parametrize("run", [
+    issue_513_py(' >> "$GITHUB_OUTPUT"', "sys.stdout.writelines([p])"),
+    issue_513_py(' >> "$GITHUB_OUTPUT"', "sys.stdout.buffer.write(p.encode())"),
+    issue_513_py(' >> "$GITHUB_OUTPUT"', "import json\njson.dump(p, sys.stdout)"),
+    f"{HELPER}\nnode - <<'JS' >> \"$GITHUB_OUTPUT\"\nconst p = process.env.VALUE;\nconsole['log'](p);\nJS",
+    issue_513_py(" > f.txt", "import functools\nlog = functools.partial(print, file=sys.stderr)\nlog(p)"),
+])
+def test_issue_513_a_stream_writer_the_strict_reading_does_not_name_is_refused(tmp_path, run):
+    assert check_513(tmp_path, run) == [guard.UNKNOWN_WRITER]
+
+
+def test_issue_513_a_stdout_writer_into_a_plain_file_stays_unread(tmp_path):
+    # The real tree's vbf.json step: stdout goes to a file, not a sink.
+    assert check_513(tmp_path, issue_513_py(" > vbf.json", "import json\njson.dump(p, sys.stdout)")) == []
+
+
+@pytest.mark.parametrize("run, expected", [
+    # `# )` closed the call early: `file=sys.stderr` went unread, and the
+    # masked value starts a stderr line on the log.
+    (issue_513_py(" > f.txt", "print(shown(p),  # )\n      file=sys.stderr)"), [guard.LEADING]),
+    (issue_513_py(" > f.txt", "print(p,  # )\n      file=sys.stderr)"), ["p", guard.LEADING]),
+    (issue_513_js(" > f.txt", "console.error(shown(p), // )\n  p);"), ["p", guard.LEADING]),
+    (issue_513_js(" > f.txt", "console.error(shown(p), /* ) */\n  p);"), ["p", guard.LEADING]),
+])
+def test_issue_513_a_comment_in_a_print_call_does_not_end_it(tmp_path, run, expected):
+    assert check_513(tmp_path, run) == expected
+
+
+def test_issue_513_a_comment_in_a_masked_multi_line_print_is_skipped(tmp_path):
+    # Refused before as the argument `# label`.
+    run = issue_513_py(' >> "$GITHUB_OUTPUT"', 'print(\n    "x=",  # label, )\n    shown(p),\n    sep="")')
+    assert check_513(tmp_path, run) == []
+
+
+def test_issue_513_a_hash_in_a_same_quote_field_hides_no_argument(tmp_path):
+    # PEP 701: the scan misreads the field, so the `#` reads as a comment;
+    # the call's arguments are read without comments as well.
+    run = issue_513_py("", 'd = {"#": 1}\nprint(f"x {shown(d["#"])}", p)')
+    assert "p" in check_513(tmp_path, run)
+
+
+def test_issue_513_a_bare_name_on_a_summary_print_continuation_line_is_read(tmp_path):
+    assert check_513(tmp_path, issue_513_py(' >> "$GITHUB_STEP_SUMMARY"', 'print("x",\n      p)')) == ["p"]
+
+
+@pytest.mark.parametrize("run", [
+    issue_513_py("", 'open(os.environ["GITHUB_ENV"], "a").write(f"K={p}\\n")'),
+    issue_513_py("", 'with open(os.environ["GITHUB_ENV"], "a") as fh:\n    fh.write(f"K={p}\\n")'),
+    issue_513_py("", 'open(os.getenv("GITHUB_STEP_SUMMARY"), "a").write(p)'),
+    f"{HELPER}\nnode - <<'JS'\nconst fs = require('fs');\n"
+    "fs.appendFileSync(process.env.GITHUB_OUTPUT, `k=${process.env.VALUE}\\n`);\nJS",
+])
+def test_issue_513_a_heredoc_that_names_an_env_file_is_refused(tmp_path, run):
+    assert check_513(tmp_path, run) == [guard.ENV_FILE_OPENED]
+
+
+def test_issue_513_a_heredoc_that_names_an_env_file_can_be_allowed(tmp_path):
+    run = issue_513_py("", 'open(os.environ["GITHUB_ENV"], "a").write("K=1\\n")')
+    write(tmp_path, REL, workflow(run.replace(ISSUE_513_PY_HELPER, PY_HELPER)))
+    entry = guard.Allowed(REL, guard.ENV_FILE_OPENED, reason="writes a literal")
+    assert names(tmp_path, [entry]) == []
+
+
+def test_issue_513_a_field_in_a_format_spec_is_a_value(tmp_path):
+    # `p` sets the fill (a line end is one) and the width.
+    assert check_513(tmp_path, issue_513_py("", 'print(f"ok {len(p):{p}}")')) == ["p"]
+    shutil.rmtree(tmp_path / ".github")
+    assert check_513(tmp_path, issue_513_py("", 'print(f"ok {len(p):>{len(p)}}")')) == []
+
+
+@pytest.mark.parametrize("run", [
+    f"{HELPER}\ncat <<EOF | tee out.log\n##[warning]$VALUE\nEOF",
+    f"{HELPER}\ncat <<EOF | tee out.log\nx ##[warning]$VALUE\nEOF",
+    # A shell heredoc's line that starts with `#` is data, not a comment.
+    f"{HELPER}\ncat <<EOF\n##[warning]$VALUE\nEOF",
+    f"{HELPER}\ncat <<EOF >> \"$GITHUB_OUTPUT\"\n#x=$VALUE\nEOF",
+    f"{HELPER}\ncat <<EOF >> \"$GITHUB_STEP_SUMMARY\"\n# $VALUE\nEOF",
+])
+def test_issue_513_a_shell_heredoc_piped_into_tee_or_starting_with_a_hash_is_read(tmp_path, run):
+    assert check(tmp_path, run) == ["VALUE"]
+
+
+def test_issue_513_a_shell_line_teed_into_an_env_file_keeps_the_line_start_rule(tmp_path):
+    # tee writes the entry and the log both: the masked value begins a log line.
+    run = f'{HELPER}\nx=$(shown "$VALUE")\necho "$x=1" | tee -a "$GITHUB_OUTPUT"'
+    assert check(tmp_path, run) == [guard.LEADING]
+    shutil.rmtree(tmp_path / ".github")
+    assert check(tmp_path, f'{HELPER}\nx=$(shown "$VALUE")\necho "k=$x" | tee -a "$GITHUB_OUTPUT"') == []
+
+
+# --- #513 (review): regressions and incomplete rules of the round above ----
+
+
+@pytest.mark.parametrize("run", [
+    '{\n  echo "{}" | jq -r --arg v "$VALUE" \'"k=\\($v)"\'\n} >> "$GITHUB_OUTPUT"',
+    '{\n  echo "a" | awk -v v="$VALUE" \'{print v}\'\n} >> "$GITHUB_OUTPUT"',
+    '{\n  echo "a" | sed "s/a/$VALUE/"\n} >> "$GITHUB_OUTPUT"',
+    '{\n  echo "a" |& sed "s/a/$VALUE/"\n} >> "$GITHUB_OUTPUT"',
+    'for i in 1; do\n  echo "a" | sed "s/a/$VALUE/"\ndone >> "$GITHUB_OUTPUT"',
+    'if true; then\n  echo a | sed "s/a/$VALUE/"\nfi >> "$GITHUB_ENV"',
+])
+def test_issue_513_a_command_piped_into_in_a_redirected_group_writes_the_env_file(tmp_path, run):
+    # What sed, awk or jq print after the pipe goes where the group goes:
+    # a print's statement doesn't end at the pipe (only tee's words are cut).
+    assert check(tmp_path, run) == ["VALUE"]
+
+
+def test_issue_513_the_arguments_of_cat_after_a_pipe_are_printed(tmp_path):
+    assert check(tmp_path, 'echo hi | cat - <(printf "%s" "$VALUE")') == ["VALUE"]
+
+
+PY_513_BODY = "import os\np = os.environ[\"VALUE\"]\n"
+
+
+@pytest.mark.parametrize("command", [
+    "${PY:-python3} -", "python.exe -", "python3-dbg -", "python3* -", "command python3: -",
+    "parallel ::: python3,python2",
+])
+def test_issue_513_an_interpreter_inside_a_longer_word_still_reads_the_heredoc(tmp_path, command):
+    run = f"{command} <<'PY'\n{PY_513_BODY}print(f\"::error::{{p}}\")\nPY"
+    assert check(tmp_path, run) == ["p"]
+
+
+@pytest.mark.parametrize("command, expected", [
+    ('"${PY:-python3}" -', ["PY", "p"]),
+    ("python.exe -", ["p"]),
+])
+def test_issue_513_an_env_file_heredoc_of_an_interpreter_inside_a_longer_word_is_read(tmp_path, command, expected):
+    run = f"{command} <<'PY' >> \"$GITHUB_OUTPUT\"\n{PY_513_BODY}print(f\"k={{p}}\")\nPY"
+    assert check(tmp_path, run) == expected
+
+
+@pytest.mark.parametrize("command", ["node.exe -", "bunx node -", "exec node -"])
+def test_issue_513_a_node_interpreter_variant_reads_the_heredoc(tmp_path, command):
+    run = f"{command} <<'JS'\nconst p = process.env.VALUE;\nconsole.log(`::error::${{p}}`);\nJS"
+    assert check(tmp_path, run) == ["p"]
+
+
+@pytest.mark.parametrize("command", [
+    "python3.12 -", "/usr/bin/env python3 -", "uv run python -", "sudo python3 -", "~/.venv/bin/python -",
+    '"$(command -v python3)" -', "[ -x x ] && python3 -", "xargs -n1 -I@ python3 -",
+])
+def test_issue_513_interpreter_words_keep_reading_the_heredoc(tmp_path, command):
+    run = f"{command} <<'PY'\n{PY_513_BODY}print(f\"::error::{{p}}\")\nPY"
+    assert check(tmp_path, run) == ["p"]
+
+
+@pytest.mark.parametrize("prefix, before, after", [
+    ("case a in a) ", "", " ;; esac"),
+    ("if true; then ", "", "\nfi"),
+    ("then ", "if true\n", "\nfi"),
+    ("! ", "", ""),
+    ("for i in 1; do ", "", " done"),
+    ("else ", "if false; then :\n", "\nfi"),
+    ("time ", "", ""),
+])
+def test_issue_513_a_shell_shown_redefined_after_a_keyword_has_no_mask(tmp_path, prefix, before, after):
+    run = f'{HELPER}\n{before}{prefix}shown() {{ cat <<<"$1"; }}{after}\necho "x $(shown "$VALUE")"'
+    # The redefinition's `cat <<<"$1"` is a log print of its own, `$1` first (#513).
+    assert check(tmp_path, run) == ["1", "<leading value>", "VALUE"]
+
+
+@pytest.mark.parametrize("decorator", ["@(lambda f:\n    str)", "@lambda f: \\\n    str"])
+def test_issue_513_a_python_shown_under_a_decorator_over_lines_is_not_canonical(tmp_path, decorator):
+    run = (f"{HELPER}\npython3 - <<'PY'\nimport os, re, sys\n{decorator}\n{ISSUE_513_PY_HELPER}"
+           "p = os.environ['VALUE']\nprint(f\"x {shown(p)}\")\nPY")
+    assert check_513(tmp_path, run) == ["shown"]
+
+
+def test_issue_513_a_bracketed_statement_above_the_python_shown_keeps_it_canonical(tmp_path):
+    run = (f"{HELPER}\npython3 - <<'PY'\nimport os, re, sys\nx = (1,\n    2)\n{ISSUE_513_PY_HELPER}"
+           "p = os.environ['VALUE']\nprint(f\"x {shown(p)}\")\nPY")
+    assert check_513(tmp_path, run) == []
+
+
+def test_issue_513_a_heredoc_in_a_group_opened_alone_and_teed_is_read_as_the_log(tmp_path):
+    run = (f"{HELPER}\n{{\npython3 - <<'PY'\nimport os, re, sys\n{ISSUE_513_PY_HELPER}p = os.environ['VALUE']\n"
+           "print(f\"{shown(p)}=x\")\nPY\n} | tee -a \"$GITHUB_OUTPUT\"")
+    assert check_513(tmp_path, run) == [guard.LEADING]
+
+
+@pytest.mark.parametrize("run, expected", [
+    ('{\n  echo "##[warning]$VALUE"\n} | cat', ["VALUE"]),
+    ('{\n  echo "##[warning]$VALUE"\n} | tee out.log', ["VALUE"]),
+    # Into another command a shell print stays unread, as on a line of its own.
+    ('{\n  echo "##[warning]$VALUE"\n} | sort', []),
+    (f'{HELPER}\n{{\n  echo "x $(shown "$VALUE")"\n}} | cat', []),
+])
+def test_issue_513_a_print_in_a_group_opened_alone_and_piped_into_cat_is_a_log_print(tmp_path, run, expected):
+    assert check(tmp_path, run) == expected
 
 
 PY_PRINTS = "python3 - <<'PY' >> \"$GITHUB_OUTPUT\"\nimport os\np = os.environ['P']\n{}\nPY"
@@ -1290,7 +1686,9 @@ def test_a_node_heredoc_into_the_summary_needs_md(tmp_path):
            "process.stdout.write(\n  `## T\\n${rows}\\n`\n);\nconsole.log(p);\nconsole.log('x' + p);\n"
            "console.error(`::error::${shown(p)}`);\nNODE")
     # `shown`: the log rule's finding for the stderr line, which it reads.
-    assert summary_names(tmp_path, raw) == ["shown", "k", "p", "rows", "p", "'x' + p"]
+    # `rows` twice: the write's line reads its call joined over the
+    # continuation line (#513), which is read on its own as well.
+    assert summary_names(tmp_path, raw) == ["shown", "k", "p", "rows", "rows", "p", "'x' + p"]
     shutil.rmtree(tmp_path / ".github")
     clean = (f"node <<'NODE' >> \"$GITHUB_STEP_SUMMARY\"\n{JS_MD}\nconst p = process.env.P;\n"
              "console.log('## T');\nconsole.log(`| ${mdCode(p)} | ${mdCode(p.length)} |`);\n"
@@ -1915,6 +2313,11 @@ UNKNOWN_FILES = [
 STREAM_PRELUDE = "from sys import stderr\nerr = sys.stderr\n"
 
 
+def opened(file_: str) -> list[str]:
+    """A heredoc that names an env file is refused on its own as well (#513)."""
+    return [guard.ENV_FILE_OPENED] if "GITHUB_OUTPUT" in file_ else []
+
+
 @pytest.mark.parametrize("opener", ["", ' >> "$GITHUB_OUTPUT"'])
 @pytest.mark.parametrize("file_", ["file=sys.__stderr__", "file=sys.__stdout__", "file=(sys.stderr)",
                                    "file=( sys.stdout )", *UNKNOWN_FILES])
@@ -1923,7 +2326,7 @@ def test_a_print_to_a_stream_the_guard_cant_rule_out_is_read(tmp_path, opener, f
     # `file=` but sys.stderr as stdout; the first cut of #511 dropped every
     # one but sys.stdout/sys.stderr.
     line = f'{STREAM_PRELUDE}print(f"x {{p}}", {file_})'
-    assert check(tmp_path, SHOWN_PY.format(opener, line), env=P_ENV) == ["p"]
+    assert check(tmp_path, SHOWN_PY.format(opener, line), env=P_ENV) == ["p", *opened(file_)]
 
 
 @pytest.mark.parametrize("file_", UNKNOWN_FILES)
@@ -1937,7 +2340,7 @@ def test_an_unknown_stream_of_an_env_file_heredoc_is_read_both_ways(tmp_path, fi
     assert checker.envfile_template(k) == ["p"]
     assert checker.log_template(k) == ["p"]
     assert checker.leading_print(k)
-    assert [n for _, n in names(tmp_path)] == ["p", guard.LEADING]
+    assert [n for _, n in names(tmp_path)] == ["p", guard.LEADING, *opened(file_)]
 
 
 def test_an_unknown_stream_of_a_summary_heredoc_is_read_both_ways(tmp_path):
@@ -2403,3 +2806,378 @@ def test_a_heredoc_teed_into_the_summary_is_read_as_the_log_as_well(tmp_path):
     run = SHOWN_PY.format(' | tee -a "$GITHUB_STEP_SUMMARY"', 'print(f"x {p}")')
     # Read by the summary rule and by the log rule both.
     assert sorted(check(tmp_path, run, env=P_ENV)) == ["p", "p"]
+
+
+# --- #513 (review round 2): interpreter suffixes, first interpreter, ------
+# --- string-aware decorator walk, tee process substitutions, every print ---
+
+
+@pytest.mark.parametrize("command", [
+    "python3.13t -", "python3.14t -", "python3.13d -", "python3.13td -", "python3.12m -", "python3.7m -",
+    "python3.13t.exe -", "pypy3.10t -", "/usr/bin/python3.13t -", "${PY:-python3.13t} -",
+])
+def test_issue_513_an_interpreter_with_a_build_suffix_reads_the_heredoc(tmp_path, command):
+    # A free-threaded (`t`), debug (`d`) or pymalloc (`m`) CPython build is
+    # still Python: its heredoc is read.
+    run = f"{command} <<'PY'\n{PY_513_BODY}print(f\"::error::{{p}}\")\nPY"
+    assert check(tmp_path, run) == ["p"]
+
+
+@pytest.mark.parametrize("command", ["node - python3", "python3 - node"])
+def test_issue_513_a_python_name_anywhere_before_the_heredoc_reads_it_as_python(tmp_path, command):
+    # As on develop: Python is searched for first over the whole text before
+    # the `<<`, so `node - python3` is read as Python (refused although harmless).
+    assert check(tmp_path, f"{command} <<'PY'\n{PY_513_BODY}print(f\"::error::{{p}}\")\nPY") == ["p"]
+
+
+@pytest.mark.parametrize("command", ["env X=node python3 -", "PY=python3; $PY -"])
+def test_issue_513_an_interpreter_name_in_an_assignment_reads_the_heredoc(tmp_path, command):
+    assert check(tmp_path, f"{command} <<'PY'\n{PY_513_BODY}print(f\"::error::{{p}}\")\nPY") == ["p"]
+
+
+@pytest.mark.parametrize("decorator", ['@(lambda f:\n    "(" and str)', "@(lambda f:\n    str)  # ("])
+def test_issue_513_a_bracket_in_a_string_or_comment_does_not_end_the_decorator_walk(tmp_path, decorator):
+    run = (f"{HELPER}\npython3 - <<'PY'\nimport os, re, sys\n{decorator}\n{ISSUE_513_PY_HELPER}"
+           "p = os.environ['VALUE']\nprint(f\"x {shown(p)}\")\nPY")
+    assert check_513(tmp_path, run) == ["shown"]
+
+
+def test_issue_513_a_bracket_in_a_string_above_the_python_shown_keeps_it_canonical(tmp_path):
+    run = (f"{HELPER}\npython3 - <<'PY'\nimport os, re, sys\nx = (\n    \")\")\n{ISSUE_513_PY_HELPER}"
+           "p = os.environ['VALUE']\nprint(f\"x {shown(p)}\")\nPY")
+    assert check_513(tmp_path, run) == []
+
+
+@pytest.mark.parametrize("line", [
+    'echo x | tee >(printf "%s\\n" "$VALUE")',
+    'echo x | tee >(sed "s/x/$VALUE/")',
+    'echo x | tee f | tee >(cat; echo "$VALUE")',
+])
+def test_issue_513_a_process_substitution_among_tee_s_words_prints(tmp_path, line):
+    assert check(tmp_path, f"{HELPER}\n{line}") == ["VALUE"]
+
+
+def test_issue_513_tee_s_file_words_stay_unprinted(tmp_path):
+    assert check(tmp_path, f'{HELPER}\necho x | tee "$VALUE"') == []
+
+
+@pytest.mark.parametrize("line", [
+    'echo x; echo "$VALUE"',
+    'echo x | tee f; echo "$VALUE"',
+    'echo x | tee f && echo "$VALUE"',
+    'echo x > f; echo "$VALUE"',
+])
+def test_issue_513_every_print_of_a_line_is_read(tmp_path, line):
+    # Not only the first: the second print reaches the log, and its value
+    # begins the printed line.
+    assert check(tmp_path, f"{HELPER}\n{line}") == ["VALUE", guard.LEADING]
+
+
+@pytest.mark.parametrize("line", [
+    'echo x > f; echo "y $(shown "$VALUE")"',
+    '{ echo a; echo "x $VALUE"; } > f',
+    '( echo "x $VALUE" ) > f',
+    'if true; then echo "x $VALUE"; fi > f',
+    'case "$a" in x) echo "y $VALUE" ;; esac > f',
+    '{ { echo "x $VALUE"; } | tee x; } > f',
+])
+def test_issue_513_a_later_print_masked_or_redirected_with_its_group_is_clean(tmp_path, line):
+    assert check(tmp_path, f"{HELPER}\n{line}") == []
+
+
+@pytest.mark.parametrize("line", [
+    '{ echo a; } > f; echo "x $VALUE"',
+    'echo "x $VALUE"; foo | sed s/a/b/',
+    '( echo "x $VALUE" ) | tee f',
+])
+def test_issue_513_a_print_outside_a_redirected_group_or_pipeline_is_a_log_print(tmp_path, line):
+    assert check(tmp_path, f"{HELPER}\n{line}") == ["VALUE"]
+
+
+ISSUE_513_PY_ENV_BODY = "import os\nprint(os.environ['VALUE'])\n"
+
+
+@pytest.mark.parametrize("command", [
+    "node --version; python3 -", "ls node_modules && python3 -", "jq . nodes.json | python3 -",
+    "node_version=20 python3 -", "bundle exec rake && python3 -", "node -e 'console.log(1)' | python3 -",
+    "node build.js && python3 -", "npm ci && node --version && python3 -", "cd bundle && python3 -",
+    "cat nodes.txt | python3 -", "./bin/bunyan x | python3 -", "denormalize x && python3 -",
+    "cd deno-app; python3 -", "nodeinfo | python3 -", "y=$(node -v; python3 -",
+])
+def test_issue_513_a_node_name_beside_a_python_one_leaves_the_heredoc_python(tmp_path, command):
+    # Python is searched for first over the whole text before the `<<`.
+    run = f"{command} <<'PY'\n{ISSUE_513_PY_ENV_BODY}PY"
+    assert check(tmp_path, run) == ["os.environ", guard.LEADING]
+
+
+@pytest.mark.parametrize("command", ["python_version=3 node -", "pythonpath=x node -", "cat pythonic.json | node -"])
+def test_issue_513_python_inside_a_longer_word_leaves_the_heredoc_node(tmp_path, command):
+    # PY_INTERPRETER needs a word end after the name: `python_version`,
+    # `pythonpath` and `pythonic` name no interpreter.
+    run = f"{command} <<'JS'\nconsole.log(process.env.VALUE)\nJS"
+    assert check(tmp_path, run) == ["process.env.VALUE", guard.LEADING]
+
+
+@pytest.mark.parametrize("command", ['f() { python3 "$@"; }; f -', 'PY=python3; "$PY" -'])
+def test_issue_513_an_interpreter_named_anywhere_on_the_line_reads_the_heredoc(tmp_path, command):
+    run = f"{command} <<'PY'\n{ISSUE_513_PY_ENV_BODY}PY"
+    assert check(tmp_path, run) == ["os.environ", guard.LEADING]
+
+
+@pytest.mark.parametrize("decorator", [
+    '@(lambda f:\n    f"{"("}" and str)',
+    '@(lambda f:\nf"{"("}" and str)',
+    "@(lambda f:\nstr\n)",
+])
+def test_issue_513_a_decorator_continued_through_a_nested_f_string_is_not_canonical(tmp_path, decorator):
+    # A PEP 701 f-string nests quotes, so no bracket count through it proves
+    # where the decorator ends.
+    run = (f"{HELPER}\npython3 - <<'PY'\nimport os, re, sys\n{decorator}\n{ISSUE_513_PY_HELPER}"
+           "p = os.environ['VALUE']\nprint('x', shown(p))\nPY")
+    assert check_513(tmp_path, run) == ["shown"]
+
+
+@pytest.mark.parametrize("line", [
+    'echo a; echo "$(shown "$VALUE")" | tee -a "$GITHUB_ENV"',
+    'echo a > f; echo "$(shown "$VALUE")" | tee -a "$GITHUB_ENV"',
+    'echo a > f; echo "$(shown "$VALUE")" | tee -a "$GITHUB_OUTPUT"',
+])
+def test_issue_513_a_later_print_teed_into_an_env_file_keeps_the_line_start_rule(tmp_path, line):
+    assert check(tmp_path, f"{HELPER}\n{line}") == [guard.LEADING]
+
+
+def test_issue_513_a_later_print_teed_into_an_env_file_with_a_literal_first_is_clean(tmp_path):
+    assert check(tmp_path, f'{HELPER}\necho a; echo "x=$(shown "$VALUE")" | tee -a "$GITHUB_ENV"') == []
+
+
+# --- #513 (review round 4): interpreter detection as on develop; every ------
+# --- print of a line piped into tee or cat read by the line-start rule -------
+
+# Forms that a narrower interpreter reading of earlier rounds let through:
+# each is refused as on develop, its heredoc read as Python.
+ISSUE_513_INTERPRETER_BLOCKERS = [
+    "node --version; python3 -", "ls node_modules && python3 -", "jq . nodes.json | python3 -",
+    "node_version=20 python3 -", "bundle exec rake && python3 -", "docker exec -i node python3 -",
+    "kubectl exec -i node-0 -- python3 -", "ssh node-a 'python3 -'", "sudo -u bun python3 -",
+    "env -C node python3 -", "case $x in (node) python3 -", "/opt/node/bin/python3 -", "./node/python3 -",
+    "node-env/bin/python -", 'PY=python3; env "$PY" -', "PY=python3; sudo $PY -",
+    'PY=python3; timeout 5 "$PY" -', "python3 - ${X//;/,}", "python3 - ${X:-a|b}", "python3 - ${X//&/x}",
+    "python3 - <&0", "python3 - 3<&0", "python3 - $[1|2]", "python3 - $'a\\';b'", "python3.13t -",
+    "python3.12m -", "python3.13t.exe -", "pypy3.10 -", "${PY:-python3} -", "python.exe -", "python3-dbg -",
+    "node - python3", "python3 - node", "./run-python-tests.sh",
+]
+
+
+@pytest.mark.parametrize("command", ISSUE_513_INTERPRETER_BLOCKERS)
+def test_issue_513_an_interpreter_blocker_of_the_review_rounds_is_refused(tmp_path, command):
+    assert check(tmp_path, f"{command} <<'PY'\n{ISSUE_513_PY_ENV_BODY}PY") == ["os.environ", guard.LEADING]
+
+
+@pytest.mark.parametrize("command", ['NODE=node; env "$NODE" -', "pythonpath=x node -", "cat pythonic.json | node -"])
+def test_issue_513_a_node_blocker_of_the_review_rounds_is_refused(tmp_path, command):
+    run = f"{command} <<'JS'\nconsole.log(process.env.VALUE)\nJS"
+    assert check(tmp_path, run) == ["process.env.VALUE", guard.LEADING]
+
+
+@pytest.mark.parametrize("sink", [' >> "$GITHUB_OUTPUT"', ' >> "$GITHUB_STEP_SUMMARY"'])
+@pytest.mark.parametrize("command", [
+    "docker exec -i node python3 -", "PY=python3; sudo $PY -", "python3 - ${X:-a|b}", "/opt/node/bin/python3 -",
+])
+def test_issue_513_an_interpreter_blocker_into_an_env_file_or_the_summary_is_refused(tmp_path, command, sink):
+    assert "os.environ" in check(tmp_path, f"{command} <<'PY'{sink}\n{ISSUE_513_PY_ENV_BODY}PY")
+
+
+@pytest.mark.parametrize("line", [
+    'echo a; { echo "$M=1"; } | tee -a "$GITHUB_ENV"',
+    'echo a; ( echo "$M=1" ) | tee -a "$GITHUB_ENV"',
+    'echo a; if true; then echo "$M=1"; fi | tee -a "$GITHUB_ENV"',
+    'command echo "$M=1" | tee -a "$GITHUB_ENV"',
+    'echo a; time echo "$M=1" | tee -a "$GITHUB_ENV"',
+    'echo a; { echo "$M=1"; } | tee -a "$GITHUB_OUTPUT"',
+    'echo a; { printf "%s=1\\n" "$M"; } | tee -a "$GITHUB_ENV"',
+    'echo a; { /bin/echo "$M=1"; } | cat',
+])
+def test_issue_513_every_print_of_a_line_piped_into_tee_keeps_the_line_start_rule(tmp_path, line):
+    # tee prints the entry to the log as well; which print feeds the pipe
+    # isn't told apart, so every print of the line is read from its start.
+    assert check(tmp_path, f'{HELPER}\nM=$(shown "$VALUE")\n{line}') == [guard.LEADING]
+
+
+@pytest.mark.parametrize("line", [
+    'echo a; { echo "x=$M"; } | tee -a "$GITHUB_ENV"',
+    'command echo "x=$M" | tee -a "$GITHUB_ENV"',
+    'echo a; if true; then echo "x=$M"; fi | tee -a "$GITHUB_ENV"',
+])
+def test_issue_513_every_print_of_a_teed_line_with_a_literal_first_is_clean(tmp_path, line):
+    assert check(tmp_path, f'{HELPER}\nM=$(shown "$VALUE")\n{line}') == []
+
+
+# --- review round 5: prefixed prints and the background `&` (#513) ----------
+
+PREFIXED_PRINTS = [
+    "time echo", "/bin/echo", "command echo", "builtin echo", "env echo", "env X=1 echo", "sudo echo",
+    "sudo -u root echo", "nohup echo", "exec echo", "\\echo", '"echo"', "'echo'", "e\\cho", "! echo", "eval echo",
+    "xargs echo", "nice -n 5 echo", "timeout 5 echo", "/usr/bin/printf '%s\\n'", 'builtin printf "%s\\n"',
+    "command printf 'x %s\\n'", "cat <<<",
+]
+
+
+@pytest.mark.parametrize("sink", ["", " >&2"])
+@pytest.mark.parametrize("value", ['"$VALUE"', '"x $VALUE"'])
+@pytest.mark.parametrize("before", ["", "echo a & ", 'echo "x $(shown "$VALUE")" & ', "echo a; "])
+@pytest.mark.parametrize("command", PREFIXED_PRINTS)
+def test_issue_513_a_prefixed_pathed_or_quoted_print_is_read_as_a_log_print(tmp_path, command, before, value, sink):
+    # A print after a prefix, by its path or with its word quoted runs all
+    # the same, also after a background `&` (#513 review round 5).
+    assert "VALUE" in check(tmp_path, f"{HELPER}\n{before}{command} {value}{sink}")
+
+
+@pytest.mark.parametrize("before", ["", "echo a & "])
+@pytest.mark.parametrize("command", [c for c in PREFIXED_PRINTS if "'%s" not in c and '"%s' not in c])
+def test_issue_513_a_prefixed_print_of_a_masked_value_is_clean(tmp_path, command, before):
+    value = '"x $(shown "$VALUE")"'
+    assert check(tmp_path, f"{HELPER}\n{before}{command} {value}") == []
+
+
+@pytest.mark.parametrize("command", ["time echo", "/bin/echo", '"echo"', "\\echo", "cat <<<"])
+def test_issue_513_a_prefixed_print_that_begins_with_a_masked_value_leads(tmp_path, command):
+    assert check(tmp_path, f'{HELPER}\n{command} "$(shown "$VALUE")"') == [guard.LEADING]
+
+
+def test_issue_513_a_prefixed_print_into_a_file_stays_unread(tmp_path):
+    assert check(tmp_path, f'{HELPER}\necho a & time echo "$VALUE" > out.txt') == []
+
+
+@pytest.mark.parametrize("line", [
+    'true & echo "x $VALUE" >& "$GITHUB_STEP_SUMMARY"',
+    'true & echo "x $VALUE" &> "$GITHUB_STEP_SUMMARY"',
+    'true & printf "%s" "$VALUE" >& "$GITHUB_STEP_SUMMARY"',
+    'true & echo "$VALUE" >& "$GITHUB_STEP_SUMMARY"',
+    'true & echo "x $VALUE" >> "$GITHUB_STEP_SUMMARY"',
+    ': & echo "x $VALUE" >> "$GITHUB_STEP_SUMMARY"',
+    'cd d & echo "x $VALUE" >> "$GITHUB_STEP_SUMMARY"',
+    'true & { echo "x $VALUE"; } >> "$GITHUB_STEP_SUMMARY"',
+    'true & echo "x $VALUE" >> $GITHUB_STEP_SUMMARY',
+])
+def test_issue_513_a_summary_write_after_a_background_command_is_read(tmp_path, line):
+    assert "VALUE" in check(tmp_path, line)
+
+
+@pytest.mark.parametrize("line", [
+    'true & echo "x $(md_code "$VALUE")" >> "$GITHUB_STEP_SUMMARY"',
+    'true && echo "x $(md_code "$VALUE")" >& "$GITHUB_STEP_SUMMARY"',
+    'echo "x $(md_code "$VALUE")" >> "$GITHUB_STEP_SUMMARY" 2>&1',
+])
+def test_issue_513_a_summary_write_after_a_background_command_encoded_is_clean(tmp_path, line):
+    assert check(tmp_path, "\n".join(guard.SHELL_MD) + "\n" + line) == []
+
+
+@pytest.mark.parametrize("sink", [
+    '| tee -a "$GITHUB_ENV"', '| cat >> "$GITHUB_ENV"', '| tee -a "$GITHUB_OUTPUT" >/dev/null',
+])
+@pytest.mark.parametrize("command", ['"echo"', "'echo'", "\\echo", "e\\cho", '"printf" "%s=1\\n"'])
+def test_issue_513_a_quoted_print_word_piped_into_tee_keeps_the_line_start_rule(tmp_path, command, sink):
+    value = '"$M"' if "printf" in command else '"$M=1"'
+    assert check(tmp_path, f'{HELPER}\nM=$(shown "$VALUE")\n{command} {value} {sink}') == [guard.LEADING]
+
+
+def test_issue_513_an_echo_argument_word_is_read_as_a_print(tmp_path):
+    # Refused although harmless: any `echo` word counts from there.
+    assert check(tmp_path, 'grep -c echo "$VALUE"') == ["VALUE", guard.LEADING]
+
+
+# A line that writes an env file and the step summary is read by the summary
+# rule too, statement by statement, not only by the env-file rules (#513
+# review round 6): `$(shown ...)` is no Markdown encoding.
+MASKED = '"x $(shown "$VALUE")"'
+ON_ENV_FILE_LINES = [
+    f'echo {MASKED} {SUMMARY}; echo a >> "$GITHUB_OUTPUT"',
+    f'echo {MASKED} >& "$GITHUB_STEP_SUMMARY"; echo a >> "$GITHUB_OUTPUT"',
+    f'echo {MASKED} &> "$GITHUB_STEP_SUMMARY"; echo a >> "$GITHUB_OUTPUT"',
+    f'echo a >> "$GITHUB_ENV" && echo {MASKED} | tee -a "$GITHUB_STEP_SUMMARY"',
+    f'for i in 1; do echo {MASKED} 2>> "$GITHUB_OUTPUT"; done {SUMMARY}',
+    f'{{ echo {MASKED}; echo a >> "$GITHUB_ENV"; }} {SUMMARY}',
+    f'{{\n  echo {MASKED}; echo a >> "$GITHUB_ENV"\n}} {SUMMARY}',
+    f'{{\n  echo {MASKED}\n}} {SUMMARY} 2>> "$GITHUB_OUTPUT"',
+]
+
+
+@pytest.mark.parametrize("line", ON_ENV_FILE_LINES + [f"echo {MASKED} {SUMMARY}"])
+def test_issue_513_a_masked_value_on_a_summary_and_env_file_line_is_refused(tmp_path, line):
+    assert "VALUE" in check(tmp_path, f"{HELPER}\n{line}")
+
+
+@pytest.mark.parametrize("line", [line for line in ON_ENV_FILE_LINES if "| tee" not in line])
+def test_issue_513_a_masked_then_encoded_value_on_a_summary_and_env_file_line_is_clean(tmp_path, line):
+    run = f'{HELPER}\n{MD}\nM=$(shown "$VALUE")\n' + line.replace(MASKED, '"x $(md_code "$M")"')
+    assert check(tmp_path, run) == []
+
+
+@pytest.mark.parametrize("line", [
+    f'echo "v=$(shown "$VALUE")" >> "$GITHUB_OUTPUT"; echo fixed {SUMMARY}',
+    f'echo "v=$(shown "$VALUE")" >> "$GITHUB_ENV" & echo fixed >& "$GITHUB_STEP_SUMMARY"',
+    f'{{ echo fixed; echo "v=$(shown "$VALUE")" >> "$GITHUB_ENV"; }} {SUMMARY}',
+])
+def test_issue_513_a_masked_env_file_statement_beside_a_literal_summary_write_is_clean(tmp_path, line):
+    assert check(tmp_path, f"{HELPER}\n{line}") == []
+
+
+@pytest.mark.parametrize("line", [
+    f'echo "v=$VALUE" >> "$GITHUB_OUTPUT"; echo fixed {SUMMARY}',
+    f'echo "x $(md_code "$VALUE")" {SUMMARY}; echo "v=$VALUE" >> "$GITHUB_ENV"',
+])
+def test_issue_513_the_env_file_reading_of_a_summary_line_holds(tmp_path, line):
+    assert check(tmp_path, f"{HELPER}\n{MD}\n{line}") == ["VALUE"]
+
+
+def test_issue_513_a_stderr_append_inside_a_summary_loop_leaves_stdout_there(tmp_path):
+    # `2>> f` sends only stderr into f: the echo still prints to the summary.
+    assert check(tmp_path, f'for i in 1; do echo "x $VALUE" 2>> f; done {SUMMARY}') == ["VALUE"]
+
+
+@pytest.mark.parametrize("opener", [
+    f'cat <<EOF {SUMMARY} 2>> "$GITHUB_OUTPUT"',
+    f'cat <<EOF >> "$GITHUB_OUTPUT"; echo fixed {SUMMARY}',
+])
+def test_issue_513_a_heredoc_whose_opener_writes_an_env_file_and_the_summary_is_a_summary_heredoc(tmp_path, opener):
+    # Refused although harmless: the opener reads as a command other than a
+    # bare `cat`, and every heredoc line as a summary line.
+    assert check(tmp_path, f"{HELPER}\n{opener}\nx $(shown \"$VALUE\")\nEOF") == [guard.OUTPUT_NAME, "VALUE"]
+
+
+def test_issue_513_a_python_heredoc_whose_opener_writes_an_env_file_and_the_summary_is_read_for_it(tmp_path):
+    run = (f"python3 - <<'PY' {SUMMARY} 2>> \"$GITHUB_OUTPUT\"\nimport os\n{PY_HELPER}"
+           "v = os.environ['VALUE']\nprint(f\"x {shown(v)}\")\nPY")
+    assert check(tmp_path, run) == ["shown"]
+
+
+@pytest.mark.parametrize("line", ["v=$VALUE", "x ${VALUE}", "do x=$VALUE", "then $VALUE }"])
+def test_issue_513_a_summary_heredoc_line_shaped_like_a_statement_is_printed_text(tmp_path, line):
+    assert check(tmp_path, f"cat <<EOF {SUMMARY}\n{line}\nEOF") == ["VALUE"]
+
+
+def test_issue_513_an_encoded_value_on_a_summary_and_env_file_line_is_refused_by_the_env_file_rule(tmp_path):
+    # Refused although harmless: md_code is no mask for the env-file rule.
+    assert check(tmp_path, f'{MD}\necho "x $(md_code "$VALUE")" {SUMMARY}; echo a >> "$GITHUB_OUTPUT"') == ["VALUE"]
+
+
+@pytest.mark.parametrize("line", [
+    f'{{ echo "x $VALUE" >&2; }} >& "$GITHUB_STEP_SUMMARY"',
+    f'{{ echo "x $VALUE" > /dev/stderr; }} &> "$GITHUB_STEP_SUMMARY"',
+    f'{{ echo "x $VALUE" >&2; }} {SUMMARY}',
+    f'{{ echo "x $VALUE" >&1; }} {SUMMARY}',
+    f'{{ echo "x $VALUE" > "/dev/stdout"; }} {SUMMARY}',
+])
+def test_issue_513_a_print_to_a_standard_stream_inside_a_summary_group_is_a_summary_print(tmp_path, line):
+    # Under `>&`/`&>` stderr goes to the summary too; `>&1` and /dev/stdout
+    # are the group's stdout. Under `>>` stderr is the log, read here too.
+    assert "VALUE" in check(tmp_path, line)
+
+
+def test_issue_513_a_masked_print_to_stderr_inside_a_summary_group_is_refused(tmp_path):
+    # Refused although harmless: stderr is the log there, where the mask suffices.
+    assert check(tmp_path, f'{HELPER}\n{{ echo "x $(shown "$VALUE")" >&2; }} {SUMMARY}') == ["VALUE"]
+
+
+def test_issue_513_a_print_into_a_file_inside_a_summary_group_stays_unread(tmp_path):
+    assert check(tmp_path, f'{{ echo "x $VALUE" > f; }} {SUMMARY}') == []
