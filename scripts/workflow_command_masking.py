@@ -39,7 +39,10 @@ Predicate: EVERY line of a `run:` body that
     statement of the line, not only the first, each read by its own
     pipeline's redirects and those of a group, compound or subshell the line
     closes around it (`echo x > f; echo "$V"`, `echo x | tee f && echo
-    "$V"`; `{ echo "$V"; } > f` is a file's, #513) --, the words of the
+    "$V"`; `{ echo "$V"; } > f` is a file's, #513, but not a print in it
+    that sends its own stdout to stderr, another descriptor or a standard
+    stream: `{ echo "$V" >&2; } > f`, `( echo "$V" > /dev/stderr ) > f`,
+    #515) --, the words of the
     commands it pipes into counting with it, but for a `tee`'s, which name
     files, up to a process substitution among them, whose commands print
     (`| tee >(echo "$V")`, #513) (`| cat - <(printf "%s" "$V")`; in a group
@@ -61,7 +64,11 @@ Predicate: EVERY line of a `run:` body that
     print into a plain file is not read. A redirect to `/dev/stdout`,
     `/dev/stderr`, `/dev/fd/1` or `2`, `/proc/self/fd/1` or `2`, or into a
     process substitution (`> >(cat)`) is the log, not a file (#513), in
-    shell and on a heredoc's opener alike. Such a print is read as strictly as an env-file line
+    shell and on a heredoc's opener alike; so is a redirect of another
+    file descriptor (`2>> err.log`, `2> f`: the second `>` of `2>>` is no
+    stdout redirect, #515) and a duplication of stdout after the last file
+    redirect (`> f >&2`), on a print, a here-string, a group's closer and a
+    heredoc's opener. Such a print is read as strictly as an env-file line
     (below, #511): every print call on the line, every argument that is not
     one plain string literal, `end=`, `sep=` and the continuation lines of
     the call, which tell its stream as well (`file=sys.stderr` on one makes
@@ -364,10 +371,6 @@ Not covered (each would need a parser this script doesn't have):
     `eval` or `source` (shell), `exec` or an import machinery call (Python)
     or `require`/`eval` (Node); and a `case` compound redirected there (its
     arms read as commands, so that one errs towards a finding);
-  * on a log line, a Python or Node heredoc whose stdout the guard reads as
-    going to a file though bash sends it to the log: `>&2 2>> f` sends stdout
-    to the log's stderr and only then stderr to f, but the `>>` reads as a
-    stdout redirect, so its stdout prints are not read (#511 found it);
   * a heredoc fed to an interpreter the guard doesn't name -- only
     `python*`, `pypy*`, `node`, `deno` and `bun` are read (`ruby`, `perl`,
     `php`, `uv run -` without the word `python`): with a quoted delimiter
@@ -607,6 +610,26 @@ heredoc reading err towards a finding, #507):
     heredoc's `$` lines are refused, with a quoted one its prints are read
     as Python or Node -- rename the script, or keep the interpreter's name
     off the line.
+
+Refused although harmless (the log rule's redirect reading errs towards a
+finding, #515):
+
+  * a print whose stdout bash sends to a file or nowhere through a redirect
+    the guard reads as the log: `1> f`, `&> f`, `>& f` and `>&-` (`1>> f`,
+    `>> f` and `&>> f` are read as files) -- on a print, on a group's closer
+    and on a heredoc's opener alike;
+  * a print inside a group, compound or subshell redirected into a file
+    that sends its own stdout to stderr, another descriptor or a standard
+    stream, where the group's redirect takes that off the log as well (`{
+    echo "$V" >&2; } 2>> f`, `{ echo "$V" >&2; } > f 2>&1`, `} &> f`),
+    duplicates onto a descriptor that isn't open (`>&3`) or prints to the
+    group's stdout after all (`> /dev/stdout`, `> >(cat)` under `} > f`):
+    every such print is read as a log print -- write the file directly
+    instead (`echo "$V" > f`), or mask the value;
+  * a heredoc opened inside a `{`-alone group redirected into a plain file
+    whose opener redirects another descriptor (`{`, `python3 - <<'PY' 2>>
+    err.log`, ..., `} > f`): a heredoc is read by its own opener, as one
+    without any redirect there always was.
 
 Refused although harmless (the summary rule errs towards a finding):
 
@@ -1203,13 +1226,27 @@ STD_STREAM = re.compile(r"""(?<![0-9])>&\s*[12]\b|/dev/std(?:out|err)\b|/dev/fd/
 LOG_TARGET = re.compile(r"""\s*(?:["']?(?:/dev/std(?:out|err)|/dev/fd/0*[12]|/proc/self/fd/0*[12])\b|>\()""")
 
 
+# A redirect of stdout into a file: `>`, `>>`, `>|`, and `1>>`, `01>>`, `&>>`
+# -- not one of another descriptor (`2>> f`, `2> f`, `12>> f`), whose second
+# `>` is no stdout redirect of its own (#515). (`1> f` and `&> f` stay read as
+# the log, as before.)
+STDOUT_REDIRECT = re.compile(r"(?<![0-9&<>])(?:&(?=>>)|0*1(?=>>))?(?P<op>>>?)(?!&)\s*")
+# A duplication of stdout onto another descriptor (`>&2`, `1>&2`, `>&3`,
+# `>&"$fd"`) -- not `>&-`, which closes it, nor `>& file`, bash's `&> file`,
+# nor another descriptor's (`2>&1`). Read on unquoted text, where a quoted
+# target is blank: it counts.
+STDOUT_DUP = re.compile(r"(?<![0-9])(?:0*1)?>&(?!\s*-)(?!\s*[A-Za-z_./])")
+
+
 def destination(text: str) -> str:
     """Where a shell line's stdout goes: log, file, envfile, summary or pipe.
 
     A redirect to `/dev/stdout`, `/dev/stderr`, `/dev/fd/1` or `2`,
     `/proc/self/fd/1` or `2`, or into a process substitution `>(...)` is the
     log (#513), failing closed: one such redirect makes the line a log line,
-    whatever other redirect it holds.
+    whatever other redirect it holds. Another descriptor's redirect (`2>>
+    f`) leaves stdout on the log, and so does a duplication of stdout after
+    the last file redirect (`> f >&2`, #515).
     """
     bare = unquoted(text)
     if ENV_FILE.search(text):
@@ -1218,8 +1255,11 @@ def destination(text: str) -> str:
         return "summary"
     if PIPE.search(bare):
         return "pipe"
-    redirects = [m for m in re.finditer(r"(?<![0-9&<])(>>?)(?!&)\s*", bare)]
-    if any(LOG_TARGET.match(text, m.end(1)) for m in redirects):
+    redirects = list(STDOUT_REDIRECT.finditer(bare))
+    if any(LOG_TARGET.match(text, m.end("op")) for m in redirects):
+        return "log"
+    # The last stdout redirect wins: `> f >&2` prints to the log (#515).
+    if redirects and any(m.start() > redirects[-1].start() for m in STDOUT_DUP.finditer(bare)):
         return "log"
     for m in redirects:
         if ENV_FILE.search(text[m.start():]):
@@ -1428,6 +1468,21 @@ def is_comment_unit(unit: Logical) -> bool:
 
 
 TO_STDERR = re.compile(r"(?<![0-9])>&\s*2|&>|/dev/std(?:err|out)")
+# A standard stream or another descriptor by its path, or a process
+# substitution: read on the text, quoted or not (`> "/dev/stderr"`).
+STREAM_PATH = re.compile(r"/dev/std(?:out|err)\b|/dev/fd/[0-9]|/proc/self/fd/[0-9]|>\(")
+
+
+def to_std_stream(text: str) -> bool:
+    """A shell statement sends its own stdout to stderr, another descriptor or a standard stream (#515).
+
+    `>&2`, `1>&2`, `>&02`, `>&3`, `>&"$fd"`, `> /dev/stderr`, `>/dev/fd/2`,
+    `> >(cat)`: a group's file redirect doesn't take such a print off the
+    log. Failing closed: a path counts wherever it stands on the statement.
+    """
+    return bool(STDOUT_DUP.search(unquoted(text)) or STREAM_PATH.search(text))
+
+
 OPENERS = {"{", "for", "while", "until", "select", "if", "case"}
 CLOSERS = {"}", "done", "fi", "esac"}
 
@@ -1593,8 +1648,14 @@ def logged_prints(text: str) -> list[tuple[re.Match | PrintWord, int]]:
     def close(ids: list[int], closer: str) -> None:
         if reaches_log(closer):
             (stack[-1][1] if stack else top).extend(ids)
-        else:
-            for i in ids:
+            return
+        for i in ids:
+            # A print that sends its own stdout to stderr or a standard stream
+            # stays a log print: the group's file redirect doesn't reach it
+            # (`{ echo "$V" >&2; } > f`, #515).
+            if i in logged and to_std_stream(text[i:logged[i][1]]):
+                (stack[-1][1] if stack else top).append(i)
+            else:
                 logged.pop(i, None)
 
     for n, (a, b, sep) in enumerate(pieces):
@@ -1721,7 +1782,8 @@ def redirected_groups(units: list[Logical]) -> tuple[set[int], set[int], set[int
                 redirected.update(m for m in members if (m != opened or first) and (m != k or last))
     # A line inside such a group that sends its own stdout to stderr prints to
     # the log after all: the log rule keeps reading it.
-    redirected = {i for i in redirected if not TO_STDERR.search(unquoted(units[i].text))}
+    redirected = {i for i in redirected
+                  if not (TO_STDERR.search(unquoted(units[i].text)) or to_std_stream(units[i].text))}
     return redirected, envfile, summary, piped
 
 

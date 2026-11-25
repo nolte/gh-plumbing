@@ -1313,10 +1313,8 @@ def test_stderr_or_stdout_kept_on_the_log_is_no_env_file(tmp_path, redirect):
     helper = f"import re\n{PY_HELPER}"
     assert check(tmp_path, STDERR_PY.format(redirect, 'print("v=" + p, file=sys.stderr)')) == ['"v=" + p']
     assert check(tmp_path, STDERR_PY.format(redirect, f'{helper}print(f"v={{shown(p)}}", file=sys.stderr)')) == []
-    if "/tmp/log" not in redirect:
-        # (With `>&2 2>> /tmp/log` bash sends stdout to the log, but the guard
-        # reads the heredoc's stdout as a file: a known gap, not #511's.)
-        assert check(tmp_path, STDERR_PY.format(redirect, f'{helper}print(shown(p))')) == ["<leading value>"]
+    # With `>&2 2>> /tmp/log` bash sends stdout to the log too: read so since #515.
+    assert check(tmp_path, STDERR_PY.format(redirect, f'{helper}print(shown(p))')) == ["<leading value>"]
 
 
 # --- the allow-list ----------------------------------------------------------
@@ -3181,3 +3179,93 @@ def test_issue_513_a_masked_print_to_stderr_inside_a_summary_group_is_refused(tm
 
 def test_issue_513_a_print_into_a_file_inside_a_summary_group_stays_unread(tmp_path):
     assert check(tmp_path, f'{{ echo "x $VALUE" > f; }} {SUMMARY}') == []
+
+
+# --- #515: another descriptor's `2>>` and a grouped print to stderr ---------
+
+# `2>> f` sends only stderr into f; the second `>` is no stdout redirect.
+STDERR_ONLY = ["2>> err.log", "2>>err.log", "2> err.log", "12>> f", ">&2 2>> err.log", "1>&2 2>> err.log"]
+
+
+@pytest.mark.parametrize("redirect", STDERR_ONLY)
+@pytest.mark.parametrize("statement", [
+    'echo "x $VALUE"', "printf 'x %s\\n' \"$VALUE\"", 'cat <<< "x $VALUE"', 'command echo "x $VALUE"',
+])
+def test_issue_515_a_print_whose_stderr_alone_is_redirected_prints_to_the_log(tmp_path, redirect, statement):
+    assert check(tmp_path, f"{HELPER}\n{statement} {redirect}") == ["VALUE"]
+
+
+@pytest.mark.parametrize("redirect", STDERR_ONLY)
+def test_issue_515_a_masked_print_whose_stderr_alone_is_redirected_is_clean(tmp_path, redirect):
+    assert check(tmp_path, f'{HELPER}\necho "x $(shown "$VALUE")" {redirect}') == []
+
+
+@pytest.mark.parametrize("redirect", ["2>> err.log", ">&2 2>> err.log", "12>> f"])
+def test_issue_515_a_python_heredoc_whose_stderr_alone_is_redirected_prints_to_the_log(tmp_path, redirect):
+    run = f"python3 - <<'PY' {redirect}\nimport os\nprint('::error::' + os.environ['VALUE'])\nPY"
+    assert check(tmp_path, run) == ["'::error::' + os.environ['VALUE']"]
+
+
+def test_issue_515_a_shell_heredoc_whose_stderr_alone_is_redirected_prints_to_the_log(tmp_path):
+    assert check(tmp_path, "cat <<EOF 2>> err.log\nx $VALUE\nEOF") == ["VALUE"]
+
+
+@pytest.mark.parametrize("redirect", ["> f", ">> f", "1>> f", "01>> f", "&>> f", ">| f", "2>> e > f",
+                                      ">&2 > f", "2>&1 > f", "> f 2>&1"])
+def test_issue_515_a_print_whose_stdout_goes_to_a_file_stays_unread(tmp_path, redirect):
+    assert check(tmp_path, f'echo "x $VALUE" {redirect}') == []
+
+
+@pytest.mark.parametrize("redirect", ["> f >&2", ">> f 1>&2", "> f >&3", '> f >&"$fd"'])
+def test_issue_515_a_duplication_of_stdout_after_its_file_redirect_prints_to_the_log(tmp_path, redirect):
+    # The last stdout redirect wins: stdout ends on stderr (or an unknown descriptor).
+    assert check(tmp_path, f'fd=2\necho "x $VALUE" {redirect}') == ["VALUE"]
+
+
+@pytest.mark.parametrize("run", [
+    '{ echo "x $VALUE" >&2; } > f.txt',
+    '( echo "x $VALUE" >&2 ) > f.txt',
+    '{ echo "x $VALUE" > /dev/stderr; } > f.txt',
+    '{ echo "x $VALUE" 1>&2; } >> f.txt',
+    '{ echo "x $VALUE" >&02; } > f.txt',
+    '{ echo "x $VALUE" >/dev/fd/2; } > f.txt',
+    '{ echo "x $VALUE" >/proc/self/fd/2; } > f.txt',
+    '{ echo "x $VALUE" > f >&2; } > g',
+    '{ { echo "x $VALUE" >&2; } > f; } > g',
+    'for i in 1; do echo "x $VALUE" >&2; done > f.txt',
+    'if true; then echo "x $VALUE" >&2; fi > f.txt',
+    '{ printf \'x %s\\n\' "$VALUE" >&2; } > f.txt',
+    '{ cat <<< "x $VALUE" >&2; } > f.txt',
+    '{ echo "x $VALUE"; } 2>> f.txt',
+    '( echo "x $VALUE" ) 2>> f.txt',
+    '{\n  echo "x $VALUE"\n} 2>> f.txt',
+    '{\n  echo "x $VALUE" 1>&2\n} > f.txt',
+    '{\n  echo "x $VALUE" > /dev/fd/2\n} > f.txt',
+])
+def test_issue_515_a_grouped_print_to_stderr_under_a_file_redirect_is_a_log_print(tmp_path, run):
+    assert check(tmp_path, f"{HELPER}\n{run}") == ["VALUE"]
+
+
+@pytest.mark.parametrize("run", [
+    '{ echo "x $(shown "$VALUE")" >&2; } > f.txt',
+    '( echo "x $(shown "$VALUE")" > /dev/stderr ) > f.txt',
+    '{ echo "x $VALUE"; } > f.txt',
+    '( echo "x $VALUE" ) >> f.txt',
+    '{ echo "x $VALUE" >&2 > f; } > g',
+    '{ echo "x $VALUE" 2>> e; } > f.txt',
+])
+def test_issue_515_a_grouped_print_into_the_file_or_masked_is_clean(tmp_path, run):
+    assert check(tmp_path, f"{HELPER}\n{run}") == []
+
+
+@pytest.mark.parametrize("run", [
+    '{ echo "x $VALUE" >&2; } 2>> f.txt',
+    '{ echo "x $VALUE" >&2; } > f.txt 2>&1',
+    '{ echo "x $VALUE" > /dev/stdout; } > f.txt',
+    'echo "x $VALUE" 1> f',
+    'echo "x $VALUE" &> f',
+])
+def test_issue_515_a_print_the_redirect_reading_puts_on_the_log_is_refused_although_harmless(tmp_path, run):
+    # The group's redirect (or bash's reading of `1>`/`&>`) takes the print
+    # off the log after all; the guard reads it as a log print.
+    assert check(tmp_path, f"{HELPER}\n{run}") == ["VALUE"]
