@@ -89,7 +89,7 @@ def test_a_raw_input_in_a_sink_is_a_finding(tmp_path, line):
 
 @pytest.mark.parametrize("line", [
     'echo "$VALUE" > file.txt',
-    'echo "$VALUE" | jq .',
+    'echo "$VALUE" | jq . > out.json',
     "echo '::error::$VALUE'",
     '# echo "::error::$VALUE"',
     'echo "::error::${{ inputs.value }}"',
@@ -541,9 +541,10 @@ def test_issue_513_a_shell_print_piped_into_tee_or_cat_is_a_log_print(tmp_path, 
     assert check(tmp_path, f'{HELPER}\necho "##[warning]$VALUE" {pipe}') == ["VALUE"]
 
 
-def test_issue_513_a_print_piped_into_another_command_stays_unread(tmp_path):
-    # Not covered: the guard doesn't follow what `grep` prints.
-    assert check(tmp_path, f'{HELPER}\necho "x $VALUE" | grep x') == []
+def test_issue_513_a_print_piped_into_another_command_is_a_log_print(tmp_path):
+    # grep prints the matching line to the log: read so since #515, whatever
+    # the command after the pipe does (what grep prints isn't followed).
+    assert check(tmp_path, f'{HELPER}\necho "x $VALUE" | grep x') == ["VALUE"]
 
 
 def test_issue_513_the_file_tee_writes_is_not_charged_to_the_print(tmp_path):
@@ -794,7 +795,9 @@ def test_issue_513_a_command_piped_into_in_a_redirected_group_writes_the_env_fil
 
 
 def test_issue_513_the_arguments_of_cat_after_a_pipe_are_printed(tmp_path):
-    assert check(tmp_path, 'echo hi | cat - <(printf "%s" "$VALUE")') == ["VALUE"]
+    # Since #515 the printf in the process substitution is a log print of its
+    # own, which begins its line with the value.
+    assert check(tmp_path, 'echo hi | cat - <(printf "%s" "$VALUE")') == ["VALUE", guard.LEADING]
 
 
 PY_513_BODY = "import os\np = os.environ[\"VALUE\"]\n"
@@ -2846,13 +2849,15 @@ def test_issue_513_a_bracket_in_a_string_above_the_python_shown_keeps_it_canonic
     assert check_513(tmp_path, run) == []
 
 
-@pytest.mark.parametrize("line", [
-    'echo x | tee >(printf "%s\\n" "$VALUE")',
-    'echo x | tee >(sed "s/x/$VALUE/")',
-    'echo x | tee f | tee >(cat; echo "$VALUE")',
+@pytest.mark.parametrize("line, leads", [
+    ('echo x | tee >(printf "%s\\n" "$VALUE")', True),
+    ('echo x | tee >(sed "s/x/$VALUE/")', False),
+    ('echo x | tee f | tee >(cat; echo "$VALUE")', True),
 ])
-def test_issue_513_a_process_substitution_among_tee_s_words_prints(tmp_path, line):
-    assert check(tmp_path, f"{HELPER}\n{line}") == ["VALUE"]
+def test_issue_513_a_process_substitution_among_tee_s_words_prints(tmp_path, line, leads):
+    # Since #515 a print inside a `>(...)` is a log print of its own, so a
+    # value that begins its text is a leading value as well.
+    assert check(tmp_path, f"{HELPER}\n{line}") == ["VALUE"] + [guard.LEADING] * leads
 
 
 def test_issue_513_tee_s_file_words_stay_unprinted(tmp_path):
@@ -3355,3 +3360,92 @@ def test_issue_515_a_whole_heredoc_delimiter_is_not_quoted_in_part(opener):
 
 def test_issue_515_a_partly_quoted_delimiter_in_a_comment_or_quoted_heredoc_body_is_not_refused(tmp_path):
     assert check(tmp_path, '# cat <<"E"OF\ncat <<\'X\'\ncat <<"E"OF\nX') == []
+
+
+# --- #515: pipeline tails, backticks and process substitutions -------------
+
+
+@pytest.mark.parametrize("line", [
+    'echo `true | tee f` "x $VALUE"',
+    'echo `true; true > f` "x $VALUE"',
+    'echo "x $VALUE" `true > f`',
+    'echo x | sed "s/x/$VALUE/"',
+    'echo x |& sed "s/x/$VALUE/"',
+    'echo x | sed p | awk "{print \\"$VALUE\\"}"',
+    'echo x | sed "s/x/$VALUE/" >&2',
+    'echo "x $VALUE" | sed p',
+    'true | echo "##[warning]$VALUE"',
+    'true > /dev/null | echo "x $VALUE"',
+    'cat <(echo "x $VALUE")',
+    'cat - <(printf "x %s" "$VALUE") <<< a',
+    'cat <(true; echo "x $VALUE") | sed p',
+    'true > >(echo "x $VALUE")',
+    'tee f >(echo "x $VALUE") > /dev/null',
+    '{ cat <(echo "x $VALUE"); }',
+])
+def test_issue_515_a_print_through_a_pipeline_tail_backtick_or_process_substitution_is_read(tmp_path, line):
+    assert "VALUE" in check(tmp_path, f"{HELPER}\n{line}")
+
+
+@pytest.mark.parametrize("line", [
+    'echo `true | tee f` "x $(shown "$VALUE")"',
+    'echo x | sed "s/x/$(shown "$VALUE")/"',
+    'true | echo "x $(shown "$VALUE")"',
+    'cat <(echo "x $(shown "$VALUE")")',
+    'echo "x $VALUE" | sed p > f',
+    'echo "x $VALUE" | jq -R . >> out.json',
+    'cat <(echo "x $VALUE") > f',
+    '{ cat <(echo "x $VALUE"); } > f',
+    'mapfile -t a < <(printf "x %s\\n" "$VALUE")',
+    'while read -r l; do :; done < <(echo "x $VALUE")',
+    'x=`echo "x $VALUE" | sed p`',
+    'x=$(cat <(echo "x $VALUE"))',
+    'echo "x `echo a | tee f`"',
+])
+def test_issue_515_a_masked_captured_or_redirected_pipeline_is_clean(tmp_path, line):
+    assert check(tmp_path, f"{HELPER}\n{line}") == []
+
+
+@pytest.mark.parametrize("line", ['echo "x $VALUE" | grep -q x', 'echo "x $VALUE" | wc -l'])
+def test_issue_515_a_print_into_a_command_that_prints_nothing_of_it_is_refused_although_harmless(tmp_path, line):
+    # What the last command of a pipeline writes reaches the log; what it
+    # does with the print's text isn't read.
+    assert check(tmp_path, f"{HELPER}\n{line}") == ["VALUE"]
+
+
+def test_issue_515_a_leading_value_inside_a_process_substitution_is_refused(tmp_path):
+    assert check(tmp_path, f'{HELPER}\ncat <(echo "$(shown "$VALUE")")') == [guard.LEADING]
+
+
+@pytest.mark.parametrize("closer", ['>> "$GITHUB_STEP_SUMMARY"', '| tee -a "$GITHUB_STEP_SUMMARY"'])
+@pytest.mark.parametrize("statement", [
+    'true > /dev/null | echo "x $VALUE"',
+    'true > f |& echo "x $VALUE"',
+    'echo a 2> f | echo "x $VALUE"',
+])
+def test_issue_515_a_summary_group_reads_a_pipeline_by_its_last_command(tmp_path, closer, statement):
+    # A redirect earlier in the pipeline doesn't take its output off the
+    # summary (after `|&` the print reads as a command: `<command output>`).
+    found = check(tmp_path, f"{MD}\n{{ {statement}; }} {closer}")
+    assert "VALUE" in found or guard.OUTPUT_NAME in found
+
+
+def test_issue_515_a_summary_group_pipeline_into_a_file_is_not_read(tmp_path):
+    assert check(tmp_path, f'{MD}\n{{ echo "x $VALUE" | sed p > f; }} >> "$GITHUB_STEP_SUMMARY"') == []
+
+
+@pytest.mark.parametrize("text, spans", [
+    ('cat <(echo "$V")', [("<", 6, 15)]),
+    ('x "<(" <(a) $(b <(c)) >(d)', [("<", 9, 10), (">", 24, 25)]),
+    ("echo '<(a)' `b <(c)` \"$(<(d))\"", []),
+    ("cat <(a (b) c", [("<", 6, 13)]),
+])
+def test_issue_515_process_substitutions_are_found_at_the_top_of_the_line(text, spans):
+    assert guard.process_substitutions(text) == spans
+
+
+def test_issue_515_backticks_are_blanked_like_a_command_substitution():
+    assert guard.unquoted("echo `a | b` c") == "echo         c"
+    text = "echo '`a | b`' \"`a | b`\""
+    assert guard.unquoted(text) == "echo " + " " * (len(text) - 5)
+    assert guard.unquoted("echo `a | b` c", backticks=False) == "echo `a | b` c"
