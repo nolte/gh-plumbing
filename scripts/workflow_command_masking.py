@@ -241,6 +241,20 @@ feeds: bash ends it on the whole word with its quotes removed (`EOF`, `PY`),
 the guard would read only the first part (`E`, `P`) and every line after the
 heredoc as its body -- as data, unread, after a quoted first part.
 
+A line that opens more than one heredoc, or where the heredoc's
+destination would be read from another statement's redirect, is refused
+(`<heredoc opener>`, #515), whatever the heredoc feeds: a heredoc is read by
+its opener's whole line, so `cat <<EOF; true > /dev/null` would read as a
+heredoc into a file, though its lines go to the log, and of `cat <<'A' >
+/dev/null; cat <<EOF` (`cmd <<A <<B`) only the first would be read, the
+lines of the later one as shell statements. Refused are: a second `<<` on
+the line; another statement -- after `;`, `&&`, `||`, `&` or a subshell's
+`(`/`)` -- whose redirect changes how the heredoc is read, but for the
+closer of a group, compound or subshell the heredoc is opened in (`{ cat
+<<EOF; } > f`, `if ...; then cat <<EOF; fi > f`, `( cat <<EOF ) > f` are
+read as before); and a heredoc's command that pipes into another but sends
+its own stdout elsewhere (`cat <<EOF >&2 | true`).
+
 The step summary is a third sink with its own rule (#506). GitHub renders
 `$GITHUB_STEP_SUMMARY` as Markdown, so a controlled value there can add a
 link, an image, a heading, a mention or a table cell. Every line whose output
@@ -421,12 +435,6 @@ Not covered (each would need a parser this script doesn't have):
     `<unknown writer>` instead (`say = print`, `functools.partial(print,
     file=sys.stderr)`, `console["error"]`, `const e = console.error`, see
     below);
-  * a line that opens more than one heredoc (`cat <<'A' > /dev/null; cat
-    <<EOF`, `cmd <<A <<B`): only the first is read; the lines of every later
-    one are read as shell statements, so a quote there hides a `$` the
-    shell expands (#515). Nor is a heredoc's destination told apart from
-    another statement's on its line: `cat <<EOF; true > /dev/null` reads
-    as a heredoc into a file, though its lines go to the log;
   * an interpreter fed by a pipe (`cat <<PY | python3 -`): the heredoc is
     `cat`'s, read as data or shell text, and the interpreter's own stdout is
     not followed; nor a redirect written before the command (`<<'PY' python3
@@ -593,8 +601,9 @@ heredoc reading err towards a finding, #507):
     quote the whole delimiter;
   * a stdout print of a Python or Node heredoc piped into a command that
     doesn't print it (#511): `| jq . > out.json`, `| sort >> "$GITHUB_OUTPUT"`,
-    `| wc -l`, a pipe later on the opener's line (`python3 - <<'PY' && a |
-    b`): the guard doesn't follow a pipeline's output, so every pipe is read
+    `| wc -l` (a pipe later on the opener's line, `python3 - <<'PY' && a |
+    b`, is refused as `<heredoc opener>` since #515, see above): the guard
+    doesn't follow a pipeline's output, so every pipe is read
     as reaching the log -- mask the value, or redirect the heredoc's own
     stdout (`python3 - <<'PY' > out.json`); likewise a shell print piped into
     `cat` or `tee` that writes elsewhere after all (`| cat > f`, `| cat >
@@ -666,6 +675,14 @@ of an unquoted shell heredoc err towards a finding, #515):
     whose opener redirects another descriptor (`{`, `python3 - <<'PY' 2>>
     err.log`, ..., `} > f`): a heredoc is read by its own opener, as one
     without any redirect there always was;
+  * a heredoc opener refused as `<heredoc opener>` (above) whose heredoc
+    bash would send where the guard reads it after all, or whose other
+    statement's redirect only makes the reading stricter: `cat <<EOF >>
+    "$GITHUB_OUTPUT"; echo a >> "$GITHUB_STEP_SUMMARY"`, `cat <<EOF > f |
+    cat`, `python3 - <<'PY' && a | b`, `cmd <<A <<B` read correctly by
+    chance, a second `<<` in quoted text or in arithmetic (`echo "<<EOF"`,
+    `$(( a<<b ))`) -- open one heredoc per line, as the only statement
+    there;
   * a print piped into commands that don't print its text, the last of
     which leaves its stdout on the log (`echo "$V" | grep -q x`, `| wc -l`,
     `| sha256sum --check -`): what the last command of a pipeline writes
@@ -1385,6 +1402,92 @@ def partly_quoted_delimiter(text: str) -> bool:
     return False
 
 
+def heredoc_reading(text: str, match: re.Match) -> tuple[str, bool, bool, bool]:
+    """How a heredoc opened by `match` on the shell line `text` is read: destination, piped, fd_logged, summary.
+
+    Read from the whole line, its other statements' redirects included, not
+    from the heredoc's own statement; `ambiguous_heredoc_opener` refuses a
+    line where the two differ (#515).
+    """
+    rest = text[:match.start()] + text[match.end():]
+    dest = destination(rest)
+    piped = PIPE.search(unquoted(text[:match.start()] + " " + text[match.end():])) is not None
+    fd_logged = dest == "envfile" and destination(OTHER_FD_TO_ENV_FILE.sub(" ", rest)) == "log"
+    return dest, piped, fd_logged, writes_summary(rest)
+
+
+HEREDOC_OPENER_NAME = "<heredoc opener>"
+# A stdout redirect of a command, to a file, a descriptor or a standard stream
+# (`> f`, `>> f`, `>| f`, `1> f`, `&> f`, `>& f`, `>&2`, `1>&2`) -- not another
+# descriptor's (`2> f`, `2>&1`).
+OWN_STDOUT_REDIRECT = re.compile(r"(?<![0-9&<>])(?:0*1)?>(?!\()|&>")
+
+
+def ambiguous_heredoc_opener(text: str) -> bool:
+    """A shell line whose heredoc the guard can't tell the destination of (#515, `<heredoc opener>`).
+
+    * It opens more than one heredoc (`cat <<'A' > /dev/null; cat <<EOF`,
+      `cmd <<A <<B`): bash reads their bodies one after the other, the
+      guard only the first, and the lines of every later one as shell
+      statements.
+    * Another statement on it -- after `;`, `&&`, `||`, `&` or a subshell's
+      `(`/`)` -- carries a redirect that changes how the heredoc is read
+      (`cat <<EOF; true > /dev/null`, `echo a > f; cat <<EOF`): a heredoc
+      is read by its opener's whole line. A closer that ends a group or
+      subshell the heredoc is opened in (`{ cat <<EOF; } > f`, `if ...; then
+      cat <<EOF; fi > f`) is the heredoc's own and doesn't count.
+    * The heredoc's command pipes into another command but sends its own
+      stdout elsewhere (`cat <<EOF >&2 | true`, `cat <<EOF > f | cat`): the
+      line is read by its pipe.
+
+    `<<<` and a line that is a comment don't open a heredoc.
+    """
+    if text.lstrip().startswith("#"):
+        return False
+    matches = list(HEREDOC.finditer(text))
+    if len(matches) != 1:
+        return len(matches) > 1
+    match = matches[0]
+    blank = text[:match.start()] + " " * len(match.group()) + text[match.end():]
+    bare = ARRAY_LITERAL.sub(lambda m: " " * len(m.group()), unquoted(blank))
+    pipelines, start = [], 0
+    for m in PIPELINE_SPLIT.finditer(bare):
+        pipelines.append((start, m.start(), m.group()))
+        start = m.end()
+    pipelines.append((start, len(bare), ""))
+    own = next(n for n, (a, b, _) in enumerate(pipelines) if a <= match.start() <= b)
+    # The heredoc's command, and whether a pipe follows it.
+    a, b, _ = pipelines[own]
+    pipes = [m for m in PIPE.finditer(bare, a, b)]
+    after = next((m for m in pipes if m.start() >= match.start()), None)
+    head = max((m.end() for m in pipes if m.end() <= match.start()), default=a)
+    if after is not None and OWN_STDOUT_REDIRECT.search(bare, head, after.start()):
+        return True
+    # Every other statement blanked, but a closer of a group or subshell the
+    # heredoc is opened in: does the heredoc read the same?
+    keep = {own}
+    depth = 0
+    for n in range(own + 1, len(pipelines)):
+        separator = pipelines[n - 1][2]
+        if separator == "(":
+            depth += 1
+        elif separator == ")":
+            if depth:
+                depth -= 1
+            else:
+                keep.add(n)  # the redirect of a subshell the heredoc is in
+        opens, closes = segment_role(bare[pipelines[n][0]:pipelines[n][1]])
+        if closes > depth:
+            keep.add(n)
+        depth = max(depth - closes, 0) + opens
+    alone = list(text)
+    for n, (a, b, _) in enumerate(pipelines):
+        if n not in keep:
+            alone[a:b] = " " * (b - a)
+    alone_text = "".join(alone)
+    return heredoc_reading(alone_text, HEREDOC.search(alone_text)) != heredoc_reading(text, match)
+
+
 def logical_lines(lines: list[str]) -> list[Logical]:
     out: list[Logical] = []
     i = 0
@@ -1414,10 +1517,7 @@ def logical_lines(lines: list[str]) -> list[Logical]:
         match = HEREDOC.search(text)
         if match and not text.lstrip().startswith("#"):
             command = text[:match.start()]
-            rest = text[:match.start()] + text[match.end():]
-            dest = destination(rest)
-            piped = PIPE.search(unquoted(text[:match.start()] + " " + text[match.end():])) is not None
-            fd_logged = dest == "envfile" and destination(OTHER_FD_TO_ENV_FILE.sub(" ", rest)) == "log"
+            dest, piped, fd_logged, summary = heredoc_reading(text, match)
             # Quoted delimiter: text the shell leaves alone. Unquoted: the
             # shell expands it -- in a Python or Node heredoc too, before the
             # interpreter reads it (see UNQUOTED_NAME).
@@ -1432,7 +1532,7 @@ def logical_lines(lines: list[str]) -> list[Logical]:
             # The whole line, not the heredoc's own statement: the summary
             # rule errs towards a finding (#513).
             heredoc = (match.group(3), lang, dest, len(out) - 1, expands, match.group(0).startswith("<<-"), piped,
-                       fd_logged, writes_summary(rest))
+                       fd_logged, summary)
         i += 1
     return out
 
@@ -3807,6 +3907,13 @@ def audit_body(body: Body, siblings: list[Body] | None = None, entries: tuple[Al
                 f"`{LEADING}`: this log line begins with an interpolated value. No mask touches a "
                 "leading '::', so put a literal in front of it."))
     for unit in checker.units:
+        if unit.lang == "sh" and not is_comment(unit.text) and ambiguous_heredoc_opener(unit.text):
+            findings.append(finding(
+                body.path, body.first_line + unit.index, body.step,
+                f"`{HEREDOC_OPENER_NAME}`: this line opens more than one heredoc, or holds a redirect of another "
+                "statement or command that the guard would read as the heredoc's own, so it can't tell where the "
+                "heredoc's lines go. Open one heredoc per line, as the only statement there "
+                "(cat <<EOF >> \"$GITHUB_OUTPUT\"), and put other statements on lines of their own."))
         if unit.lang == "sh" and not is_comment(unit.text) and partly_quoted_delimiter(unit.text):
             findings.append(finding(
                 body.path, body.first_line + unit.index, body.step,

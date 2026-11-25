@@ -3138,14 +3138,17 @@ def test_issue_513_a_stderr_append_inside_a_summary_loop_leaves_stdout_there(tmp
     assert check(tmp_path, f'for i in 1; do echo "x $VALUE" 2>> f; done {SUMMARY}') == ["VALUE"]
 
 
-@pytest.mark.parametrize("opener", [
-    f'cat <<EOF {SUMMARY} 2>> "$GITHUB_OUTPUT"',
-    f'cat <<EOF >> "$GITHUB_OUTPUT"; echo fixed {SUMMARY}',
+@pytest.mark.parametrize("opener, other", [
+    (f'cat <<EOF {SUMMARY} 2>> "$GITHUB_OUTPUT"', []),
+    # Since #515 the other statement's redirect is refused as well.
+    (f'cat <<EOF >> "$GITHUB_OUTPUT"; echo fixed {SUMMARY}', [guard.HEREDOC_OPENER_NAME]),
 ])
-def test_issue_513_a_heredoc_whose_opener_writes_an_env_file_and_the_summary_is_a_summary_heredoc(tmp_path, opener):
+def test_issue_513_a_heredoc_whose_opener_writes_an_env_file_and_the_summary_is_a_summary_heredoc(tmp_path, opener,
+                                                                                                    other):
     # Refused although harmless: the opener reads as a command other than a
     # bare `cat`, and every heredoc line as a summary line.
-    assert check(tmp_path, f"{HELPER}\n{opener}\nx $(shown \"$VALUE\")\nEOF") == [guard.OUTPUT_NAME, "VALUE"]
+    found = check(tmp_path, f"{HELPER}\n{opener}\nx $(shown \"$VALUE\")\nEOF")
+    assert sorted(found) == sorted([guard.OUTPUT_NAME, "VALUE", *other])
 
 
 def test_issue_513_a_python_heredoc_whose_opener_writes_an_env_file_and_the_summary_is_read_for_it(tmp_path):
@@ -3449,3 +3452,39 @@ def test_issue_515_backticks_are_blanked_like_a_command_substitution():
     text = "echo '`a | b`' \"`a | b`\""
     assert guard.unquoted(text) == "echo " + " " * (len(text) - 5)
     assert guard.unquoted("echo `a | b` c", backticks=False) == "echo `a | b` c"
+
+
+# --- #515: a heredoc opener line read by another statement's redirect ------
+
+
+@pytest.mark.parametrize("run", [
+    "cat <<'A' > /dev/null; cat <<EOF\nn\nA\nx $VALUE\nEOF",
+    "cat <<EOF; true > /dev/null\nx $VALUE\nEOF",
+    "cat <<EOF; cat <<'A' > /dev/null\nx $VALUE\nEOF\nn\nA",
+    "cat <<A <<B\nn\nA\nx $VALUE\nB",
+    "echo a > f; cat <<EOF\nx $VALUE\nEOF",
+    "( true ) > f; cat <<EOF\nx $VALUE\nEOF",
+    "cat <<EOF; { true; } > f\nx $VALUE\nEOF",
+    "cat <<EOF & true > f\nx $VALUE\nEOF",
+    "cat <<EOF >&2 | true\nx $VALUE\nEOF",
+    "true > f && python3 - <<'PY'\nimport os\nprint('::error::' + os.environ['VALUE'])\nPY",
+])
+def test_issue_515_a_heredoc_opener_read_by_another_statement_is_refused(tmp_path, run):
+    assert guard.HEREDOC_OPENER_NAME in check(tmp_path, f"{HELPER}\n{run}")
+
+
+@pytest.mark.parametrize("opener", [
+    "cat <<EOF", "cat <<EOF > f; echo x", "{ cat <<EOF; } > f", "( cat <<EOF ) > f",
+    "if true; then cat <<EOF; fi > f", "cat <<EOF | tee f", "x=$(cat <<EOF", "cat <<EOF;", "a | cat <<EOF > f",
+    "cat <<EOF 2>&1 | sed p", "cat <<< x; cat <<EOF", 'cat <<EOF >> "$GITHUB_OUTPUT" && echo done', "true & cat <<EOF",
+    "python3 - <<'PY' > out.json || exit 1", "# cat <<A; cat <<B",
+])
+def test_issue_515_a_heredoc_opener_read_by_its_own_statement_is_not_refused(opener):
+    assert not guard.ambiguous_heredoc_opener(opener)
+
+
+def test_issue_515_a_heredoc_opener_refusal_names_the_line(tmp_path):
+    root = tmp_path / "repo"
+    write(root, ".github/workflows/reusable-x.yaml", workflow(f"{HELPER}\ncat <<EOF; true > /dev/null\nx\nEOF"))
+    findings, _ = guard.audit(root)
+    assert [(f["line"], guard.HEREDOC_OPENER_NAME in f["message"]) for f in findings] == [(13, True)]
