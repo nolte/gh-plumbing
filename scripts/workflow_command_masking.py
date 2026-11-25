@@ -33,8 +33,9 @@ Predicate: EVERY line of a `run:` body that
     `| sed p`, `| grep x` too, and a print at the end of a pipeline, `true |
     echo "$V"`: what the last command writes reaches the log, #515), also
     inside a process substitution -- a `>(...)`, or a `<(...)` read by `cat`
-    (`cat <(echo "$V")`, #515) -- or next to a backtick substitution, which
-    is blanked like a `$(...)` (`` echo `true | tee f` "$V" ``, #515) -- one after a
+    (`cat <(echo "$V")`, #515) -- or next to a backtick substitution, the
+    line read both with it blanked like a `$(...)` (`` echo `true | tee f`
+    "$V" ``) and with its text as the line's own, as before (#515) -- one after a
     prefix, by its path or with its word quoted or escaped too (`time echo`,
     `command echo`, `env X=1 echo`, `sudo -u u echo`, `xargs echo`,
     `/bin/echo`, `"echo"`, `\\echo`, `e\\cho`), and a `cat <<<` here-string,
@@ -252,8 +253,10 @@ the line; another statement -- after `;`, `&&`, `||`, `&` or a subshell's
 `(`/`)` -- whose redirect changes how the heredoc is read, but for the
 closer of a group, compound or subshell the heredoc is opened in (`{ cat
 <<EOF; } > f`, `if ...; then cat <<EOF; fi > f`, `( cat <<EOF ) > f` are
-read as before); and a heredoc's command that pipes into another but sends
-its own stdout elsewhere (`cat <<EOF >&2 | true`).
+read as before) where the heredoc's command doesn't redirect its stdout
+itself (`{ cat <<EOF >&2; } > f` is refused); and a heredoc's command that
+pipes into another but sends its own stdout elsewhere (`cat <<EOF >&2 |
+true`).
 
 The step summary is a third sink with its own rule (#506). GitHub renders
 `$GITHUB_STEP_SUMMARY` as Markdown, so a controlled value there can add a
@@ -333,11 +336,10 @@ Not covered (each would need a parser this script doesn't have):
     checked, its output is not; #492 found `du` echoing a file name that way)
     -- and a print inside a `<(...)` read by a command other than `cat`
     (`diff <(echo "$V") f`, `done < <(printf ...)`): it is that command's
-    input, and what the command prints isn't read; nor a line of a shell
-    heredoc piped into a command other than `tee` or `cat` (`cat <<EOF |
-    sed p`), which is read by the opener's pipe alone. A print piped into
-    another command is read as a log print where the pipeline's last
-    command doesn't redirect its stdout (#515, below);
+    input, and what the command prints isn't read. A print, or a line of
+    an unquoted shell heredoc, piped into another command is read as a log
+    line where the pipeline's last command doesn't redirect its stdout
+    (`cat <<EOF | sed p`, #515, below);
   * a summary write inside a command substitution: the body of `$(...)` is
     blanked before sinks are read, so `out=$(echo "$V" | tee -a
     "$GITHUB_STEP_SUMMARY")` and `x=$(echo "$V" >> "$GITHUB_STEP_SUMMARY")`
@@ -687,8 +689,11 @@ of an unquoted shell heredoc err towards a finding, #515):
     which leaves its stdout on the log (`echo "$V" | grep -q x`, `| wc -l`,
     `| sha256sum --check -`): what the last command of a pipeline writes
     reaches the log, and what it does with the print's text isn't read, so
-    the print is read as a log print -- mask the value, or redirect the last
-    command's stdout (`| jq . > out.json`).
+    the print is read as a log print (not one that sends its own stdout into
+    a file before the pipe, `echo "$V" > f | true`; but one piped into `tee`
+    or `cat` is read so, as before) -- also in a group whose closer pipes
+    so (`} | grep -q x`) -- mask the value, or redirect the last command's
+    stdout (`| jq . > out.json`).
 
 Refused although harmless (the summary rule errs towards a finding):
 
@@ -1234,15 +1239,17 @@ class Logical:
         return self.dest == "log" or self.piped or self.fd_logged
 
 
-def unquoted(text: str, fill: str = " ", backticks: bool = True) -> str:
-    """The text with quoted strings, `$(...)` and a backtick substitution blanked, for finding `|` and `>`.
+def unquoted(text: str, fill: str = " ", backticks: bool = False) -> str:
+    """The text with quoted strings and `$(...)` blanked, for finding `|` and `>`.
 
     `fill` is the character they are blanked with: a space by default, a
     word character where word boundaries must survive (`"a"#` is one word).
-    A backtick substitution is blanked like a `$(...)` (#515): its `|`, `;`
-    and `>` are its commands', so `` echo `true | tee f` "$V" `` is a print
-    to the log, as `echo $(true | tee f) "$V"` is. `backticks=False` leaves
-    one as text, for `print_words`, which reads a print inside one as before.
+    With `backticks`, a backtick substitution outside quotes is blanked like
+    a `$(...)` too (#515): its `|`, `;` and `>` are its commands', so ``echo
+    `true | tee f` "$V"`` is a print to the log, as `echo $(true | tee f)
+    "$V"` is. `logged_prints` reads a line both ways, failing closed: a line
+    read with a backtick's text as its own -- the reading before #515 --
+    keeps every print it found.
     """
     return _unquoted(text, fill, backticks)[0]
 
@@ -1252,7 +1259,7 @@ def opens_substitution(text: str) -> bool:
     return _unquoted(text, " ")[1] > 0
 
 
-def _unquoted(text: str, fill: str, backticks: bool = True) -> tuple[str, int]:
+def _unquoted(text: str, fill: str, backticks: bool = False) -> tuple[str, int]:
     """`unquoted`, and the depth of `$(...)` left open at the end of the text."""
     out = []
     i, quote, depth = 0, None, 0
@@ -1311,7 +1318,7 @@ STDOUT_REDIRECT = re.compile(r"(?<![0-9&<>])(?:&(?=>>)|0*1(?=>>))?(?P<op>>>?)(?!
 STDOUT_DUP = re.compile(r"(?<![0-9])(?:0*1)?>&(?!\s*-)(?!\s*[A-Za-z_./])")
 
 
-def destination(text: str) -> str:
+def destination(text: str, backticks: bool = False) -> str:
     """Where a shell line's stdout goes: log, file, envfile, summary or pipe.
 
     A redirect to `/dev/stdout`, `/dev/stderr`, `/dev/fd/1` or `2`,
@@ -1319,12 +1326,12 @@ def destination(text: str) -> str:
     log (#513), failing closed: one such redirect makes the line a log line,
     whatever other redirect it holds. Another descriptor's redirect (`2>>
     f`) leaves stdout on the log, and so does a duplication of stdout after
-    the last file redirect (`> f >&2`, #515).
+    the last file redirect (`> f >&2`, #515). `backticks`: as in `unquoted`.
     """
-    bare = unquoted(text)
+    bare = unquoted(text, backticks=backticks)
     if ENV_FILE.search(text):
         return "envfile"
-    if writes_summary(text):
+    if writes_summary(text, backticks):
         return "summary"
     if PIPE.search(bare):
         return "pipe"
@@ -1341,7 +1348,7 @@ def destination(text: str) -> str:
     return "log"
 
 
-def writes_summary(text: str) -> bool:
+def writes_summary(text: str, backticks: bool = False) -> bool:
     """A shell line writes the step summary somewhere: a redirect there or a `tee`/`dd` into it.
 
     `destination` names one sink per line and an env file comes first, so a
@@ -1351,16 +1358,17 @@ def writes_summary(text: str) -> bool:
     """
     if SUMMARY_TEE.search(text):
         return True
-    return any(SUMMARY_FILE.match(text, m.start()) for m in re.finditer(r"(?<![0-9<])>", unquoted(text)))
+    return any(SUMMARY_FILE.match(text, m.start())
+               for m in re.finditer(r"(?<![0-9<])>", unquoted(text, backticks=backticks)))
 
 
-def pipes_to_log(text: str) -> bool:
+def pipes_to_log(text: str, backticks: bool = False) -> bool:
     """A shell line pipes into `tee` or `cat`, which print what they read to the log (#513).
 
     Failing closed: wherever `tee` writes besides, and whatever follows `cat`
     (`| cat > f` is read as the log too).
     """
-    segments = statements_of(text)
+    segments = statements_of(text, backticks)
     for i, (_, _, separator) in enumerate(segments[:-1]):
         if separator != "|":
             continue
@@ -1435,7 +1443,9 @@ def ambiguous_heredoc_opener(text: str) -> bool:
       (`cat <<EOF; true > /dev/null`, `echo a > f; cat <<EOF`): a heredoc
       is read by its opener's whole line. A closer that ends a group or
       subshell the heredoc is opened in (`{ cat <<EOF; } > f`, `if ...; then
-      cat <<EOF; fi > f`) is the heredoc's own and doesn't count.
+      cat <<EOF; fi > f`) is the heredoc's own and doesn't count -- unless
+      the heredoc's command redirects its stdout itself and the closer's
+      redirect changes that reading (`{ cat <<EOF >&2; } > f`).
     * The heredoc's command pipes into another command but sends its own
       stdout elsewhere (`cat <<EOF >&2 | true`, `cat <<EOF > f | cat`): the
       line is read by its pipe.
@@ -1480,12 +1490,22 @@ def ambiguous_heredoc_opener(text: str) -> bool:
         if closes > depth:
             keep.add(n)
         depth = max(depth - closes, 0) + opens
-    alone = list(text)
-    for n, (a, b, _) in enumerate(pipelines):
-        if n not in keep:
-            alone[a:b] = " " * (b - a)
-    alone_text = "".join(alone)
-    return heredoc_reading(alone_text, HEREDOC.search(alone_text)) != heredoc_reading(text, match)
+    reading = heredoc_reading(text, match)
+
+    def without(kept: set[int]) -> tuple[str, bool, bool, bool]:
+        alone = list(text)
+        for n, (a, b, _) in enumerate(pipelines):
+            if n not in kept:
+                alone[a:b] = " " * (b - a)
+        alone_text = "".join(alone)
+        return heredoc_reading(alone_text, HEREDOC.search(alone_text))
+
+    if without(keep) != reading:
+        return True
+    # A stdout redirect of the heredoc's own command beats a closer's (`{ cat
+    # <<EOF >&2; } > f` prints to the log).
+    own_end = after.start() if after is not None else pipelines[own][1]
+    return bool(OWN_STDOUT_REDIRECT.search(bare, head, own_end)) and without({own}) != reading
 
 
 def logical_lines(lines: list[str]) -> list[Logical]:
@@ -1698,13 +1718,13 @@ ENV_FILE_NAMED = re.compile(r"\bGITHUB_(?:ENV|OUTPUT|STATE|PATH|STEP_SUMMARY)\b"
 ARRAY_LITERAL = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\+?=\([^()]*\)")
 
 
-def statements_of(text: str) -> list[tuple[str, str, str]]:
+def statements_of(text: str, backticks: bool = False) -> list[tuple[str, str, str]]:
     """(text, unquoted text, separator after it) for every statement-level segment.
 
     An array literal closed on the same line is blanked first, so `kw=(if fi)`
     neither splits a statement nor opens or closes a group.
     """
-    bare = ARRAY_LITERAL.sub(lambda m: " " * len(m.group()), unquoted(text))
+    bare = ARRAY_LITERAL.sub(lambda m: " " * len(m.group()), unquoted(text, backticks=backticks))
     out, start = [], 0
     for m in STATEMENT_SPLIT.finditer(bare):
         out.append((text[start:m.start()], bare[start:m.start()], m.group()))
@@ -1739,7 +1759,7 @@ def segment_role(bare: str) -> tuple[int, int]:
 PIPELINE_SPLIT = re.compile(r";|&&|\|\||(?<![>&|])&(?![>&])|[()]")
 
 
-def reaches_log(text: str) -> bool:
+def reaches_log(text: str, backticks: bool = False) -> bool:
     """A shell pipeline's stdout reaches the log: not redirected, piped into `tee` or `cat`, or out of its last command.
 
     What the last command of a pipeline writes to stdout reaches the log
@@ -1749,13 +1769,14 @@ def reaches_log(text: str) -> bool:
     with its text isn't read, so `echo "$V" | grep -q x` reads as a log print
     too.
     """
-    dest = destination(text)
-    return dest == "log" or (dest == "pipe" and (pipes_to_log(text) or destination(last_command(text)) == "log"))
+    dest = destination(text, backticks)
+    return dest == "log" or (dest == "pipe" and (pipes_to_log(text, backticks)
+                                                 or destination(last_command(text, backticks), backticks) == "log"))
 
 
-def last_command(text: str) -> str:
+def last_command(text: str, backticks: bool = False) -> str:
     """The last command of a shell pipeline: the text after its last `|` (or `|&`)."""
-    pipes = list(PIPE.finditer(unquoted(text)))
+    pipes = list(PIPE.finditer(unquoted(text, backticks=backticks)))
     return text[pipes[-1].end():].removeprefix("&") if pipes else text
 
 
@@ -1796,9 +1817,8 @@ def print_words(text: str, a: int = 0, b: int | None = None) -> list[PrintWord]:
     the here-string: read as an `echo` of the text after the `<<<`.
     """
     b = len(text) if b is None else b
-    # Backticks left as text: a print inside one is read as before (#515).
-    words = ARRAY_LITERAL.sub(lambda m: " " * len(m.group()), unquoted(text, "x", backticks=False))
-    bare = ARRAY_LITERAL.sub(lambda m: " " * len(m.group()), unquoted(text, backticks=False))
+    words = ARRAY_LITERAL.sub(lambda m: " " * len(m.group()), unquoted(text, "x"))
+    bare = ARRAY_LITERAL.sub(lambda m: " " * len(m.group()), unquoted(text))
     out = []
     for w in SHELL_WORD.finditer(words, a, b):
         plain = re.sub(r"""\$(?=['"])""", "", text[w.start():w.end()])
@@ -1868,9 +1888,26 @@ def logged_prints(text: str) -> list[tuple[re.Match | PrintWord, int]]:
     a `>(...)` its stdout is the line's, in a `<(...)` read by `cat` on a
     pipeline that reaches the log it is what cat prints (`cat <(echo "$V")`);
     a `<(...)` read by another command (`mapfile -t a < <(printf ...)`) is
-    that command's input, not read.
+    that command's input, not read -- but for a print in it that sends its
+    own stdout to stderr or a standard stream (`<(echo "$V" >&2)`).
+
+    The line is read twice, failing closed (#515): with a backtick
+    substitution's text as the line's own, as before, and with it blanked
+    like a `$(...)` (`` echo `true | tee f` "$V" ``: its pipe is not the
+    print's, `` echo `true > f` "$V" ``: nor its redirect). A print either
+    reading finds is logged, to the later of its two ends.
     """
-    bare = ARRAY_LITERAL.sub(lambda m: " " * len(m.group()), unquoted(text))
+    merged: dict[int, tuple[re.Match | PrintWord, int]] = {}
+    for backticks in (False, True):
+        for m, end in _logged_prints(text, backticks):
+            if m.start(1) not in merged or merged[m.start(1)][1] < end:
+                merged[m.start(1)] = (m, end)
+    return [merged[i] for i in sorted(merged)]
+
+
+def _logged_prints(text: str, backticks: bool) -> list[tuple[re.Match | PrintWord, int]]:
+    """`logged_prints` for one reading of a backtick substitution (see `unquoted`)."""
+    bare = ARRAY_LITERAL.sub(lambda m: " " * len(m.group()), unquoted(text, backticks=backticks))
     pieces, start = [], 0
     for m in PIPELINE_SPLIT.finditer(bare):
         pieces.append((start, m.start(), m.group()))
@@ -1882,7 +1919,7 @@ def logged_prints(text: str) -> list[tuple[re.Match | PrintWord, int]]:
     stack: list[tuple[bool, list[int]]] = []  # (a subshell's `(`, the logged prints inside)
 
     def close(ids: list[int], closer: str) -> None:
-        if reaches_log(closer):
+        if reaches_log(closer, backticks):
             (stack[-1][1] if stack else top).extend(ids)
             return
         for i in ids:
@@ -1902,28 +1939,40 @@ def logged_prints(text: str) -> list[tuple[re.Match | PrintWord, int]]:
             # Only the last closer of `} }` carries the segment's redirect.
             close(stack.pop()[1], text[a:b] if c == closes - 1 else "")
         stack += [(False, []) for _ in range(opens)]
-        logs = reaches_log(text[a:b])
+        logs = reaches_log(text[a:b], backticks)
+        # Logged only by its last command (#515): a print that sends its own
+        # stdout into a file before the next pipe doesn't feed it.
+        by_tail = logs and destination(text[a:b], backticks) == "pipe" and not pipes_to_log(text[a:b], backticks)
         if logs:
             # Every print word of the pipeline, each to its statement's end:
             # one after a prefix, by its path or quoted too (`print_words`).
             found = {p.start(1): p for p in [*print_words(text, a, b), *prints] if a <= p.start(1) < b}
             for at in sorted(found):
                 m = found[at]
+                if by_tail:
+                    pipe = PIPE.search(bare, m.end(), b)
+                    if destination(text[at:pipe.start() if pipe else b], backticks) == "file":
+                        continue
                 end = STATEMENT_END.search(bare, m.end(), b)
                 logged[at] = (m, end.start() if end else b)
                 (stack[-1][1] if stack else top).append(at)
         for kind, start, stop in process_substitutions(text):
             if not a <= start < b:
                 continue
+            read = True
             if kind == "<":
                 head = bare[a:start - 2] if logs else ""
                 pipes = list(PIPE.finditer(head))
                 stage = head[pipes[-1].end():].lstrip("&") if pipes else head
                 words = [w for w in stage.split() if w not in ("!", "{", "time", "then", "do", "else")]
-                if not (words and words[0].rsplit("/", 1)[-1] == "cat"):
+                read = bool(words and words[0].rsplit("/", 1)[-1] == "cat")
+            # Its own prints, read as on a line of their own and placed back;
+            # in a `<(...)` nothing reads to the log, only those that send
+            # their own stdout to stderr or a standard stream.
+            body = text[start:stop]
+            for m, end in logged_prints(body):
+                if not read and not to_std_stream(body[m.start(1):end]):
                     continue
-            # Its own prints, read as on a line of their own and placed back.
-            for m, end in logged_prints(text[start:stop]):
                 at = start + m.start(1)
                 if at not in logged:
                     logged[at] = (PrintWord(m.group(1), at, start + m.end()), start + end)
@@ -1987,11 +2036,13 @@ def redirected_groups(units: list[Logical]) -> tuple[set[int], set[int], set[int
         if not head or head[0] != "}" or destination(unit.text) == "log":
             continue
         # A closer that pipes the group into `tee` or `cat` prints it to the
-        # log: its lines stay log lines (#513). Into another command, a
-        # shell line's print is unread, as on a line of its own; a Python
-        # or Node line's stdout is read as reaching the log all the same.
+        # log: its lines stay log lines (#513), and so they do where the
+        # pipeline's last command leaves its stdout on the log (`} | sed p`,
+        # #515), as on a line of its own. Into commands that end in a file,
+        # a shell line's print is unread; a Python or Node line's stdout is
+        # read as reaching the log all the same.
         piped_closer = PIPE.search(unquoted(unit.text)) is not None
-        logged = pipes_to_log(unit.text)
+        logged = pipes_to_log(unit.text) or reaches_log(unit.text)
         depth = 0
         for j in range(k, -1, -1):
             stripped = units[j].text.strip()
@@ -2304,9 +2355,11 @@ def sink_units(units: list[Logical]) -> set[int]:
                   and text.strip() != SHELL_SHOWN and text.strip() not in SHELL_MD):
                 sinks.add(k)
         elif unit.lang == "sh-heredoc":
-            # Piped into `tee` or `cat`, its lines are printed to the log (#513).
+            # Piped into `tee` or `cat`, its lines are printed to the log
+            # (#513); so they are where the pipeline's last command leaves its
+            # stdout there (`cat <<EOF | sed p`, #515).
             if unit.dest in ("envfile", "log") or (
-                    unit.dest == "pipe" and pipes_to_log(HEREDOC.sub(" ", units[unit.origin].text))):
+                    unit.dest == "pipe" and reaches_log(HEREDOC.sub(" ", units[unit.origin].text))):
                 sinks.add(k)
         elif unit.lang in ("py", "js") and unit.dest == "envfile":
             # Every line of a heredoc whose stdout goes to an env file (#507),
@@ -3775,16 +3828,18 @@ class Checker:
         prints = logged_prints(text)
         if not prints:
             return text
-        bare = unquoted(text)
         segment = []
-        for m, stop in prints:
-            at = m.start(1)
-            for tee in TEE_SEGMENT.finditer(bare, at, stop):
-                segment.append(text[at:tee.start()])
-                sub = PROCESS_SUBSTITUTION.search(text, tee.start(), tee.end())
-                at = sub.start() if sub else tee.end()
-            segment.append(text[at:stop])
-        return " ; ".join(segment)
+        # A `tee` inside a backtick substitution is not the print's (#515):
+        # cut by both readings, so either one's text is charged.
+        for bare in (unquoted(text), unquoted(text, backticks=True)):
+            for m, stop in prints:
+                at = m.start(1)
+                for tee in TEE_SEGMENT.finditer(bare, at, stop):
+                    segment.append(text[at:tee.start()])
+                    sub = PROCESS_SUBSTITUTION.search(text, tee.start(), tee.end())
+                    at = sub.start() if sub else tee.end()
+                segment.append(text[at:stop])
+        return " ; ".join(dict.fromkeys(segment))
 
     def names_on(self, k: int) -> list[str]:
         unit = self.units[k]

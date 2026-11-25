@@ -873,8 +873,10 @@ def test_issue_513_a_heredoc_in_a_group_opened_alone_and_teed_is_read_as_the_log
 @pytest.mark.parametrize("run, expected", [
     ('{\n  echo "##[warning]$VALUE"\n} | cat', ["VALUE"]),
     ('{\n  echo "##[warning]$VALUE"\n} | tee out.log', ["VALUE"]),
-    # Into another command a shell print stays unread, as on a line of its own.
-    ('{\n  echo "##[warning]$VALUE"\n} | sort', []),
+    # Into another command whose stdout stays on the log it is read as the
+    # log since #515, as on a line of its own; into a file it is not.
+    ('{\n  echo "##[warning]$VALUE"\n} | sort', ["VALUE"]),
+    ('{\n  echo "##[warning]$VALUE"\n} | sort > f', []),
     (f'{HELPER}\n{{\n  echo "x $(shown "$VALUE")"\n}} | cat', []),
 ])
 def test_issue_513_a_print_in_a_group_opened_alone_and_piped_into_cat_is_a_log_print(tmp_path, run, expected):
@@ -3448,10 +3450,21 @@ def test_issue_515_process_substitutions_are_found_at_the_top_of_the_line(text, 
 
 
 def test_issue_515_backticks_are_blanked_like_a_command_substitution():
-    assert guard.unquoted("echo `a | b` c") == "echo         c"
+    assert guard.unquoted("echo `a | b` c", backticks=True) == "echo         c"
     text = "echo '`a | b`' \"`a | b`\""
-    assert guard.unquoted(text) == "echo " + " " * (len(text) - 5)
-    assert guard.unquoted("echo `a | b` c", backticks=False) == "echo `a | b` c"
+    assert guard.unquoted(text, backticks=True) == "echo " + " " * (len(text) - 5)
+    # The reading before #515, which `logged_prints` keeps as well.
+    assert guard.unquoted("echo `a | b` c") == "echo `a | b` c"
+
+
+@pytest.mark.parametrize("line", [
+    'echo a `echo "x $VALUE" | tee f` > f',
+    'x=`echo "x $VALUE" >> "$GITHUB_STEP_SUMMARY"`',
+    'echo `echo "x $VALUE" | cat > f`',
+])
+def test_issue_515_a_print_inside_backticks_stays_read_as_before(tmp_path, line):
+    # Read with the backtick's text as the line's own as well, failing closed.
+    assert check(tmp_path, f"{HELPER}\n{line}") != []
 
 
 # --- #515: a heredoc opener line read by another statement's redirect ------
@@ -3467,6 +3480,9 @@ def test_issue_515_backticks_are_blanked_like_a_command_substitution():
     "cat <<EOF; { true; } > f\nx $VALUE\nEOF",
     "cat <<EOF & true > f\nx $VALUE\nEOF",
     "cat <<EOF >&2 | true\nx $VALUE\nEOF",
+    "{ cat <<EOF >&2; } > f\nx $VALUE\nEOF",
+    "( cat <<EOF >&2 ) > f\nx $VALUE\nEOF",
+    "if true; then cat <<EOF >&2; fi > f\nx $VALUE\nEOF",
     "true > f && python3 - <<'PY'\nimport os\nprint('::error::' + os.environ['VALUE'])\nPY",
 ])
 def test_issue_515_a_heredoc_opener_read_by_another_statement_is_refused(tmp_path, run):
@@ -3488,3 +3504,39 @@ def test_issue_515_a_heredoc_opener_refusal_names_the_line(tmp_path):
     write(root, ".github/workflows/reusable-x.yaml", workflow(f"{HELPER}\ncat <<EOF; true > /dev/null\nx\nEOF"))
     findings, _ = guard.audit(root)
     assert [(f["line"], guard.HEREDOC_OPENER_NAME in f["message"]) for f in findings] == [(13, True)]
+
+
+@pytest.mark.parametrize("closer, found", [
+    ("} | sed p", ["VALUE"]), ("} |& sed p", ["VALUE"]), ("} | sed p > f", []), ("} | grep -q x > /dev/null", []),
+])
+def test_issue_515_a_group_piped_into_a_command_that_prints_is_read_as_the_log(tmp_path, closer, found):
+    assert check(tmp_path, f'{HELPER}\n{{\necho "x $VALUE"\n{closer}') == found
+
+
+@pytest.mark.parametrize("line", [
+    'mapfile -t a < <(echo "x $VALUE" >&2)', 'cat <(echo "x $VALUE" >&2) > f', 'diff <(echo "x $VALUE" > /dev/stderr) f',
+])
+def test_issue_515_a_stderr_print_in_any_process_substitution_is_a_log_print(tmp_path, line):
+    assert check(tmp_path, f"{HELPER}\n{line}") == ["VALUE"]
+
+
+@pytest.mark.parametrize("pipe, found", [
+    ("| sed p", ["VALUE"]), ("|& sed p", ["VALUE"]), ("| sed p >&2", ["VALUE"]), ("| sed p > f", []),
+    ("| grep -q x > /dev/null", []),
+])
+def test_issue_515_a_shell_heredoc_piped_into_a_command_that_prints_is_read_as_the_log(tmp_path, pipe, found):
+    assert check(tmp_path, f"cat <<EOF {pipe}\nx $VALUE\nEOF") == found
+
+
+@pytest.mark.parametrize("line, found", [
+    ('echo "x $VALUE" > f | true', []),
+    ('echo "x $VALUE" > f | sed p', []),
+    ('true | echo "x $VALUE" > f | sed p', []),
+    ('echo "x $VALUE" > f | cat', ["VALUE"]),
+    ('echo "x $VALUE" >&2 | sed p', ["VALUE"]),
+    ('echo "x $VALUE" 2> f | sed p', ["VALUE"]),
+])
+def test_issue_515_a_print_into_a_file_before_the_pipe_does_not_feed_the_tail(tmp_path, line, found):
+    # bash sends the print into f, the pipe gets nothing; a print into `cat`
+    # stays read as the log, as before.
+    assert check(tmp_path, f"{HELPER}\n{line}") == found
