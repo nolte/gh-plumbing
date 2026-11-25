@@ -3540,3 +3540,20 @@ def test_issue_515_a_print_into_a_file_before_the_pipe_does_not_feed_the_tail(tm
     # bash sends the print into f, the pipe gets nothing; a print into `cat`
     # stays read as the log, as before.
     assert check(tmp_path, f"{HELPER}\n{line}") == found
+
+
+@pytest.mark.parametrize("opener, found", [
+    ("cat <<EOF | sed p; true > /dev/null", ["VALUE"]),
+    ('cat <<EOF | sed p && echo x > f', ["VALUE"]),
+    ("true | grep -q x <<EOF", []),
+    ("grep x <<EOF | sed p > f; true", []),
+])
+def test_issue_515_a_heredoc_pipe_is_read_on_its_own_pipeline(tmp_path, opener, found):
+    assert check(tmp_path, f"{opener}\nx $VALUE\nEOF") == found
+
+
+def test_issue_515_a_line_of_an_env_file_group_without_an_old_print_counts_whole(tmp_path):
+    # The reading before #515 found no print on the line and charged it
+    # whole; a print the pipeline-tail rule finds doesn't narrow that.
+    run = f'{HELPER}\n{{\necho "$VALUE" > f | echo x\n}} | tee -a "$GITHUB_OUTPUT"'
+    assert check(tmp_path, run) == ["VALUE"]

@@ -336,10 +336,11 @@ Not covered (each would need a parser this script doesn't have):
     checked, its output is not; #492 found `du` echoing a file name that way)
     -- and a print inside a `<(...)` read by a command other than `cat`
     (`diff <(echo "$V") f`, `done < <(printf ...)`): it is that command's
-    input, and what the command prints isn't read. A print, or a line of
-    an unquoted shell heredoc, piped into another command is read as a log
-    line where the pipeline's last command doesn't redirect its stdout
-    (`cat <<EOF | sed p`, #515, below);
+    input, and what the command prints isn't read, nor a heredoc fed to a
+    command other than `cat` at the end of a pipeline (`true | grep x
+    <<EOF`). A print, or a line of an unquoted shell heredoc, piped into
+    another command is read as a log line where the last command of its
+    pipeline doesn't redirect its stdout (`cat <<EOF | sed p`, #515, below);
   * a summary write inside a command substitution: the body of `$(...)` is
     blanked before sinks are read, so `out=$(echo "$V" | tee -a
     "$GITHUB_STEP_SUMMARY")` and `x=$(echo "$V" >> "$GITHUB_STEP_SUMMARY")`
@@ -347,7 +348,15 @@ Not covered (each would need a parser this script doesn't have):
     the body of an unquoted heredoc whose own destination is a plain file or
     the log (`cat > f <<EOF` then `$(echo "v=$V" >> "$GITHUB_OUTPUT")`):
     bash runs it, but a heredoc line is a sink only by the heredoc's own
-    destination, and redirects inside its `$(...)` aren't read;
+    destination, and redirects inside its `$(...)` aren't read; so is a
+    summary write inside a backtick or process substitution (``x=`echo
+    "$V" >> "$GITHUB_STEP_SUMMARY"` ``, `cat <(echo "$V" >>
+    "$GITHUB_STEP_SUMMARY")`, #515: a print inside a process substitution
+    is read as a log print only);
+  * a print inside a `$(...)` or backtick substitution that sends its own
+    stdout to stderr or a standard stream (`x=$(echo "$V" >&2)`, ``x=`echo
+    "$V" >&2` ``): its body is blanked, so the print isn't read, though its
+    text reaches the log (#515; one inside a process substitution is read);
   * a leading value the line-start rule can't see: an `echo` whose first word
     is built by a command substitution or a variable holding the whole
     message, and a call site of a helper such as fork-guard's or setup-vale's
@@ -1508,6 +1517,24 @@ def ambiguous_heredoc_opener(text: str) -> bool:
     return bool(OWN_STDOUT_REDIRECT.search(bare, head, own_end)) and without({own}) != reading
 
 
+def heredoc_pipe_logs(text: str) -> bool:
+    """The heredoc opened on `text` pipes into commands the last of which leaves its stdout on the log (#515).
+
+    Read on the heredoc's own pipeline (`cat <<EOF | sed p; true > f` is
+    sed's to the log), and only where the heredoc's command feeds a pipe: as
+    the last command (`true | grep -q x <<EOF`) its lines are that command's
+    input, as on a line of its own.
+    """
+    match = HEREDOC.search(text)
+    if match is None:
+        return False
+    blank = text[:match.start()] + " " * len(match.group()) + text[match.end():]
+    bare = unquoted(blank)
+    start = max((m.end() for m in PIPELINE_SPLIT.finditer(bare, 0, match.start())), default=0)
+    stop = next((m.start() for m in PIPELINE_SPLIT.finditer(bare, match.end())), len(bare))
+    return PIPE.search(bare, match.end(), stop) is not None and reaches_log(blank[start:stop])
+
+
 def logical_lines(lines: list[str]) -> list[Logical]:
     out: list[Logical] = []
     i = 0
@@ -1759,7 +1786,7 @@ def segment_role(bare: str) -> tuple[int, int]:
 PIPELINE_SPLIT = re.compile(r";|&&|\|\||(?<![>&|])&(?![>&])|[()]")
 
 
-def reaches_log(text: str, backticks: bool = False) -> bool:
+def reaches_log(text: str, backticks: bool = False, tails: bool = True) -> bool:
     """A shell pipeline's stdout reaches the log: not redirected, piped into `tee` or `cat`, or out of its last command.
 
     What the last command of a pipeline writes to stdout reaches the log
@@ -1767,11 +1794,11 @@ def reaches_log(text: str, backticks: bool = False) -> bool:
     sed's arguments, `echo "$V" | sed p` the value, `true | echo "$V"` the
     print at the end. Failing closed: what the commands after a print do
     with its text isn't read, so `echo "$V" | grep -q x` reads as a log print
-    too.
+    too. `tails=False` is the reading before #515, without that rule.
     """
     dest = destination(text, backticks)
-    return dest == "log" or (dest == "pipe" and (pipes_to_log(text, backticks)
-                                                 or destination(last_command(text, backticks), backticks) == "log"))
+    return dest == "log" or (dest == "pipe" and (
+        pipes_to_log(text, backticks) or (tails and destination(last_command(text, backticks), backticks) == "log")))
 
 
 def last_command(text: str, backticks: bool = False) -> str:
@@ -1905,8 +1932,12 @@ def logged_prints(text: str) -> list[tuple[re.Match | PrintWord, int]]:
     return [merged[i] for i in sorted(merged)]
 
 
-def _logged_prints(text: str, backticks: bool) -> list[tuple[re.Match | PrintWord, int]]:
-    """`logged_prints` for one reading of a backtick substitution (see `unquoted`)."""
+def _logged_prints(text: str, backticks: bool, extended: bool = True) -> list[tuple[re.Match | PrintWord, int]]:
+    """`logged_prints` for one reading of a backtick substitution (see `unquoted`).
+
+    `extended=False` is the reading before #515: no pipeline's last command
+    and no process substitution is read.
+    """
     bare = ARRAY_LITERAL.sub(lambda m: " " * len(m.group()), unquoted(text, backticks=backticks))
     pieces, start = [], 0
     for m in PIPELINE_SPLIT.finditer(bare):
@@ -1919,7 +1950,7 @@ def _logged_prints(text: str, backticks: bool) -> list[tuple[re.Match | PrintWor
     stack: list[tuple[bool, list[int]]] = []  # (a subshell's `(`, the logged prints inside)
 
     def close(ids: list[int], closer: str) -> None:
-        if reaches_log(closer, backticks):
+        if reaches_log(closer, backticks, extended):
             (stack[-1][1] if stack else top).extend(ids)
             return
         for i in ids:
@@ -1939,7 +1970,7 @@ def _logged_prints(text: str, backticks: bool) -> list[tuple[re.Match | PrintWor
             # Only the last closer of `} }` carries the segment's redirect.
             close(stack.pop()[1], text[a:b] if c == closes - 1 else "")
         stack += [(False, []) for _ in range(opens)]
-        logs = reaches_log(text[a:b], backticks)
+        logs = reaches_log(text[a:b], backticks, extended)
         # Logged only by its last command (#515): a print that sends its own
         # stdout into a file before the next pipe doesn't feed it.
         by_tail = logs and destination(text[a:b], backticks) == "pipe" and not pipes_to_log(text[a:b], backticks)
@@ -1956,7 +1987,7 @@ def _logged_prints(text: str, backticks: bool) -> list[tuple[re.Match | PrintWor
                 end = STATEMENT_END.search(bare, m.end(), b)
                 logged[at] = (m, end.start() if end else b)
                 (stack[-1][1] if stack else top).append(at)
-        for kind, start, stop in process_substitutions(text):
+        for kind, start, stop in process_substitutions(text) if extended else ():
             if not a <= start < b:
                 continue
             read = True
@@ -2358,8 +2389,9 @@ def sink_units(units: list[Logical]) -> set[int]:
             # Piped into `tee` or `cat`, its lines are printed to the log
             # (#513); so they are where the pipeline's last command leaves its
             # stdout there (`cat <<EOF | sed p`, #515).
+            opener = units[unit.origin].text
             if unit.dest in ("envfile", "log") or (
-                    unit.dest == "pipe" and reaches_log(HEREDOC.sub(" ", units[unit.origin].text))):
+                    unit.dest == "pipe" and (pipes_to_log(HEREDOC.sub(" ", opener)) or heredoc_pipe_logs(opener))):
                 sinks.add(k)
         elif unit.lang in ("py", "js") and unit.dest == "envfile":
             # Every line of a heredoc whose stdout goes to an env file (#507),
@@ -3146,6 +3178,8 @@ class Checker:
         self.used = used
         self.units = logical_lines(body.lines)
         inherit_group_dest(self.units)
+        # Lines of a group or compound into an env file (`printed_segment`).
+        self.envfile_groups = redirected_groups(self.units)[1]
         self._consumed: dict[int, list[tuple[int, int]]] | None = None
         self._heredoc_ids = list(range(len(self.units)))
         for j in range(1, len(self.units)):
@@ -3809,7 +3843,7 @@ class Checker:
         return names
 
     @staticmethod
-    def printed_segment(unit: Logical) -> str:
+    def printed_segment(unit: Logical, grouped: bool = False) -> str:
         """The part of a shell line whose expansions reach the sink.
 
         A command or env-file line counts whole. A plain print counts from its
@@ -3826,7 +3860,10 @@ class Checker:
         if unit.lang != "sh" or COMMAND.search(text) or destination(text) == "envfile":
             return text
         prints = logged_prints(text)
-        if not prints:
+        if not prints or (grouped and not _logged_prints(text, backticks=False, extended=False)):
+            # A line of a group into an env file on which the reading before
+            # #515 finds no print counts whole, as it did then, whatever
+            # print the later reading finds on it.
             return text
         segment = []
         # A `tee` inside a backtick substitution is not the print's (#515):
@@ -3845,7 +3882,7 @@ class Checker:
         unit = self.units[k]
         names = []
         if unit.lang in ("sh", "sh-heredoc"):
-            for name, masked, numeric in shell_refs(self.printed_segment(unit),
+            for name, masked, numeric in shell_refs(self.printed_segment(unit, k in self.envfile_groups),
                                                      heredoc=unit.lang == "sh-heredoc"):
                 if not ((masked and self.shell_shown) or numeric or self.clean_shell(name, k)):
                     names.append(name)
