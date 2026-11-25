@@ -3269,3 +3269,89 @@ def test_issue_515_a_print_the_redirect_reading_puts_on_the_log_is_refused_altho
     # The group's redirect (or bash's reading of `1>`/`&>`) takes the print
     # off the log after all; the guard reads it as a log print.
     assert check(tmp_path, f"{HELPER}\n{run}") == ["VALUE"]
+
+
+# --- #515: quotes on a line of an unquoted shell heredoc are literal --------
+
+# bash expands `$x` on such a line even between single quotes.
+EXPANDED_IN_QUOTES = [
+    "x '$VALUE'", "k='$VALUE'", "x '${VALUE}'", "x '${VALUE:-a}'", "::error::'$VALUE'",
+    "x '$(echo \"$VALUE\")'", "x '`echo \"$VALUE\"`'", "x \"'$VALUE'\"", "x \\'$VALUE\\'", "x '\\\\$VALUE'",
+]
+UNQUOTED_OPENERS = [("<<EOF", "EOF", ""), ("<<-EOF", "\tEOF", "\t"), ("<< EOF", "EOF", "")]
+QUOTED_OPENERS = [("<<'EOF'", "EOF", ""), ('<<"EOF"', "EOF", ""), ("<<\\EOF", "EOF", ""), ("<<-'EOF'", "\tEOF", "\t")]
+# Quoted in part: bash ends the heredoc on the whole word, quotes removed.
+PARTLY_QUOTED_OPENERS = [('<<"E"OF', "EOF", ""), ("<<'E'\"O\"F", "EOF", ""), ('<<E"OF"', "EOF", ""),
+                         ("<<E\\OF", "EOF", ""), ("<<-E'OF'", "\tEOF", "\t"), ('<<"EOF"x', "EOFx", "")]
+
+
+@pytest.mark.parametrize("opener", UNQUOTED_OPENERS)
+@pytest.mark.parametrize("target", ["", '>> "$GITHUB_OUTPUT"', '>> "$GITHUB_ENV"', '| tee -a "$GITHUB_OUTPUT"',
+                                    "| cat", ">&2", "2>> err.log"])
+@pytest.mark.parametrize("line", EXPANDED_IN_QUOTES)
+def test_issue_515_single_quotes_on_an_unquoted_heredoc_line_expand(tmp_path, opener, target, line):
+    op, close, indent = opener
+    assert check(tmp_path, f"{HELPER}\ncat {op} {target}\n{indent}{line}\n{close}") == ["VALUE"]
+
+
+@pytest.mark.parametrize("line", EXPANDED_IN_QUOTES)
+def test_issue_515_single_quotes_on_an_unquoted_summary_heredoc_line_expand(tmp_path, line):
+    run = f'{MD}\ncat >> "$GITHUB_STEP_SUMMARY" <<EOF\n{line}\nEOF'
+    assert "VALUE" in check(tmp_path, run)
+
+
+@pytest.mark.parametrize("opener", QUOTED_OPENERS)
+@pytest.mark.parametrize("target", ["", '>> "$GITHUB_OUTPUT"', '>> "$GITHUB_STEP_SUMMARY"', "| cat"])
+@pytest.mark.parametrize("line", EXPANDED_IN_QUOTES + ["x $VALUE"])
+def test_issue_515_a_quoted_heredoc_line_expands_nothing(tmp_path, opener, target, line):
+    op, close, indent = opener
+    assert check(tmp_path, f"cat {op} {target}\n{indent}{line}\n{close}") == []
+
+
+@pytest.mark.parametrize("target", ["", '>> "$GITHUB_OUTPUT"', '| tee -a "$GITHUB_ENV"', ">&2"])
+@pytest.mark.parametrize("line", [
+    "x '$(shown \"$VALUE\")'", "k='$(shown \"$VALUE\")'", "x '\\$VALUE'", "x '${#VALUE}'",
+    "x '$(echo \"$(shown \"$VALUE\")\")'", "x 'plain text'",
+])
+def test_issue_515_a_masked_or_escaped_value_in_quotes_on_a_heredoc_line_is_clean(tmp_path, target, line):
+    assert check(tmp_path, f"{HELPER}\ncat <<EOF {target}\n{line}\nEOF") == []
+
+
+@pytest.mark.parametrize("line", [
+    "echo 'x $VALUE'", "echo 'k=$VALUE' >> \"$GITHUB_OUTPUT\"", "echo 'x $VALUE' >> \"$GITHUB_STEP_SUMMARY\"",
+])
+def test_issue_515_a_plain_shell_line_keeps_single_quotes_literal(tmp_path, line):
+    assert check(tmp_path, f"{HELPER}\n{line}") == []
+
+
+def test_issue_515_quotes_in_a_substitution_on_a_heredoc_line_are_refused_although_harmless(tmp_path):
+    # bash reads `$(...)` as shell text, where '$VALUE' stays literal; the
+    # guard reads every `$` on the line as expanded.
+    assert check(tmp_path, "cat <<EOF\nx $(printf '%s' '$VALUE')\nEOF") == ["VALUE"]
+
+
+@pytest.mark.parametrize("redirect", ['a2>> f', '"x"2>> f', "a2> f"])
+def test_issue_515_a_word_ending_in_a_digit_before_a_redirect_is_refused_although_harmless(tmp_path, redirect):
+    # bash takes only a word of digits as a descriptor: stdout goes to f.
+    assert check(tmp_path, f'echo "x $VALUE" {redirect}') == ["VALUE"]
+
+
+@pytest.mark.parametrize("opener", PARTLY_QUOTED_OPENERS)
+@pytest.mark.parametrize("command", ["cat", "cat >> \"$GITHUB_OUTPUT\"", "cat >> \"$GITHUB_STEP_SUMMARY\"",
+                                     "cat > f", "python3 -", "node -", "grep -q x"])
+def test_issue_515_a_heredoc_delimiter_quoted_in_part_is_refused(tmp_path, opener, command):
+    # bash ends `<<"E"OF` on `EOF`; read as `E`, the heredoc would swallow the
+    # lines after it -- here a raw print to the log.
+    op, close, indent = opener
+    run = f"{command} {op}\n{indent}k\n{close}\necho \"x $VALUE\""
+    assert guard.PARTLY_QUOTED_NAME in check(tmp_path, run)
+
+
+@pytest.mark.parametrize("opener", ["<<EOF", "<<-EOF", "<< EOF", "<<'EOF'", '<<"EOF"', "<<\\EOF", "<<E_1.x-y",
+                                    "<<EOF;", "<<EOF)", "<<<\"x\"", "$(( 1<<2 ))", "$(( a<<b ))"])
+def test_issue_515_a_whole_heredoc_delimiter_is_not_quoted_in_part(opener):
+    assert not guard.partly_quoted_delimiter(f"cat {opener} > f")
+
+
+def test_issue_515_a_partly_quoted_delimiter_in_a_comment_or_quoted_heredoc_body_is_not_refused(tmp_path):
+    assert check(tmp_path, '# cat <<"E"OF\ncat <<\'X\'\ncat <<"E"OF\nX') == []

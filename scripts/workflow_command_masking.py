@@ -222,6 +222,20 @@ heredoc's output goes (`<unquoted heredoc>`): the shell expands both before
 the interpreter reads the line, so a value lands in the code itself, which
 the Python or Node reading doesn't see.
 
+A line of a shell heredoc whose delimiter is unquoted is read as bash
+expands it: a quote there is a literal character, so `'$v'`, `'${v}'`,
+`'$(cmd "$v")'` and a backtick between single quotes expand, on a log, an
+env-file and a summary line alike (`cat >> "$GITHUB_OUTPUT" <<EOF`, then
+`k='$v'`, #515); only a backslash keeps a `$` literal there (`\\$v`). The
+lines of one with a quoted delimiter (`<<'EOF'`, `<<"EOF"`, `<<\\EOF`) expand
+nothing and are data.
+
+A heredoc opener whose delimiter is quoted in part (`<<"E"OF`, `<<P"Y"`,
+`<<E\\OF`) is refused (`<heredoc delimiter>`, #515), whatever the heredoc
+feeds: bash ends it on the whole word with its quotes removed (`EOF`, `PY`),
+the guard would read only the first part (`E`, `P`) and every line after the
+heredoc as its body -- as data, unread, after a quoted first part.
+
 The step summary is a third sink with its own rule (#506). GitHub renders
 `$GITHUB_STEP_SUMMARY` as Markdown, so a controlled value there can add a
 link, an image, a heading, a mention or a table cell. Every line whose output
@@ -401,6 +415,12 @@ Not covered (each would need a parser this script doesn't have):
     `<unknown writer>` instead (`say = print`, `functools.partial(print,
     file=sys.stderr)`, `console["error"]`, `const e = console.error`, see
     below);
+  * a line that opens more than one heredoc (`cat <<'A' > /dev/null; cat
+    <<EOF`, `cmd <<A <<B`): only the first is read; the lines of every later
+    one are read as shell statements, so a quote there hides a `$` the
+    shell expands (#515). Nor is a heredoc's destination told apart from
+    another statement's on its line: `cat <<EOF; true > /dev/null` reads
+    as a heredoc into a file, though its lines go to the log;
   * an interpreter fed by a pipe (`cat <<PY | python3 -`): the heredoc is
     `cat`'s, read as data or shell text, and the interpreter's own stdout is
     not followed; nor a redirect written before the command (`<<'PY' python3
@@ -562,10 +582,9 @@ heredoc reading err towards a finding, #507):
   * a `$` or backtick the shell leaves alone in an unquoted Python or Node
     heredoc (`\\$`, a `$` before a space or a quote): every one is refused --
     quote the delimiter;
-  * a delimiter quoted in part (`<<P"Y"`): bash takes it as the quoted
-    delimiter `PY`, the guard as the unquoted delimiter `P`, so a harmless
-    body with `$1` is refused as `<unquoted heredoc>` -- quote the whole
-    delimiter;
+  * a heredoc opener whose delimiter is quoted in part (`<<P"Y"`, #515,
+    above): refused, though bash reads it as the quoted delimiter `PY` --
+    quote the whole delimiter;
   * a stdout print of a Python or Node heredoc piped into a command that
     doesn't print it (#511): `| jq . > out.json`, `| sort >> "$GITHUB_OUTPUT"`,
     `| wc -l`, a pipe later on the opener's line (`python3 - <<'PY' && a |
@@ -611,13 +630,24 @@ heredoc reading err towards a finding, #507):
     as Python or Node -- rename the script, or keep the interpreter's name
     off the line.
 
-Refused although harmless (the log rule's redirect reading errs towards a
-finding, #515):
+Refused although harmless (the log rule's redirect reading and the reading
+of an unquoted shell heredoc err towards a finding, #515):
 
   * a print whose stdout bash sends to a file or nowhere through a redirect
     the guard reads as the log: `1> f`, `&> f`, `>& f` and `>&-` (`1>> f`,
     `>> f` and `&>> f` are read as files) -- on a print, on a group's closer
     and on a heredoc's opener alike;
+  * a word that ends in a digit right before a `>>` or `>` (`echo "$V"
+    a2>> f`, `echo "$V" "x"2>> f`): read as a redirect of descriptor 2, so
+    the print is read as a log print, though bash takes only a word of
+    digits as a descriptor and writes stdout -- with the word `a2` -- into
+    the file; put a space before the `>>`;
+  * a single-quoted string inside a `$(...)` or backtick substitution on a
+    line of an unquoted shell heredoc (`x $(printf '%s' '$V')`): bash reads
+    the substitution as shell text, where the quotes hold again and `$V`
+    stays literal, but the guard reads every `$` on the line as expanded --
+    put the substitution's command in a variable or a function, or quote
+    the delimiter;
   * a print inside a group, compound or subshell redirected into a file
     that sends its own stdout to stderr, another descriptor or a standard
     stream, where the group's redirect takes that off the log as well (`{
@@ -1304,6 +1334,29 @@ def pipes_to_log(text: str) -> bool:
 # (`2>> "$GITHUB_OUTPUT"`): stdout stays where the rest of the line sends it.
 OTHER_FD_TO_ENV_FILE = re.compile(
     r"""(?<![0-9&>])0*(?:[02-9]|[1-9][0-9]+)>>?\|?\s*["']?\$\{?GITHUB_(?:OUTPUT|ENV|STATE|PATH)\b\}?["']?""")
+
+
+# A heredoc opener's whole delimiter word, quoted in part or not (`<<P"Y"`,
+# `<<"E"OF`, `<<E\OF`, `<<'E'"O"F`).
+HEREDOC_WORD = re.compile(
+    r"""(?<!<)(<<-?\s*)((?:[A-Za-z0-9_.-]|\\[A-Za-z0-9_.-]|'[A-Za-z0-9_.-]*'|"[A-Za-z0-9_.-]*")+)""")
+PARTLY_QUOTED_NAME = "<heredoc delimiter>"
+
+
+def partly_quoted_delimiter(text: str) -> bool:
+    """A heredoc opener on the line whose delimiter word HEREDOC reads only in part (#515).
+
+    bash takes the whole word after `<<`, its quotes and backslashes removed,
+    as the delimiter, quoted when any part of it is: `<<"E"OF` ends on `EOF`,
+    `<<P"Y"` on `PY`. HEREDOC reads the first part only (`E`, `P`), so such a
+    heredoc would never end, and every line after it would be read as its
+    data -- refused instead (`<heredoc delimiter>`).
+    """
+    for m in HEREDOC_WORD.finditer(text):
+        first = re.match(r"""(\\?)(['"]?)[A-Za-z_][A-Za-z0-9_.-]*\2""", m.group(2))
+        if first is not None and first.end() < len(m.group(2)):
+            return True
+    return False
 
 
 def logical_lines(lines: list[str]) -> list[Logical]:
@@ -2069,11 +2122,16 @@ def sink_units(units: list[Logical]) -> set[int]:
     return sinks
 
 
-def shell_refs(text: str, mask: re.Pattern = SHELL_MASKED) -> list[tuple[str, bool, bool]]:
+def shell_refs(text: str, mask: re.Pattern = SHELL_MASKED,
+               heredoc: bool = False) -> list[tuple[str, bool, bool]]:
     """(name, masked, numeric) for every expansion outside single quotes.
 
     `mask` is the masked form of the sink: `$(shown "$x")` for a log line,
-    `$(md_code "$x")` for the step summary.
+    `$(md_code "$x")` for the step summary. `heredoc` reads a line of an
+    unquoted shell heredoc, where a quote is a literal character: `'$x'`
+    expands there (#515). A single-quoted string inside a `$(...)` or a
+    backtick substitution on such a line is literal again; that isn't told
+    apart, so its names are read as expanded (errs towards a finding).
     """
     text = SUMMARY_FILE.sub("", ENV_FILE.sub("", text))
     refs = []
@@ -2084,7 +2142,7 @@ def shell_refs(text: str, mask: re.Pattern = SHELL_MASKED) -> list[tuple[str, bo
         if c == "\\" and quote != "'":
             i += 2
             continue
-        if c == "'" and quote is None:
+        if c == "'" and quote is None and not heredoc:
             end = text.find("'", i + 1)
             i = len(text) if end < 0 else end + 1
             continue
@@ -2101,7 +2159,7 @@ def shell_refs(text: str, mask: re.Pattern = SHELL_MASKED) -> list[tuple[str, bo
                 if m.group(2):
                     refs.append((m.group(2), False, bool(m.group(1))))
                     # `${x:-$y}`, `${x//pat/$y}`: the modifier expands too.
-                    refs += shell_refs(m.group(3), mask)
+                    refs += shell_refs(m.group(3), mask, heredoc)
                 else:
                     refs.append((m.group(4), False, False))
                 i = m.end()
@@ -3528,7 +3586,8 @@ class Checker:
         unit = self.units[k]
         names = []
         if unit.lang in ("sh", "sh-heredoc"):
-            for name, masked, numeric in shell_refs(self.printed_segment(unit)):
+            for name, masked, numeric in shell_refs(self.printed_segment(unit),
+                                                     heredoc=unit.lang == "sh-heredoc"):
                 if not ((masked and self.shell_shown) or numeric or self.clean_shell(name, k)):
                     names.append(name)
             return names
@@ -3644,6 +3703,13 @@ def audit_body(body: Body, siblings: list[Body] | None = None, entries: tuple[Al
                 f"`{LEADING}`: this log line begins with an interpolated value. No mask touches a "
                 "leading '::', so put a literal in front of it."))
     for unit in checker.units:
+        if unit.lang == "sh" and not is_comment(unit.text) and partly_quoted_delimiter(unit.text):
+            findings.append(finding(
+                body.path, body.first_line + unit.index, body.step,
+                f"`{PARTLY_QUOTED_NAME}`: this heredoc's delimiter is quoted in part, so bash ends the "
+                "heredoc on the whole word with its quotes removed (<<\"E\"OF ends on EOF), while the guard "
+                "would read only its first part and the lines after the heredoc as its body. Quote the "
+                "whole delimiter (<<'EOF') or none of it."))
         if unit.lang in ("py", "js") and unit.expands and re.search(r"[$`]", unit.text):
             findings.append(finding(
                 body.path, body.first_line + unit.index, body.step,
