@@ -196,7 +196,7 @@ value is a line end, and the mask turns every one into `?`:
   * numeric by construction: `${#name}`, `${#name[@]}`, `len(...)`;
   * on ALLOWED below, whose every entry states why the value is constrained.
 
-Two rules hold per line, whatever its names:
+Four rules hold per line, whatever its names:
 
   * a log line must not BEGIN with an interpolated value: the runner trims
     leading whitespace before it looks for `::`, and no mask touches `::`. A
@@ -209,7 +209,15 @@ Two rules hold per line, whatever its names:
     `echo`/`printf` word of the line, after a prefix (`command echo`, `time
     echo`), quoted or escaped (`"echo"`, `\\echo`) or inside a group,
     subshell or compound (`echo a; { echo "$x=1"; } | tee -a
-    "$GITHUB_ENV"`) as well, failing closed (#513).
+    "$GITHUB_ENV"`) as well, failing closed (#513). A shell print is read
+    as bash passes its words (`printed_text`, #515): quotes removed, an
+    expansion as a value, a redirect dropped with its target wherever it
+    stands (`echo >&2 "$v"`), and as `echo` -- its words joined by a space
+    -- or `printf` prints them: the format after `--`, quoted or not
+    (`printf %s "$v"`), the arguments formatted in, so the rule holds after
+    every line end the format or an `echo -e` holds as well (`printf
+    'x\\n%s'`, `\\r`, an octal or hex escape), and a `\\t` counts as space
+    (the reading before #515 holds alongside it).
     In a Python or Node heredoc this holds for every log print call on the
     line (#511), each taken to start a line, and after every line end the
     printed text holds: a line-end escape in a literal (`f"ok\\n{v}"`;
@@ -220,7 +228,31 @@ Two rules hold per line, whatever its names:
     `%s` count as values;
   * `$(shown "...")` must not sit directly next to a literal `#` or `[` or
     another `$(shown "...")`, quotes in between included -- `'#'` followed by
-    a masked `#[x` re-forms `##[` (`<mask seam>`).
+    a masked `#[x` re-forms `##[` (`<mask seam>`);
+  * a line written to `$GITHUB_ENV`, `$GITHUB_OUTPUT`, `$GITHUB_STATE` or
+    `$GITHUB_PATH` must not BEGIN with an interpolated value, masked or not
+    (`<env line start>`, #515): the runner takes the text before the first
+    `=` (or `<<`) as the entry's name and a `$GITHUB_PATH` line whole as a
+    directory, so even a masked value there names the entry (`BASH_ENV=...`,
+    `NODE_OPTIONS=...`, another output) or the path, and a value that is a
+    whole line can end a multi-line `name<<EOF` value early. Read as the
+    log rule reads a print, after every line end it writes (`printf
+    'k=v\\n%s\\n'`), for every `echo`/`printf`/`cat <<<` of a shell line that
+    writes an env file anywhere (a redirect, `tee`, `dd of=`) or stands in a
+    group or compound redirected or piped to one, for every line of an
+    unquoted shell heredoc written there (one that starts with `$` or a
+    backtick after leading whitespace), and for every print call of a
+    Python or Node heredoc that writes there (stdout, and stderr where the
+    opener sends it there too). `echo "k=$(shown "$v")"` passes; the lines
+    that begin with a constrained value are on ALLOWED under that name;
+  * printf and `echo -e` must not read backslash escapes in an interpolated
+    value, masked or not (`<escape expansion>`, #515): a value in printf's
+    format (`printf "$(shown "$v")"`, `printf -- "x $v\\n"`), a `%b`
+    conversion of a value (`printf 'x %b' "$(shown "$v")"`) or an `echo -e`
+    of one -- on every `echo`/`printf` word of a log or env-file line. The
+    mask turns a line end into `?`, but a `\\n` -- a backslash and a letter
+    -- is no control character, and printf turns it into a line end after
+    the mask. Pass the value to `%s` under a literal format.
 
 A line of a Python or Node heredoc whose delimiter is unquoted (`<<PY`, not
 `<<'PY'`, `<<"PY"` or `<<\\PY`) must not hold `$` or a backtick, wherever the
@@ -374,9 +406,18 @@ Not covered (each would need a parser this script doesn't have):
     into a variable first (`$shown_x`) and printed next to `#`, `[` or another
     masked value, or a seam built across two `printf` arguments
     (`printf '%s#' ...`);
-  * line ends produced after masking: `printf "$(shown "$V")\n"` or
-    `printf '%b'` with the masked value in the format, and `echo -e`, turn
-    backslash escapes in the value back into control characters;
+  * line ends produced after masking by a command other than bash's own
+    printf and `echo -e` (#515, above): `echo` under `shopt -s xpg_echo`,
+    `/usr/bin/printf` run through `xargs` or `find -printf` with a value
+    on its input, `awk`'s or `sed`'s escapes;
+  * on an env-file line (#515, above): a value after a literal that is a
+    prefix of a multi-line value's delimiter (`echo "k<<EOF"`, then `echo
+    "E$(shown "$V")"`: `OF` ends the value early) -- the runner's
+    multi-line state isn't tracked, only a value at a line's start is
+    refused -- and a `$GITHUB_PATH` line with a fixed prefix (`echo
+    "/opt/$(shown "$V")"`, which `/opt/../tmp` leaves a path the value
+    picks), read as before; nor an env file written by a command whose
+    stdout `exec >> "$GITHUB_ENV"` redirected earlier;
   * prints the selector doesn't see: `tee` or `cat` reading a file, a
     here-string fed to a command other than `cat` (`tr a b <<<"$V"`; a
     `cat <<<"$V"` is read as a print, #513), `set -x` tracing, an EXIT trap or a function that prints and is
@@ -704,6 +745,31 @@ of an unquoted shell heredoc err towards a finding, #515):
     so (`} | grep -q x`) -- mask the value, or redirect the last command's
     stdout (`| jq . > out.json`).
 
+Refused although harmless (the env-file line-start and the escape rules
+err towards a finding, #515):
+
+  * every print of an env-file line, or of a line inside a group or
+    compound redirected to an env file, is read by the env-file line-start
+    rule, also one whose stdout goes to another file (`echo "$(shown "$V")"
+    > f; echo a >> "$GITHUB_ENV"`) -- put it on a line of its own;
+  * a value at the start of a body line of a multi-line `name<<EOF` value
+    (`{ echo "k<<EOF"; echo "$(shown "$V")"; echo EOF; }`): data, unless
+    it is the delimiter, which a value can be -- put a literal first, or
+    add the line to ALLOWED with a delimiter no value can know;
+  * a value at the start of an env-file line that a check constrains (`echo
+    "$dir" >> "$GITHUB_PATH"`): refused, masked or not, as on a log line --
+    on ALLOWED under `<env line start>` with the reason;
+  * on every `echo`/`printf` word of a log or env-file line, a value in
+    printf's format or an `echo -e` argument whatever reaches the sink
+    (`printf "$fmt" > f; echo x`), a `%b` conversion when any argument of
+    the printf holds a value; and an escape the line-start reading takes as
+    a line end that isn't one (`\\e`, `\\x41`, `\\101`), a `%c` of a value at
+    a line's start (one character) or a `%.*s` whose precision cuts it
+    short, on a log line a numeric conversion there too (`printf '%d\\n'
+    "$n"`, as before #515), and a backtick substitution that starts an
+    echo's text (`` echo `cmd` x ``), as one that starts with `$(...)`
+    always was.
+
 Refused although harmless (the summary rule errs towards a finding):
 
   * a heredoc in an inner group with a target of its own, inside a group
@@ -857,6 +923,10 @@ JOINED_LINES = 50
 WALK_DEPTH = 1 << 20
 CAP = 200
 LEADING = "<leading value>"
+# A line written to an env file that begins with a value, masked or not (#515).
+ENV_LEADING = "<env line start>"
+# A value whose backslash escapes printf or `echo -e` reads (#515).
+ESCAPE_NAME = "<escape expansion>"
 SEAM_NAME = "<mask seam>"
 # A masked value next to a literal '#' or '[' -- or next to another masked
 # value -- can re-form '##[' across the seam: '#' + shown('#[x'), shown('##')
@@ -1109,6 +1179,14 @@ ALLOWED: tuple[Allowed, ...] = (
     Allowed("actions/setup-vale/setup-vale.sh", LEADING,
             reason="finish()'s `echo \"$message\"`: the one exit-0 message starts with a literal (read by hand, "
                    "NOT checked by this guard)"),
+    # Env-file lines that begin with a value (the env-file line-start rule, #515).
+    Allowed(ARCHIVE, ENV_LEADING, step="Attach to the draft",
+            reason="the multi-line `uploaded` output's lines: asset names the build job refused unless they match "
+                   "^[A-Za-z0-9_+-][A-Za-z0-9._+-]*$, then the closing delimiter, a literal prefix plus a kernel UUID "
+                   "drawn in this step, which no asset name can know"),
+    Allowed("actions/setup-vale/setup-vale.sh", ENV_LEADING,
+            reason="`echo \"$install_dir\" >> \"$GITHUB_PATH\"`: RUNNER_TEMP plus the version refused unless it "
+                   "matches VERSION_RE plus a mktemp basename"),
     # Set by the runner, the same for every caller.
     *(Allowed("*", name, reason="set by the runner") for name in (
         "GITHUB_REPOSITORY", "GITHUB_SHA", "GITHUB_RUN_ID", "GITHUB_SERVER_URL",
@@ -3950,7 +4028,8 @@ def leading_value(unit: Logical) -> bool:
         prints.extend(ANY_SHELL_PRINT.finditer(bare))
         # Quoted or escaped too (`"echo"`, `'echo'`, `\\echo`, `e\\cho`).
         prints.extend(print_words(text))
-    return any(_leads(text, m) for m in prints)
+    # Read both ways (#515): as before, and by what the print prints.
+    return any(_leads(text, m) or _shell_leads(text, m) for m in prints)
 
 
 def _leads(text: str, m: re.Match | PrintWord) -> bool:
@@ -3972,12 +4051,397 @@ def _leads(text: str, m: re.Match | PrintWord) -> bool:
     return "%" in head and not lead.strip()
 
 
+# --- what a shell print prints (#515) ---------------------------------------------
+#
+# `_leads` reads the first quoted word of a print; `printed_text` reads every
+# word of it as bash passes it -- quotes removed, an expansion as VALUE --
+# and then as `echo` or `printf` prints it, so the line-start rule holds after
+# every line end the print writes (`printf 'x\n%s'`), whatever the format's
+# quoting (`printf %s`, `printf -- "%s"`) and wherever a redirect stands
+# (`echo >&2 "$V"`). It also tells where printf or `echo -e` reads backslash
+# escapes in a value: there the mask doesn't hold, since a `\n` in the value
+# becomes a line end after it.
+
+# The runner trims leading whitespace (`TrimStart`) before it looks for `::`.
+LINE_SPACE = " \t\v\f"
+PRINTF_CONVERSION = re.compile(r"%[-+ #0']*(\*|[0-9]*)(?:\.(\*|[0-9]*))?([A-Za-z]?)")
+PRINT_STOP = "\x01"  # `\c`: printf and `echo -e` print nothing after it
+# The digits an octal, `\x`, `\u` or `\U` escape of printf or `echo -e` takes.
+NUMERIC_ESCAPE = re.compile(r"\\(?:0[0-7]{0,3}|[0-7]{1,3}|x[0-9A-Fa-f]{1,2}|u[0-9A-Fa-f]{1,4}|U[0-9A-Fa-f]{1,8})")
+SHELL_NAME_REF = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[0-9]")
+REDIRECT_OPERATOR = re.compile(r"&?[<>]+[&|]?")
+DUPLICATED_FD = re.compile(r"\s*(?:[0-9]+-?|-)")
+
+
+def _skip_balanced(text: str, i: int, opener: str, closer: str) -> int:
+    """Index just past the `closer` matching an `opener` before `i`, quotes inside skipped; the end if unclosed."""
+    depth, quote = 1, None
+    while i < len(text):
+        c = text[i]
+        if c == "\\" and quote != "'":
+            i += 2
+            continue
+        if quote:
+            quote = None if c == quote else quote
+        elif c in "'\"`":
+            quote = c
+        elif c == opener:
+            depth += 1
+        elif c == closer:
+            depth -= 1
+            if not depth:
+                return i + 1
+        i += 1
+    return len(text)
+
+
+def _expansion_end(text: str, i: int) -> int | None:
+    """End of the expansion that the `$` at `i` starts, or None where that `$` is a literal."""
+    nxt = text[i + 1:i + 2]
+    if nxt in ("(", "{", "["):
+        return _skip_balanced(text, i + 2, nxt, {"(": ")", "{": "}", "[": "]"}[nxt])
+    if nxt and (nxt.isalnum() or nxt == "_"):
+        m = SHELL_NAME_REF.match(text, i + 1)
+        return m.end() if m else i + 2
+    if nxt and nxt in "@*#?$!-":
+        return i + 2
+    return None
+
+
+def _backtick_end(text: str, i: int) -> int:
+    """Index just past the backtick closing the one at `i`; the end if unclosed."""
+    k = i + 1
+    while k < len(text) and text[k] != "`":
+        k += 2 if text[k] == "\\" else 1
+    return min(k + 1, len(text))
+
+
+def _ansi_c(content: str) -> str:
+    """A `$'...'` string as bash expands it; an escape the guard doesn't name reads as a line end, failing closed."""
+    simple = {"\\": "\\", "'": "'", '"': '"', "?": "?", "t": "\t", "v": "\v", "f": "\f", "n": "\n", "r": "\n"}
+    out, i = [], 0
+    while i < len(content):
+        if content[i] == "\\" and i + 1 < len(content):
+            out.append(simple.get(content[i + 1], "\n"))
+            i += 2
+            continue
+        out.append(content[i])
+        i += 1
+    return "".join(out)
+
+
+def _double_quoted(text: str, j: int, word: list[str]) -> int:
+    """Read a `"..."` string's content from `j` into `word`; the index just past its closing quote."""
+    n = len(text)
+    while j < n and text[j] != '"':
+        d = text[j]
+        if d == "\\":
+            e = text[j + 1:j + 2]
+            word.append(e if e in '$`"\\' else ("" if e == "\n" else "\\" + e))
+            j += 2
+        elif d == "$" and _expansion_end(text, j) is not None:
+            word.append(VALUE)
+            j = _expansion_end(text, j) or j + 1
+        elif d == "`":
+            word.append(VALUE)
+            j = _backtick_end(text, j)
+        else:
+            word.append(d)
+            j += 1
+    return j + 1
+
+
+def shell_print_words(text: str, i: int) -> list[str]:
+    """The argument words of a shell command from `i`, as bash passes them (#515).
+
+    Quotes and backslashes are removed, every expansion -- `$name`, `${...}`,
+    `$(...)`, `$((...))`, a backtick -- is VALUE, a `$'...'` string is
+    expanded, and a redirect is dropped with its target wherever it stands
+    (`echo >&2 "$V"`, `echo >> "$GITHUB_ENV" "$V"`), as bash does. Read up to
+    the end of the statement -- an unquoted `;`, `&`, `|`, `(` or `)` -- or a
+    comment, or the end of the text.
+    """
+    words: list[str] = []
+    word: list[str] | None = None
+    target = False  # the next word is a redirect's target
+
+    def finish() -> None:
+        nonlocal word, target
+        if word is not None:
+            if target:
+                target = False
+            else:
+                words.append("".join(word))
+        word = None
+
+    n = len(text)
+    while i < n:
+        c = text[i]
+        redirect = c in "<>" or text.startswith("&>", i)
+        if c in " \t\n":
+            finish()
+            i += 1
+        elif c in ";&|()" and not redirect:
+            break
+        elif c == "#" and word is None:
+            break  # a comment
+        elif redirect and text.startswith(("<(", ">("), i):
+            # A process substitution is a word: a path such as /dev/fd/63.
+            word = (word or []) + ["/dev/fd/63"]
+            i = _skip_balanced(text, i + 2, "(", ")")
+        elif redirect:
+            # A file-descriptor number right before it is no word (`2>&1`).
+            if word is not None and "".join(word).isdigit():
+                word = None
+            finish()
+            i = REDIRECT_OPERATOR.match(text, i).end()
+            if text[i - 1] == "&" and DUPLICATED_FD.match(text, i):
+                i = DUPLICATED_FD.match(text, i).end()
+            else:
+                target = True
+                while i < n and text[i] in " \t":
+                    i += 1
+        else:
+            word = [] if word is None else word
+            if c == "\\":
+                word.append("" if text[i + 1:i + 2] == "\n" else text[i + 1:i + 2])
+                i += 2
+            elif c == "'":
+                end = text.find("'", i + 1)
+                end = n if end < 0 else end
+                word.append(text[i + 1:end])
+                i = end + 1
+            elif c == "$" and text[i + 1:i + 2] == "'":
+                j = i + 2
+                while j < n and text[j] != "'":
+                    j += 2 if text[j] == "\\" else 1
+                word.append(_ansi_c(text[i + 2:min(j, n)]))
+                i = j + 1
+            elif c == '"' or (c == "$" and text[i + 1:i + 2] == '"'):
+                i = _double_quoted(text, i + (2 if c == "$" else 1), word)
+            elif c == "$" and _expansion_end(text, i) is not None:
+                word.append(VALUE)
+                i = _expansion_end(text, i) or i + 1
+            elif c == "`":
+                word.append(VALUE)
+                i = _backtick_end(text, i)
+            else:
+                word.append(c)
+                i += 1
+    finish()
+    return words
+
+
+def print_escapes(text: str) -> str:
+    """Text with printf's (or `echo -e`'s) backslash escapes read (#515).
+
+    `\\\\` is a backslash, `\\t`, `\\v` and `\\f` are space, `\\n` and `\\r`
+    line ends, `\\c` stops the output; every other escape of a letter or a
+    digit -- octal, `\\x`, `\\u`, `\\U`, `\\e` -- reads as a line end, failing
+    closed, since it may print one. A VALUE stays a VALUE.
+    """
+    out, i = [], 0
+    while i < len(text):
+        c = text[i]
+        if c != "\\" or i + 1 >= len(text):
+            out.append(c)
+            i += 1
+            continue
+        e = text[i + 1]
+        numeric = NUMERIC_ESCAPE.match(text, i)
+        if numeric:
+            out.append("\n")
+            i = numeric.end()
+            continue
+        if e == "c":
+            out.append(PRINT_STOP)
+            break
+        if e == "\\":
+            out.append("\\")
+        elif e in "tvf":
+            out.append(" ")
+        elif e.isalnum():
+            out.append("\n")
+        elif e in "\"'?":
+            out.append(e)
+        else:
+            out.append("\\" + e)
+        i += 2
+    return "".join(out)
+
+
+def _printf_output(fmt: str, args: list[str]) -> tuple[str, bool]:
+    """What `printf FMT ARGS` prints, as a skeleton, and whether a `%b` reads escapes in a value.
+
+    The format is read again while arguments are left, as printf does; a
+    conversion takes the next argument (a `*` width or precision one more),
+    `%b` reads its argument's escapes, a numeric conversion prints digits
+    (a value there is read by the log rule's reading before #515 as before).
+    """
+    escaped = False
+    out: list[str] = []
+    rest = list(args)
+    for _ in range(len(args) + 1):
+        consumed = False
+        i = 0
+        while i < len(fmt):
+            c = fmt[i]
+            if c == "\\":
+                numeric = NUMERIC_ESCAPE.match(fmt, i)
+                stop = numeric.end() if numeric else i + 2
+                piece = print_escapes(fmt[i:stop])
+                out.append(piece)
+                if piece == PRINT_STOP:
+                    return "".join(out), escaped
+                i = stop
+            elif c != "%":
+                out.append(c)
+                i += 1
+            elif fmt.startswith("%%", i):
+                out.append("%")
+                i += 2
+            else:
+                m = PRINTF_CONVERSION.match(fmt, i)
+                for star in m.groups()[:2]:
+                    if star == "*":
+                        rest = rest[1:]
+                arg = rest[0] if rest else ""
+                rest = rest[1:]
+                consumed = True
+                conv = m.group(3)
+                if conv == "b":
+                    escaped = escaped or VALUE in arg
+                    piece = print_escapes(arg)
+                    out.append(piece)
+                    if PRINT_STOP in piece:
+                        return "".join(out), escaped
+                elif conv and conv in "diouxXeEfFgGaA":
+                    out.append("0")  # digits, whatever the argument: no `::`, no name
+                elif conv == "c":
+                    out.append(arg[:1])
+                else:
+                    # `%s`, `%q` -- and a conversion the guard can't read,
+                    # as a value, failing closed.
+                    out.append(arg if conv in ("s", "q") else VALUE)
+                i = max(m.end(), i + 1)
+        if not rest or not consumed:
+            break
+    return "".join(out), escaped
+
+
+def printed_text(text: str, m: re.Match | PrintWord) -> tuple[str, bool] | None:
+    """(What the print at `m` prints, as a skeleton with VALUE, whether it reads backslash escapes in a value).
+
+    `echo` joins its arguments by a space, after its `-n`/`-e`/`-E` options,
+    and with `-e` reads backslash escapes in them; a `cat <<<` here-string
+    prints its one word; `printf` prints its format -- after `--` -- with
+    the arguments formatted in. A value in printf's format, in a `%b`
+    argument or in an `echo -e` argument has its backslash escapes read
+    after the mask: `\\n` in it becomes a line end. None for `printf -v`.
+    """
+    words = shell_print_words(text, m.end())
+    if text[max(m.end() - 3, 0):m.end()] == "<<<":
+        return (words[0] if words else ""), False
+    if m.group(1) == "echo":
+        escapes = False
+        while words and re.fullmatch(r"-[neE]+", words[0]):
+            for flag in words[0][1:]:
+                if flag in "eE":
+                    escapes = flag == "e"
+            words = words[1:]
+        printed = " ".join(words)
+        if escapes:
+            return print_escapes(printed), VALUE in printed
+        return printed, False
+    if words and words[0] == "-v":
+        return None
+    if words and words[0] == "--":
+        words = words[1:]
+    if not words:
+        return "", False
+    output, escaped = _printf_output(words[0], words[1:])
+    return output, escaped or VALUE in words[0]
+
+
+def starts_line_with_value(printed: str) -> bool:
+    """A printed skeleton begins a line with a value: at its start or after any line end in it."""
+    printed = printed.split(PRINT_STOP, 1)[0]
+    return any(line.lstrip(LINE_SPACE).startswith(VALUE) for line in printed.split("\n"))
+
+
+def shell_prints(text: str) -> list[re.Match | PrintWord]:
+    """Every `echo`/`printf` word of a shell line, and every `cat <<<`, failing closed (#513, #515)."""
+    bare = ARRAY_LITERAL.sub(lambda m: " " * len(m.group()), unquoted(text))
+    found: dict[int, re.Match | PrintWord] = {m.start(1): m for m in ANY_SHELL_PRINT.finditer(bare)}
+    for p in print_words(text):
+        found.setdefault(p.start(1), p)
+    return [found[i] for i in sorted(found)]
+
+
+def _shell_leads(text: str, m: re.Match | PrintWord) -> bool:
+    """The print at `m` begins a line of its output with a value (`printed_text`, #515)."""
+    read = printed_text(text, m)
+    return read is not None and starts_line_with_value(read[0])
+
+
+def escape_expansion(unit: Logical) -> bool:
+    """A shell line has printf or `echo -e` read backslash escapes in a value (#515).
+
+    Every `echo`/`printf` word of the line, failing closed: a value in
+    printf's format (`printf "$(shown "$V")"`, `printf -- "x $V\\n"`), a `%b`
+    conversion of a value, an `echo -e` of one. The mask turns a line end
+    into `?`, but leaves `\\n` -- a backslash and a letter -- for printf to
+    turn into one.
+    """
+    if unit.lang != "sh":
+        return False
+    return any((read := printed_text(unit.text, m)) is not None and read[1] for m in shell_prints(unit.text))
+
+
+def env_line_leads(checker: "Checker", k: int, envfile: set[int]) -> bool:
+    """A line written to an env file begins with a value, masked or not (#515).
+
+    `$GITHUB_ENV`, `$GITHUB_OUTPUT` and `$GITHUB_STATE` take the text before
+    the first `=` (or `<<`) as the entry's name, `$GITHUB_PATH` the whole
+    line as a directory: a value there -- even a masked one, which holds no
+    line end -- picks the name (`BASH_ENV=...`, `NODE_OPTIONS=...`, another
+    output) or the path, and a value that is a whole line can end a
+    multi-line `name<<EOF` value early. Read on a shell line that writes an
+    env file anywhere (a redirect, `tee`, `dd of=`) or stands in a group or
+    compound redirected to one -- every print of the line, failing closed --,
+    on a line of an unquoted shell heredoc written there, and for every print
+    call of a Python or Node heredoc that writes there.
+    """
+    unit = checker.units[k]
+    if is_comment_unit(unit) or checker.helper_line(k):
+        return False
+    if unit.lang == "sh":
+        if not (ENV_FILE.search(unit.text) or k in envfile):
+            return False
+        return any(_shell_leads(unit.text, m) for m in shell_prints(unit.text))
+    if unit.lang == "sh-heredoc":
+        opener = checker.units[unit.origin].text if unit.origin >= 0 else ""
+        if not unit.expands or not (unit.dest == "envfile" or (unit.dest == "pipe" and ENV_FILE.search(opener))):
+            return False
+        head = unit.text.lstrip(LINE_SPACE)
+        return head.startswith("`") or (head.startswith("$") and _expansion_end(head, 0) is not None)
+    if unit.lang in ("py", "js") and unit.dest == "envfile":
+        # The calls that write there: stdout, unless the opener writes only
+        # another descriptor there (`2>> "$GITHUB_OUTPUT"`), and stderr where
+        # the opener sends it there (as `envfile_template` reads them).
+        opener = checker.units[unit.origin].text if unit.origin >= 0 else ""
+        stderr = STDERR_TO_ENV_FILE.search(HEREDOC.sub(" ", opener)) is not None
+        return any(call.read_by(not unit.fd_logged, stderr) and leading_print(call, unit.lang)
+                   for call in print_calls(checker.joined(k), unit.lang))
+    return False
+
+
 def audit_body(body: Body, siblings: list[Body] | None = None, entries: tuple[Allowed, ...] = ALLOWED,
                used: set[Allowed] | None = None) -> list[dict]:
     checker = Checker(body, siblings if siblings is not None else [body], entries,
                       used if used is not None else set())
     findings = []
-    redirected, _, _, _ = redirected_groups(checker.units)
+    redirected, envfile, _, _ = redirected_groups(checker.units)
     for k in sorted(sink_units(checker.units)):
         line = body.first_line + checker.units[k].index
         for name in dict.fromkeys(checker.names_on(k)):
@@ -3998,6 +4462,18 @@ def audit_body(body: Body, siblings: list[Body] | None = None, entries: tuple[Al
                 body.path, line, body.step,
                 f"`{LEADING}`: this log line begins with an interpolated value. No mask touches a "
                 "leading '::', so put a literal in front of it."))
+        if lang == "sh" and escape_expansion(checker.units[k]) and not checker.allowed(ESCAPE_NAME, k, shell=True):
+            findings.append(finding(
+                body.path, line, body.step,
+                f"`{ESCAPE_NAME}`: printf or echo -e reads backslash escapes in an interpolated value here -- in "
+                "printf's format, a %b argument or an echo -e argument -- so a '\\n' in the value becomes a line "
+                "end after the mask. Pass the value as a printf argument to %s under a literal format."))
+        if env_line_leads(checker, k, envfile) and not checker.allowed(ENV_LEADING, k, shell=lang == "sh"):
+            findings.append(finding(
+                body.path, line, body.step,
+                f"`{ENV_LEADING}`: this env-file line begins with an interpolated value, masked or not, so the "
+                "value names the entry (BASH_ENV, NODE_OPTIONS, another output) or the path, or ends a multi-line "
+                "value early. Write the literal name first (name=$(shown \"$value\"))."))
     for unit in checker.units:
         if unit.lang == "sh" and not is_comment(unit.text) and ambiguous_heredoc_opener(unit.text):
             findings.append(finding(

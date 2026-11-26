@@ -74,7 +74,7 @@ def check(tmp_path: pathlib.Path, run: str, **kwargs) -> list[str]:
     "echo '::notice::'\"$VALUE\"",
     'echo "value=$VALUE" >> "$GITHUB_OUTPUT"',
     'echo "V=$VALUE" >> $GITHUB_ENV',
-    'printf \'%s\\n\' "$VALUE" >> "${GITHUB_PATH}"',
+    'printf \'/opt/%s\\n\' "$VALUE" >> "${GITHUB_PATH}"',
     'echo "s=$VALUE" | tee -a "$GITHUB_STATE"',
     'echo "::error::$VALUE" >&2',
     # Plain log lines: '##[' needs no line break and no '::' prefix.
@@ -570,7 +570,7 @@ def test_issue_513_a_heredoc_in_a_group_teed_into_an_env_file_is_read_as_the_log
     # entry begins a log line, as for `python3 - <<'PY' | tee -a ...`.
     run = (f"{HELPER}\n{{ python3 - <<'PY'\nimport os, re, sys\n{PY_HELPER}p = os.environ['VALUE']\n"
            "print(f\"{shown(p)}=x\")\nPY\n} | tee -a \"$GITHUB_OUTPUT\"")
-    assert check(tmp_path, run) == [guard.LEADING]
+    assert check(tmp_path, run) == [guard.LEADING, guard.ENV_LEADING]
 
 
 def test_issue_513_a_heredoc_writing_only_stderr_to_an_env_file_prints_stdout_to_the_log(tmp_path):
@@ -627,7 +627,7 @@ def test_issue_513_an_element_assignment_with_spaces_in_its_subscript_voids_the_
     (issue_513_py(' >> "$GITHUB_OUTPUT"', 'print("x=" + p, file=sys.stdout if p else sys.stderr)'), ['"x=" + p']),
     (f"{HELPER}\npython3 - <<'PY' |\nimport os, re, sys\n{ISSUE_513_PY_HELPER}p = os.environ['VALUE']\n"
      "print('x=' + p)\nPY\ntee -a \"$GITHUB_OUTPUT\"", ["'x=' + p"]),
-    (issue_513_py(' | tee -a "$GITHUB_OUTPUT"', 'print(f"{shown(p)}=x")'), [guard.LEADING]),
+    (issue_513_py(' | tee -a "$GITHUB_OUTPUT"', 'print(f"{shown(p)}=x")'), [guard.LEADING, guard.ENV_LEADING]),
     (f"{HELPER}\n{{ python3 - <<'PY'\nimport os, re, sys\n{ISSUE_513_PY_HELPER}p = os.environ['VALUE']\n"
      "print('x', p)\nPY\n} | cat", ["p"]),
 ])
@@ -772,7 +772,7 @@ def test_issue_513_a_shell_heredoc_piped_into_tee_or_starting_with_a_hash_is_rea
 def test_issue_513_a_shell_line_teed_into_an_env_file_keeps_the_line_start_rule(tmp_path):
     # tee writes the entry and the log both: the masked value begins a log line.
     run = f'{HELPER}\nx=$(shown "$VALUE")\necho "$x=1" | tee -a "$GITHUB_OUTPUT"'
-    assert check(tmp_path, run) == [guard.LEADING]
+    assert check(tmp_path, run) == [guard.LEADING, guard.ENV_LEADING]
     shutil.rmtree(tmp_path / ".github")
     assert check(tmp_path, f'{HELPER}\nx=$(shown "$VALUE")\necho "k=$x" | tee -a "$GITHUB_OUTPUT"') == []
 
@@ -867,7 +867,7 @@ def test_issue_513_a_bracketed_statement_above_the_python_shown_keeps_it_canonic
 def test_issue_513_a_heredoc_in_a_group_opened_alone_and_teed_is_read_as_the_log(tmp_path):
     run = (f"{HELPER}\n{{\npython3 - <<'PY'\nimport os, re, sys\n{ISSUE_513_PY_HELPER}p = os.environ['VALUE']\n"
            "print(f\"{shown(p)}=x\")\nPY\n} | tee -a \"$GITHUB_OUTPUT\"")
-    assert check_513(tmp_path, run) == [guard.LEADING]
+    assert check_513(tmp_path, run) == [guard.LEADING, guard.ENV_LEADING]
 
 
 @pytest.mark.parametrize("run, expected", [
@@ -901,7 +901,8 @@ PY_PRINTS = "python3 - <<'PY' >> \"$GITHUB_OUTPUT\"\nimport os\np = os.environ['
 ])
 def test_a_python_print_into_an_env_file_is_read_strictly(tmp_path, print_):
     found = check(tmp_path, PY_PRINTS.format(print_))
-    assert found and all("p" in name for name in found), found
+    # A print of `p` alone begins the entry with it as well (#515).
+    assert found and all("p" in name or name == guard.ENV_LEADING for name in found), found
 
 
 @pytest.mark.parametrize("print_", [
@@ -914,12 +915,12 @@ def test_a_python_print_into_an_env_file_is_read_strictly(tmp_path, print_):
 def test_a_node_print_into_an_env_file_is_read_strictly(tmp_path, print_):
     run = f"node <<'NODE' >> \"$GITHUB_OUTPUT\"\nconst p = process.env.P;\n{print_}\nNODE"
     found = check(tmp_path, run)
-    assert found and all("p" in name for name in found), found
+    assert found and all("p" in name or name == guard.ENV_LEADING for name in found), found
 
 
 @pytest.mark.parametrize("print_", [
     'print(f"v={shown(p)}", end="\\n")',
-    'print("a=1"); print(shown(p))',
+    'print("a=1"); print(f"b={shown(p)}")',
     'print(\n    f"v={shown(p)}"\n)',
     'print("x", shown(p), file=sys.stderr)',
 ])
@@ -1121,14 +1122,14 @@ def test_heredoc_stdout_into_any_env_file_is_read(tmp_path, target, lang):
 
 @pytest.mark.parametrize("run", [
     (f"node <<'NODE' >> \"$GITHUB_OUTPUT\"\n{guard.JS_SHOWN}\nconst p = process.env.P;\n"
-     "console.log(`v=${shown(p)}`);\nprocess.stdout.write(`w=${shown(p)}\\n`);\nconsole.log(shown(p));\nNODE"),
+     "console.log(`v=${shown(p)}`);\nprocess.stdout.write(`w=${shown(p)}\\n`);\nNODE"),
     (f"python3 - <<'PY' >> \"$GITHUB_OUTPUT\"\nimport os, re\n{PY_HELPER}p = os.environ['P']\n"
-     "print(f\"v={shown(p)}\")\nprint('w=x', len(p))\nprint(shown(p))\nPY"),
+     "print(f\"v={shown(p)}\")\nprint('w=x', len(p))\nPY"),
 ])
 def test_a_masked_heredoc_print_into_an_env_file_is_fine(tmp_path, run):
-    # shown() turns every line end into '?', so the value can't add an entry;
-    # an env-file entry is not a log line, so a leading value is no finding
-    # there (as for a shell write to an env file).
+    # shown() turns every line end into '?', so the value can't add an entry.
+    # One that begins the entry names it, masked or not: `<env line start>`
+    # since #515 (see the #515 section below).
     assert check(tmp_path, run) == []
 
 
@@ -1137,7 +1138,7 @@ def test_every_stdout_console_method_into_an_env_file_is_an_env_file_entry(tmp_p
     # All console methods but STDERR_PRINTS write to stdout, so a masked
     # `console.debug` into an env file is an entry there, not a log line.
     run = (f"node <<'JS' >> \"$GITHUB_OUTPUT\"\n{guard.JS_SHOWN}\nconst p = process.env.VALUE;\n"
-           f"console.{method}(shown(p));\nJS")
+           f"console.{method}(`v=${{shown(p)}}`);\nJS")
     assert check(tmp_path, run) == []
 
 
@@ -1231,7 +1232,7 @@ def test_masked_stderr_routed_into_an_env_file_is_fine(tmp_path, run):
 def test_stderr_kept_on_the_log_stays_a_log_line(tmp_path, print_, expected):
     # Without a stderr redirect into the env file, it is a log line only: the
     # line-start rule holds for it, not for the stdout entries.
-    run = STDERR_PY.format('>> "$GITHUB_OUTPUT"', f"import re\n{PY_HELPER}{print_}\nprint(shown(p))")
+    run = STDERR_PY.format('>> "$GITHUB_OUTPUT"', f"import re\n{PY_HELPER}{print_}\nprint(f\"v={{shown(p)}}\")")
     assert check(tmp_path, run) == expected
 
 
@@ -2343,7 +2344,8 @@ def test_an_unknown_stream_of_an_env_file_heredoc_is_read_both_ways(tmp_path, fi
     assert checker.envfile_template(k) == ["p"]
     assert checker.log_template(k) == ["p"]
     assert checker.leading_print(k)
-    assert [n for _, n in names(tmp_path)] == ["p", guard.LEADING, *opened(file_)]
+    # As stdout, the value begins the entry as well (#515).
+    assert [n for _, n in names(tmp_path)] == ["p", guard.LEADING, guard.ENV_LEADING, *opened(file_)]
 
 
 def test_an_unknown_stream_of_a_summary_heredoc_is_read_both_ways(tmp_path):
@@ -2782,7 +2784,7 @@ def test_a_heredoc_teed_into_an_env_file_is_read_as_the_log_as_well(tmp_path):
     # `tee` writes the env file and its stdout, the log: the entry is read as
     # one (`shown(p)` is clean there) and as a log line, which it begins.
     run = SHOWN_PY.format(TEE_ENV, "print(shown(p))")
-    assert check(tmp_path, run, env=P_ENV) == [guard.LEADING]
+    assert check(tmp_path, run, env=P_ENV) == [guard.LEADING, guard.ENV_LEADING]
     write(tmp_path, REL, workflow(run, env=P_ENV))
     [body] = guard.bodies_of(tmp_path, tmp_path / REL)
     checker = guard.Checker(body, [body], (), set())
@@ -2801,8 +2803,10 @@ def test_a_raw_entry_teed_into_an_env_file_is_a_finding(tmp_path, line, expected
 
 def test_a_redirected_env_file_heredoc_does_not_read_stdout_as_the_log(tmp_path):
     # The env-file reading alone: no pipe, so stdout isn't the log and a
-    # masked entry doesn't begin a log line.
-    assert check(tmp_path, SHOWN_PY.format(' >> "$GITHUB_OUTPUT"', "print(shown(p))"), env=P_ENV) == []
+    # masked entry doesn't begin a log line -- it begins the entry, which
+    # the env-file line-start rule refuses (#515).
+    assert check(tmp_path, SHOWN_PY.format(' >> "$GITHUB_OUTPUT"', "print(shown(p))"), env=P_ENV) == [
+        guard.ENV_LEADING]
 
 
 def test_a_heredoc_teed_into_the_summary_is_read_as_the_log_as_well(tmp_path):
@@ -2948,7 +2952,8 @@ def test_issue_513_a_decorator_continued_through_a_nested_f_string_is_not_canoni
     'echo a > f; echo "$(shown "$VALUE")" | tee -a "$GITHUB_OUTPUT"',
 ])
 def test_issue_513_a_later_print_teed_into_an_env_file_keeps_the_line_start_rule(tmp_path, line):
-    assert check(tmp_path, f"{HELPER}\n{line}") == [guard.LEADING]
+    # Since #515 the entry begins with the value as well (`<env line start>`).
+    assert check(tmp_path, f"{HELPER}\n{line}") == [guard.LEADING, guard.ENV_LEADING]
 
 
 def test_issue_513_a_later_print_teed_into_an_env_file_with_a_literal_first_is_clean(tmp_path):
@@ -3005,7 +3010,9 @@ def test_issue_513_an_interpreter_blocker_into_an_env_file_or_the_summary_is_ref
 def test_issue_513_every_print_of_a_line_piped_into_tee_keeps_the_line_start_rule(tmp_path, line):
     # tee prints the entry to the log as well; which print feeds the pipe
     # isn't told apart, so every print of the line is read from its start.
-    assert check(tmp_path, f'{HELPER}\nM=$(shown "$VALUE")\n{line}') == [guard.LEADING]
+    # Into an env file the entry begins with the value as well (#515).
+    expected = [guard.LEADING, *([guard.ENV_LEADING] if "GITHUB_" in line else [])]
+    assert check(tmp_path, f'{HELPER}\nM=$(shown "$VALUE")\n{line}') == expected
 
 
 @pytest.mark.parametrize("line", [
@@ -3083,7 +3090,8 @@ def test_issue_513_a_summary_write_after_a_background_command_encoded_is_clean(t
 @pytest.mark.parametrize("command", ['"echo"', "'echo'", "\\echo", "e\\cho", '"printf" "%s=1\\n"'])
 def test_issue_513_a_quoted_print_word_piped_into_tee_keeps_the_line_start_rule(tmp_path, command, sink):
     value = '"$M"' if "printf" in command else '"$M=1"'
-    assert check(tmp_path, f'{HELPER}\nM=$(shown "$VALUE")\n{command} {value} {sink}') == [guard.LEADING]
+    expected = [guard.LEADING, *([guard.ENV_LEADING] if "GITHUB_" in sink else [])]
+    assert check(tmp_path, f'{HELPER}\nM=$(shown "$VALUE")\n{command} {value} {sink}') == expected
 
 
 def test_issue_513_an_echo_argument_word_is_read_as_a_print(tmp_path):
@@ -3393,7 +3401,7 @@ def test_issue_515_a_print_through_a_pipeline_tail_backtick_or_process_substitut
 
 
 @pytest.mark.parametrize("line", [
-    'echo `true | tee f` "x $(shown "$VALUE")"',
+    'echo x `true | tee f` "x $(shown "$VALUE")"',
     'echo x | sed "s/x/$(shown "$VALUE")/"',
     'true | echo "x $(shown "$VALUE")"',
     'cat <(echo "x $(shown "$VALUE")")',
@@ -3556,4 +3564,237 @@ def test_issue_515_a_line_of_an_env_file_group_without_an_old_print_counts_whole
     # The reading before #515 found no print on the line and charged it
     # whole; a print the pipeline-tail rule finds doesn't narrow that.
     run = f'{HELPER}\n{{\necho "$VALUE" > f | echo x\n}} | tee -a "$GITHUB_OUTPUT"'
-    assert check(tmp_path, run) == ["VALUE"]
+    # Every print of a line in an env-file group is read by the env-file
+    # line-start rule, the one into f too (#515, refused although harmless).
+    assert check(tmp_path, run) == ["VALUE", guard.ENV_LEADING]
+
+
+# --- #515: a value that starts an env-file line or a printf format ---------
+
+WHOLE_MASKED = '"$(shown "$VALUE")"'
+ENV_FILES = ['"$GITHUB_ENV"', '"$GITHUB_OUTPUT"', '"$GITHUB_STATE"', '"${GITHUB_PATH}"']
+
+
+@pytest.mark.parametrize("target", ENV_FILES)
+@pytest.mark.parametrize("write_", [
+    'echo {m} >> {t}',
+    'echo -n {m} >> {t}',
+    'echo "" {m} >> {t}',
+    'echo >> {t} {m}',
+    'printf "%s\\n" {m} >> {t}',
+    "printf -- '%s\\n' {m} >> {t}",
+    "printf %s {m} >> {t}",
+    "printf 'k=v\\n%s\\n' {m} >> {t}",
+    "printf '%s=%s\\n' {m} x >> {t}",
+    'echo {m} | tee -a {t} > /dev/null',
+    'echo {m} | dd of={t}',
+    'cat <<< {m} >> {t}',
+    '{{ echo a=1; echo {m}; }} >> {t}',
+    '{{\necho {m}\n}} >> {t}',
+    'for i in 1; do echo {m}; done >> {t}',
+    '( echo {m} ) >> {t}',
+    'echo "$(shown "$VALUE")=1" >> {t}',
+])
+def test_issue_515_a_masked_value_that_starts_an_env_file_line_is_refused(tmp_path, write_, target):
+    # The value names the entry or the path, masked or not.
+    assert guard.ENV_LEADING in check(tmp_path, f"{HELPER}\n{write_.format(m=WHOLE_MASKED, t=target)}")
+
+
+@pytest.mark.parametrize("target", ENV_FILES)
+@pytest.mark.parametrize("write_", [
+    'echo "k=$(shown "$VALUE")" >> {t}',
+    "printf 'k=%s\\n' {m} >> {t}",
+    "printf '%s=%s\\n' k {m} >> {t}",
+    'echo k {m} >> {t}',
+    '{{ echo a=1; echo "k=$(shown "$VALUE")"; }} >> {t}',
+    'echo "k=$(shown "$VALUE")" | tee -a {t} > /dev/null',
+    'cat <<< "k=$(shown "$VALUE")" >> {t}',
+])
+def test_issue_515_a_masked_value_after_a_literal_name_is_clean(tmp_path, write_, target):
+    assert check(tmp_path, f"{HELPER}\n{write_.format(m=WHOLE_MASKED, t=target)}") == []
+
+
+def test_issue_515_a_raw_value_that_starts_a_path_line_is_refused_both_ways(tmp_path):
+    line = 'printf \'%s\\n\' "$VALUE" >> "${GITHUB_PATH}"'
+    assert check(tmp_path, line) == ["VALUE", guard.ENV_LEADING]
+
+
+@pytest.mark.parametrize("opener", ['cat >> "$GITHUB_ENV" <<EOF', 'cat <<EOF >> "$GITHUB_OUTPUT"',
+                                    'cat <<EOF | tee -a "$GITHUB_PATH"', 'cat <<-EOF >> "$GITHUB_STATE"'])
+@pytest.mark.parametrize("body, found", [
+    ('$(shown "$VALUE")', True),
+    ('  ${VALUE}', True),
+    ('`shown "$VALUE"`', True),
+    ('k=v\n$(shown "$VALUE")', True),
+    # The first line of a multi-line value's body: a value equal to the
+    # delimiter ends it early.
+    ('k<<D\n$(shown "$VALUE")\nD', True),
+    ('k=$(shown "$VALUE")', False),
+    ("'$(shown \"$VALUE\")'", False),
+    ('\\$(shown "$VALUE")', False),
+])
+def test_issue_515_a_heredoc_line_into_an_env_file_that_starts_with_a_value(tmp_path, opener, body, found):
+    close = "\tEOF" if "<<-" in opener else "EOF"
+    lines = "\n".join(("\t" if "<<-" in opener else "") + line for line in body.split("\n"))
+    result = check(tmp_path, f"{HELPER}\n{opener}\n{lines}\n{close}")
+    assert (guard.ENV_LEADING in result) is found, result
+
+
+def test_issue_515_a_quoted_env_file_heredoc_is_data(tmp_path):
+    assert check(tmp_path, "cat >> \"$GITHUB_ENV\" <<'EOF'\n$(shown \"$VALUE\")\nEOF") == []
+
+
+@pytest.mark.parametrize("opener", [' >> "$GITHUB_ENV"', ' >> "$GITHUB_PATH"', ' >> "$GITHUB_OUTPUT" 2>&1'])
+@pytest.mark.parametrize("line, found", [
+    ("print(shown(p))", True),
+    ('print("k=1"); print(shown(p))', True),
+    ('print(f"k=1\\n{shown(p)}")', True),
+    ('print("k", shown(p), sep="\\n")', True),
+    ('sys.stdout.write(shown(p) + "\\n")', True),
+    ('print(f"k={shown(p)}")', False),
+    ('print("k", shown(p))', False),
+])
+def test_issue_515_a_python_print_that_starts_an_env_file_line(tmp_path, opener, line, found):
+    result = check(tmp_path, SHOWN_PY.format(opener, line), env=P_ENV)
+    assert (guard.ENV_LEADING in result) is found, result
+
+
+def test_issue_515_a_stderr_print_starts_an_env_file_line_only_where_stderr_goes_there(tmp_path):
+    line = "print(shown(p), file=sys.stderr)"
+    assert check(tmp_path, SHOWN_PY.format(' >> "$GITHUB_OUTPUT"', line), env=P_ENV) == [guard.LEADING]
+    shutil.rmtree(tmp_path / ".github")
+    # `2>&1` on the opener: read as an entry and as a log line both.
+    assert check(tmp_path, SHOWN_PY.format(' >> "$GITHUB_OUTPUT" 2>&1', line), env=P_ENV) == [
+        guard.LEADING, guard.ENV_LEADING]
+    shutil.rmtree(tmp_path / ".github")
+    # `2>>` writes only stderr there: stdout is the log.
+    assert check(tmp_path, SHOWN_PY.format(' 2>> "$GITHUB_OUTPUT"', "print(shown(p))"), env=P_ENV) == [guard.LEADING]
+
+
+@pytest.mark.parametrize("line, found", [
+    ("console.log(shown(p));", True),
+    ('process.stdout.write(shown(p) + "\\n");', True),
+    ("console.log(`k=${shown(p)}`);", False),
+])
+def test_issue_515_a_node_print_that_starts_an_env_file_line(tmp_path, line, found):
+    run = f"node <<'JS' >> \"$GITHUB_ENV\"\n{guard.JS_SHOWN}\nconst p = process.env.VALUE;\n{line}\nJS"
+    result = check(tmp_path, run)
+    assert (guard.ENV_LEADING in result) is found, result
+
+
+def test_issue_515_an_env_file_line_start_entry_covers_its_line(tmp_path):
+    run = 'dir=/opt/tool\necho "$dir" >> "$GITHUB_PATH"'
+    entry = guard.Allowed(REL, guard.ENV_LEADING, reason="test")
+    write(tmp_path, REL, workflow(run))
+    findings, stale = guard.audit(tmp_path, (entry,))
+    assert findings == [] and stale == []
+    assert [n for _, n in names(tmp_path)] == [guard.ENV_LEADING]
+
+
+@pytest.mark.parametrize("line", [
+    # Refused although harmless: every print of an env-file line, one into
+    # another file too; a multi-line value's body line; a constant directory.
+    'echo "$(shown "$VALUE")" > f; echo a=1 >> "$GITHUB_ENV"',
+    '{ echo "k<<EOF"; echo "$(shown "$VALUE")"; echo EOF; } >> "$GITHUB_OUTPUT"',
+    'echo "$RUNNER_TEMP" >> "$GITHUB_PATH"',
+])
+def test_issue_515_env_file_line_starts_refused_although_harmless(tmp_path, line):
+    assert guard.ENV_LEADING in check(tmp_path, f"{HELPER}\n{line}")
+
+
+@pytest.mark.parametrize("line", [
+    # The masked value is printf's format: a leading `::` survives the mask,
+    # and printf reads `\n` and `%` in it.
+    'printf "$(shown "$VALUE")"',
+    'printf "$(shown "$VALUE")\\n"',
+    'printf -- "$(shown "$VALUE")\\n"',
+    'printf "x $(shown "$VALUE")\\n"',
+    'printf "$VALUE"',
+    'command printf "x $(shown "$VALUE")"',
+    '"printf" "x $(shown "$VALUE")"',
+    'printf "x $(shown "$VALUE")\\n" >> "$GITHUB_OUTPUT"',
+    'printf "k=$(shown "$VALUE")\\n" >> "$GITHUB_ENV"',
+    # `%b` and `echo -e` read the masked value's own escapes.
+    "printf '%b\\n' \"$(shown \"$VALUE\")\"",
+    "printf 'x %b\\n' \"$(shown \"$VALUE\")\"",
+    "printf 'k=%b\\n' \"$(shown \"$VALUE\")\" >> \"$GITHUB_OUTPUT\"",
+    'echo -e "x $(shown "$VALUE")"',
+    'echo -ne "x $(shown "$VALUE")"',
+    '"echo" "-e" "x $(shown "$VALUE")"',
+    'echo -e "k=$(shown "$VALUE")" >> "$GITHUB_ENV"',
+])
+def test_issue_515_a_value_whose_escapes_printf_reads_is_refused(tmp_path, line):
+    assert guard.ESCAPE_NAME in check(tmp_path, f"{HELPER}\n{line}")
+
+
+@pytest.mark.parametrize("line", [
+    "printf 'x %s\\n' \"$(shown \"$VALUE\")\"",
+    "printf 'x %q\\n' \"$(shown \"$VALUE\")\"",
+    'printf "x %s\\n" "$(shown "$VALUE")"',
+    'echo "x $(shown "$VALUE")"',
+    'echo -E "x $(shown "$VALUE")"',
+    'echo -e "x" "\\t"',
+    "printf 'x %b\\n' '\\t'",
+])
+def test_issue_515_a_value_under_a_literal_format_is_clean(tmp_path, line):
+    assert check(tmp_path, f"{HELPER}\n{line}") == []
+
+
+@pytest.mark.parametrize("line", [
+    "printf 'x\\n%s\\n' \"$(shown \"$VALUE\")\"",
+    "printf 'x\\r%s' \"$(shown \"$VALUE\")\"",
+    "printf 'x\\012%s' \"$(shown \"$VALUE\")\"",
+    "printf 'x\\x0a%s' \"$(shown \"$VALUE\")\"",
+    "printf $'x\\n%s' \"$(shown \"$VALUE\")\"",
+    "printf '\\t%s\\n' \"$(shown \"$VALUE\")\"",
+    "printf %s \"$(shown \"$VALUE\")\"",
+    "printf -- '%s' \"$(shown \"$VALUE\")\"",
+    "printf 'x %s\\n%s\\n' a \"$(shown \"$VALUE\")\"",
+    'echo -e "x\\n$(shown "$VALUE")"',
+    'echo >&2 "$(shown "$VALUE")"',
+    "echo $'\\n'\"$(shown \"$VALUE\")\"",
+    'echo `true` "x $(shown "$VALUE")"',
+])
+def test_issue_515_a_value_after_a_printed_line_end_starts_a_log_line(tmp_path, line):
+    assert guard.LEADING in check(tmp_path, f"{HELPER}\n{line}")
+
+
+@pytest.mark.parametrize("line", [
+    "printf 'x %s\\n' a \"$(shown \"$VALUE\")\"",
+    "printf 'x\\\\n%s' \"$(shown \"$VALUE\")\"",
+    "printf 'x\\c\\n%s' \"$(shown \"$VALUE\")\"",
+    'echo "x\\n$(shown "$VALUE")"',
+    'echo # "$(shown "$VALUE")"',
+])
+def test_issue_515_a_value_after_no_printed_line_end_is_clean(tmp_path, line):
+    # A format reused for the next argument starts with its literal; `\\\\`
+    # is a backslash and `\c` ends the output; echo without -e prints `\n`
+    # as two characters; a comment prints nothing.
+    assert check(tmp_path, f"{HELPER}\n{line}") == []
+
+
+@pytest.mark.parametrize("line, words", [
+    ('echo "a $V" b', ["a \x00", "b"]),
+    ("echo 'a $V'", ["a $V"]),
+    ('echo >&2 x 2>>f y', ["x", "y"]),
+    ('echo a2>f', ["a2"]),
+    ("echo $'a\\nb' \"c\"d", ["a\nb", "cd"]),
+    ('echo "$(x "y)")" z; echo q', ["\x00", "z"]),
+    ('echo `a b` c', ["\x00", "c"]),
+    ('echo <(true) x | cat', ["/dev/fd/63", "x"]),
+])
+def test_issue_515_shell_print_words_reads_words_as_bash_passes_them(line, words):
+    assert guard.shell_print_words(line, len("echo")) == words
+
+
+@pytest.mark.parametrize("fmt, args, printed, escaped", [
+    ("%s\\n", ["\x00"], "\x00\n", False),
+    ("k=%s\\n", ["a", "b"], "k=a\nk=b\n", False),
+    ("%b", ["\x00"], "\x00", True),
+    ("%5d|%c", ["\x00", "xy"], "0|x", False),
+    ("x\\c%s", ["\x00"], "x\x01", False),
+    ("%%%s", ["a"], "%a", False),
+    ("%.*s", ["3", "abc"], "abc", False),
+])
+def test_issue_515_printf_output_formats_its_arguments_as_printf_does(fmt, args, printed, escaped):
+    assert guard._printf_output(fmt, args) == (printed, escaped)
