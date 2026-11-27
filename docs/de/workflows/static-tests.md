@@ -114,7 +114,7 @@ jobs:
 
 ## Shell-Lint
 
-`reusable-shellcheck.yaml` prüft Shell-Skripte mit [ShellCheck](https://www.shellcheck.net/) über [reviewdog/action-shellcheck](https://github.com/reviewdog/action-shellcheck), auf einen vollständigen Commit-SHA gepinnt. Die Action legt die ShellCheck-Version fest, sie ändert sich also nur mit einem Release dieses Repositorys. Der Workflow prüft jede passende Datei, nicht nur die in einem Pull-Request geänderten, und meldet Befunde als Annotationen. Er braucht nur `contents: read`.
+`reusable-shellcheck.yaml` prüft Shell-Skripte mit [ShellCheck](https://www.shellcheck.net/). Der Workflow installiert ein festgelegtes ShellCheck-Release und prüft dessen Prüfsumme, bevor er es ausführt; die Version ändert sich also nur mit einem Release dieses Repositorys. Er prüft jede passende Datei, nicht nur die in einem Pull-Request geänderten, und meldet jeden Befund als Annotation: als Fehler, als Warnung oder, für die Stufen `info` und `style`, als Hinweis. Er braucht nur `contents: read` und schreibt nichts in den Pull-Request.
 
 ```yaml title=".github/workflows/build-static-tests.yaml"
 jobs:
@@ -131,7 +131,7 @@ jobs:
 | `pattern` | `*.sh` | Dateinamensmuster der Skripte, eines pro Zeile. |
 | `exclude` | `*/.git/*` | Pfadmuster, das ausgelassen wird, eines pro Zeile. Ein Wert ersetzt den Standard. |
 | `check_all_files_with_shebangs` | `false` | Prüft zusätzlich jede Datei, deren erste Zeile eine Shell nennt, unabhängig vom Dateinamen. |
-| `shellcheck_flags` | `--external-sources` | Flags für ShellCheck. |
+| `shellcheck_flags` | `--external-sources` | Flags für ShellCheck, an Leerzeichen getrennt. Das Ausgabeformat setzt der Workflow selbst. |
 
 Der Job ist grün, wenn keine Datei passt. Ein Repository ohne Shell-Skripte kann den Workflow daher schon aufrufen, bevor es welche hat.
 

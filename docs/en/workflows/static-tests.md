@@ -114,7 +114,7 @@ jobs:
 
 ## Shell lint
 
-`reusable-shellcheck.yaml` lints shell scripts with [ShellCheck](https://www.shellcheck.net/) through [reviewdog/action-shellcheck](https://github.com/reviewdog/action-shellcheck), pinned to a full commit SHA. The action sets the ShellCheck version, so that version changes only with a release of this repository. The workflow checks every matching file, not only the files a pull request changes, and reports findings as annotations. It needs `contents: read` only.
+`reusable-shellcheck.yaml` lints shell scripts with [ShellCheck](https://www.shellcheck.net/). The workflow installs one fixed ShellCheck release and verifies its checksum before running it, so the version changes only with a release of this repository. It checks every matching file, not only the files a pull request changes, and reports each finding as an annotation: an error, a warning, or a notice for the `info` and `style` levels. It needs `contents: read` only and writes nothing to the pull request.
 
 ```yaml title=".github/workflows/build-static-tests.yaml"
 jobs:
@@ -131,7 +131,7 @@ jobs:
 | `pattern` | `*.sh` | File name pattern of the scripts, one per line. |
 | `exclude` | `*/.git/*` | Path pattern to leave out, one per line. A value replaces the default. |
 | `check_all_files_with_shebangs` | `false` | Also lint every file whose first line names a shell, whatever the file's name. |
-| `shellcheck_flags` | `--external-sources` | Flags for ShellCheck. |
+| `shellcheck_flags` | `--external-sources` | Flags for ShellCheck, split on spaces. The workflow sets the output format itself. |
 
 The job passes when no file matches. A repository without shell scripts can therefore call the workflow before it has any.
 

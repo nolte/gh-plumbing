@@ -45,9 +45,9 @@ Elicited 2026-11-27 with the repository owner, as work step 1 of
 ## Requirements
 
 - **R1**: WHEN a consumer calls `reusable-shellcheck.yaml`, the workflow SHALL
-  run ShellCheck through `reviewdog/action-shellcheck`, pinned by commit SHA,
-  over every matching file, not only over changed files (`filter_mode: nofilter`).
-  - _dimension_: `functional` · _status_: `confirmed` · _source_: plan design decision 2; teach-back item 2
+  run one fixed ShellCheck release, verified against a committed SHA-256, over
+  every matching file, not only over changed files.
+  - _dimension_: `functional` · _status_: `confirmed` · _source_: teach-back item 2; revision of 2026-11-27
 - **R2**: The workflow SHALL expose the inputs `fail_level` (default `error`),
   `path` (default `.`), `pattern` (default `*.sh`), `exclude` (default
   `*/.git/*`), `check_all_files_with_shebangs` (default `false`) and
@@ -63,9 +63,9 @@ Elicited 2026-11-27 with the repository owner, as work step 1 of
 - **R5**: WHEN no file matches, the job SHALL pass.
   - _dimension_: `edge_cases` · _status_: `confirmed` · _source_: teach-back item 3
 - **R6**: The workflow SHALL declare `contents: read` only, check out with
-  `persist-credentials: false`, and report findings as workflow-command
-  annotations (`reporter: github-annotations`).
-  - _dimension_: `non_functional` · _status_: `confirmed` · _source_: plan design decision 2; teach-back item 2
+  `persist-credentials: false`, report findings as workflow-command
+  annotations, and never write to the pull request.
+  - _dimension_: `non_functional` · _status_: `confirmed` · _source_: teach-back item 2; revision of 2026-11-27
 - **R7**: The workflow SHALL be usable unchanged from a pre-merge workflow and
   as a `needs:` gate in a release path; it SHALL deliver no artifact.
   - _dimension_: `functional` · _status_: `confirmed` · _source_: plan design decision 1
@@ -81,21 +81,21 @@ Elicited 2026-11-27 with the repository owner, as work step 1 of
   the documentation of R9 is in place.
   - _dimension_: `acceptance_criteria` · _status_: `confirmed` · _source_: teach-back item 4
 
+## Revisions
+
+- **2026-11-27, R1 and R6:** R1 first named `reviewdog/action-shellcheck`
+  (plan design decision 2). On a pull-request event that action failed the job
+  on a finding below `fail_level` that ShellCheck can fix automatically: run
+  46065761938 on pull request #519, with an info-level SC2086 probe and
+  `fail_level: error`. Its second "suggestion" pass feeds `shellcheck -f diff`
+  to `reviewdog` with a fixed `github-pr-review` reporter; diff diagnostics
+  carry no severity, `reviewdog` v0.21.3 fails on an unknown severity, and the
+  action has no input to turn the pass off. R1 and R3 couldn't both hold. The
+  operator chose to keep R3 and run ShellCheck directly.
+
 ## Surviving assumptions / open risks
 
-- **Open conflict, R3 against R1 (observed 2026-11-27):** on a pull-request
-  event, a finding below `fail_level` that ShellCheck can fix automatically
-  fails the job. Run 46065761938 on pull request #519, with an info-level
-  SC2086 probe and `fail_level: error`, ended with `found at least one issue
-  with severity greater than or equal to the given level: error`. The cause is
-  the action's second "suggestion" pass: it feeds `shellcheck -f diff` to
-  `reviewdog` with a hard-coded `github-pr-review` reporter, diff diagnostics
-  carry no severity, and `reviewdog` v0.21.3 fails on an unknown severity for
-  every `fail_level` other than `none`. The same pass tries to post a review
-  to the pull request and is refused with 403 under `contents: read`. On push
-  events the pass exits early and R3 holds (observed in `act` runs). The
-  action has no input that turns the pass off, so R1 and R3 can't both hold
-  as written; the operator decides which one gives.
-- **Fact, not an assumption:** the action pins ShellCheck `0.11.0` and
-  `reviewdog` `v0.21.3` itself; its only nested action reference
-  (`reviewdog/action-setup` v1.5.0) is pinned by commit SHA.
+- **Version bumps are manual:** the ShellCheck version and its SHA-256 sit in
+  the workflow and change together; no update automation watches them yet.
+- **Platform:** the workflow installs the Linux x86-64 asset only, which
+  matches its fixed `ubuntu-latest` runner.
