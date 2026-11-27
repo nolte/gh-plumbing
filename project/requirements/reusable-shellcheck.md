@@ -83,14 +83,19 @@ Elicited 2026-11-27 with the repository owner, as work step 1 of
 
 ## Surviving assumptions / open risks
 
-- **Risk, R3 against R1:** `reviewdog/action-shellcheck` v1.35.1 runs a second
-  "suggestion" pass with a hard-coded `github-pr-review` reporter over
-  `shellcheck -f diff`. Diff diagnostics carry no severity, and `reviewdog`
-  v0.21.3 treats an unknown severity as failing for every `fail_level` other
-  than `none` (`fail_level.go`, `ShouldFail`). Read from source, not yet
-  observed in a run: on a pull-request event, a finding below `fail_level`
-  that ShellCheck can fix automatically may fail the job. To be settled by a run before
-  the workflow is finalised.
+- **Open conflict, R3 against R1 (observed 2026-11-27):** on a pull-request
+  event, a finding below `fail_level` that ShellCheck can fix automatically
+  fails the job. Run 46065761938 on pull request #519, with an info-level
+  SC2086 probe and `fail_level: error`, ended with `found at least one issue
+  with severity greater than or equal to the given level: error`. The cause is
+  the action's second "suggestion" pass: it feeds `shellcheck -f diff` to
+  `reviewdog` with a hard-coded `github-pr-review` reporter, diff diagnostics
+  carry no severity, and `reviewdog` v0.21.3 fails on an unknown severity for
+  every `fail_level` other than `none`. The same pass tries to post a review
+  to the pull request and is refused with 403 under `contents: read`. On push
+  events the pass exits early and R3 holds (observed in `act` runs). The
+  action has no input that turns the pass off, so R1 and R3 can't both hold
+  as written; the operator decides which one gives.
 - **Fact, not an assumption:** the action pins ShellCheck `0.11.0` and
   `reviewdog` `v0.21.3` itself; its only nested action reference
   (`reviewdog/action-setup` v1.5.0) is pinned by commit SHA.
