@@ -121,7 +121,11 @@ value is a line end, and the mask turns every one into `?`:
     name (#513): in shell no other definition (wherever `shown()` or
     `function shown` stands after a blank or an operator: `a) shown() {`,
     `then shown() {`, `! shown() {`, `time shown() {`), `unset`, `alias` or `declare -f`/`export -f` of
-    `shown`; in a Python or Node heredoc no mention of `shown` other than a
+    `shown` -- its name quoted or escaped too, as bash removes the quotes
+    (`alias sh''own=...`, `alias "sh"own=...`, `alias \\shown=...`, `eval
+    "sh""own() ..."`), and any `alias`, `unalias`, `unset` or `-f` whose
+    words hold an expansion, a brace or a glob (`alias s{h,}own=...`,
+    `unset -f "$n"`), which can build the name at run time (#515); in a Python or Node heredoc no mention of `shown` other than a
     call of it (`shown = str`, `shown: T = ...`, `shown := ...`, `import ...
     as shown`, `from ... import shown`, `for shown in`, `with ... as shown`,
     a second `def shown`, `let`/`var shown`, `function shown`, a parameter).
@@ -254,6 +258,49 @@ Four rules hold per line, whatever its names:
     -- is no control character, and printf turns it into a line end after
     the mask. Pass the value to `%s` under a literal format.
 
+A substitution runs where its line does (#515). A print inside a `$(...)`
+or backtick substitution whose body sends anything to stderr, another
+descriptor or a standard stream (`x=$(echo "$V" >&2)`, ``x=`printf '%s' "$V"
+> /dev/stderr` ``, `x=$(echo "$V" | cat >&2)`) is a log print, with the
+line-start rule, also inside a group redirected into a file and beside a
+redirect of the command it stands in, which bash applies only after the
+substitution ran (`x=$(echo "$V" >&2) 2> f`, `true "$(...)" 2> f`); a summary
+write inside any substitution (`x=$(echo "$V" >> "$GITHUB_STEP_SUMMARY")`,
+`` `... | tee -a "$GITHUB_STEP_SUMMARY"` ``, `cat <(echo "$V" >> ...)`) is
+read by the summary rule as a line of its own; a print inside one that
+writes an env file itself by the env-file line-start rule (`x=$(echo
+"$(shown "$V")" >> "$GITHUB_ENV")`); and printf's or `echo -e`'s escapes
+in a value inside any substitution of a sink line by the escape rule (`echo
+"x $(printf "$(shown "$V")")"`: the line end lands in the captured text).
+On a line of an unquoted shell heredoc, which the shell expands wherever the
+heredoc goes (`cat > f <<EOF`), a substitution that prints to stderr or
+writes an env file makes the line a log or env-file line, read whole --
+such a print to stderr by the line-start rule too --, and one that writes
+the summary a summary line.
+
+Two rules hold on every shell line, whatever its output does (#515):
+
+  * a value must not be an argument of a numeric conversion of bash's
+    printf -- `%d`, `%i`, `%o`, `%u`, `%x`, `%X`, `%e`, `%f`, `%g`, `%a`,
+    `%c`, a `*` width or precision, `%(...)T` and any conversion but `%s`,
+    `%q` and `%b` -- unless masked, refused before or constrained as above:
+    printf names a word it can't read as a number in its error, on stderr,
+    so `printf '%d' "$V" > f` prints `printf: Z` and, after the value's line
+    end, `::error::...` to the log. Every printf word of the line counts
+    (`printf -v` too), and of every substitution on it or on a line of an
+    unquoted shell heredoc; a format that holds a value makes every
+    argument one, failing closed;
+  * a line that runs `eval` -- a word that is `eval` once its quotes,
+    backslashes and path are removed, on the line or in a substitution of
+    it or of an unquoted shell heredoc's line -- must not hold a value
+    anywhere (`<eval>`): eval reads its words as shell code again, so a
+    `;`, a quote or `$(...)` in a value runs, masked, refused before or
+    not, and a value in single quotes expands there (`eval 'echo "x $V"'`).
+    Only names constant by construction pass -- read with their single
+    quotes expanded too (`cmd='echo "$V"'; eval "$cmd"`) -- or numeric ones;
+    an indirect expansion (`${!n}`) is refused; a line on ALLOWED under
+    `<eval>` passes with its reason.
+
 A line of a Python or Node heredoc whose delimiter is unquoted (`<<PY`, not
 `<<'PY'`, `<<"PY"` or `<<\\PY`) must not hold `$` or a backtick, wherever the
 heredoc's output goes (`<unquoted heredoc>`): the shell expands both before
@@ -373,22 +420,11 @@ Not covered (each would need a parser this script doesn't have):
     <<EOF`). A print, or a line of an unquoted shell heredoc, piped into
     another command is read as a log line where the last command of its
     pipeline doesn't redirect its stdout (`cat <<EOF | sed p`, #515, below);
-  * a summary write inside a command substitution: the body of `$(...)` is
-    blanked before sinks are read, so `out=$(echo "$V" | tee -a
-    "$GITHUB_STEP_SUMMARY")` and `x=$(echo "$V" >> "$GITHUB_STEP_SUMMARY")`
-    pass with a raw value; likewise an env-file write inside a `$(...)` in
-    the body of an unquoted heredoc whose own destination is a plain file or
-    the log (`cat > f <<EOF` then `$(echo "v=$V" >> "$GITHUB_OUTPUT")`):
-    bash runs it, but a heredoc line is a sink only by the heredoc's own
-    destination, and redirects inside its `$(...)` aren't read; so is a
-    summary write inside a backtick or process substitution (``x=`echo
-    "$V" >> "$GITHUB_STEP_SUMMARY"` ``, `cat <(echo "$V" >>
-    "$GITHUB_STEP_SUMMARY")`, #515: a print inside a process substitution
-    is read as a log print only);
-  * a print inside a `$(...)` or backtick substitution that sends its own
-    stdout to stderr or a standard stream (`x=$(echo "$V" >&2)`, ``x=`echo
-    "$V" >&2` ``): its body is blanked, so the print isn't read, though its
-    text reaches the log (#515; one inside a process substitution is read);
+  * a substitution inside a substitution's text that the guard doesn't
+    find as one: in a `case` pattern inside a `$(...)` (`$(case x in a)
+    ...`), whose `)` ends the body early, the rest is read as the line's;
+    and a heredoc opened inside a substitution (`x=$(cat <<EOF`), whose
+    lines are read as the heredoc's own, not the substitution's (#515);
   * a leading value the line-start rule can't see: an `echo` whose first word
     is built by a command substitution or a variable holding the whole
     message, and a call site of a helper such as fork-guard's or setup-vale's
@@ -418,13 +454,24 @@ Not covered (each would need a parser this script doesn't have):
     "/opt/$(shown "$V")"`, which `/opt/../tmp` leaves a path the value
     picks), read as before; nor an env file written by a command whose
     stdout `exec >> "$GITHUB_ENV"` redirected earlier;
+  * an error message other than printf's that names a value, on stderr --
+    the log -- whatever the command's output does: `[[ "$V" -eq 1 ]]`,
+    `test "$V" -gt 0`, `$(( V ))`, `let`, `declare -i`, `exit "$V"`, `shift
+    "$V"`, `read -t "$V"`, `seq "$V"`, `cd "$V"`, a command named by a value
+    (`"$V"` alone: `command not found`), and every other program's (#515):
+    only bash's printf, by its numeric conversions, is read;
+  * shell code built from a value other than through `eval`: `bash -c "$V"`,
+    `sh -c`, `source <(echo "$V")`, `trap "echo $V" EXIT`, `xargs sh -c`,
+    an alias whose text holds one (`alias x="echo $V"`, refused only where
+    it voids a mask, see above);
   * prints the selector doesn't see: `tee` or `cat` reading a file, a
     here-string fed to a command other than `cat` (`tr a b <<<"$V"`; a
     `cat <<<"$V"` is read as a print, #513), `set -x` tracing, an EXIT trap or a function that prints and is
     called elsewhere, `logger`;
   * a canonical `shown` that is defined only after its first use (the guard
     checks that the body or heredoc defines it, not where), and one rebound
-    in a way that doesn't name it: through `eval` or `source` (shell),
+    in a way that doesn't name it, quotes and backslashes removed: through
+    `source`, or `eval` of a variable that holds the definition (shell),
     `globals()`, `exec` or `setattr` (Python), `globalThis[...]` or `eval`
     (Node) -- nor a rebinding of a helper the canonical `shown` calls
     (`re.sub = lambda a, b, c: c`, `String.prototype.replace = ...`): the
@@ -500,7 +547,9 @@ Not covered (each would need a parser this script doesn't have):
     blocks the guard can't attribute: read as an ordinary one, so a literal
     there can make the name constant (one on the line of its `(` never
     does);
-  * `: "${x:=$V}"`, `printf -v`, `eval`, `${!n}`, `declare -n`, an alias or a
+  * `: "${x:=$V}"`, `printf -v`, `eval` of a command's output (`eval
+    "$(cmd)"`; one of a value is refused, see `<eval>` above), `${!n}`,
+    `declare -n`, an alias or a
     variable holding `$GITHUB_OUTPUT` or `$GITHUB_STEP_SUMMARY`, a command
     prefix held in a variable, `node -e` / `python -c` one-liners, and
     `${!m[@]}`: the keys of an associative array (`m["$V"]=1`) aren't read
@@ -770,6 +819,38 @@ err towards a finding, #515):
     echo's text (`` echo `cmd` x ``), as one that starts with `$(...)`
     always was.
 
+Refused although harmless (the substitution, numeric printf, eval and
+rebinding rules err towards a finding, #515):
+
+  * every print inside a `$(...)` or backtick substitution whose body
+    sends anything to stderr, another descriptor or a standard stream, also
+    one that only captures (`x=$(echo "$V"; echo done >&2)`, `x=$(echo "$V"
+    > /dev/stdout)`, `$(echo "$V" >&1)`), or that a group around it sends
+    into a file after all (`{ x=$(echo "$V" >&2); } 2> f`) -- print the
+    message outside the substitution;
+  * a summary write inside a substitution read as a summary line of its own
+    -- a pipeline into `tee` there is `<command output>`, as on a line of its
+    own -- and a line of an unquoted shell heredoc whose substitution prints
+    to stderr or writes an env file or the summary, read whole, every name
+    on it;
+  * a value in a numeric printf conversion whose error doesn't reach the
+    log after all: the printf's own `2>` or `2>&1` into a file, or one
+    coreutils' `/usr/bin/printf` prints quoted (`'Z\\n::...'`), and one
+    that a check proves a number
+    (`[[ $n =~ ^[0-9]+$ ]]`), a loop variable or a `read` target there (`for
+    n in 1 2; do printf '%d' "$n"`), a `%c` or `%(...)T` of a value, and
+    every argument of a printf whose format holds a value -- add the name to
+    ALLOWED with the check, or print it with `%s`;
+  * on a line that runs `eval`, a value anywhere on it -- outside eval's
+    words (`x="$V"; eval "echo x"`), masked inside single quotes (`eval
+    'echo "x $(shown "$V")"'`), or after an argument word `eval` (`echo eval
+    "$V"`) -- put eval on a line of its own with constants only, or add the
+    line to ALLOWED under `<eval>`;
+  * an `alias`, `unalias`, `unset` or `-f` whose words hold an expansion, a
+    brace or a glob (`alias ll="ls $dir"`, `unset 'arr[1]'`), and quoted
+    text that, its quotes removed, reads as a definition or rebinding of a
+    helper: each voids the helper for the whole body, as a rebinding does.
+
 Refused although harmless (the summary rule errs towards a finding):
 
   * a heredoc in an inner group with a target of its own, inside a group
@@ -1011,6 +1092,33 @@ SHELL_MD_REBIND = re.compile(
 SHELL_SHOWN_REBIND = re.compile(
     r"""\bfunction\s+shown\b|(?<![^\s;&|{}()!`])shown\s*\(\s*\)"""
     r"""|\b(?:unset|alias|unalias|declare\s+-f|readonly\s+-f|export\s+-f)\b[^;&|]*\bshown\b""")
+# An alias, `unalias`, `unset` or a function attribute (`declare -f`, ...)
+# whose arguments name what they bind at run time -- an expansion, a backtick,
+# a brace or a glob (`alias s{h,}own=...`, `unset "$n"`) -- read on the text
+# with its quotes and backslashes removed (#515), as a command word: at a
+# statement's start, after a keyword or a prefix.
+RUNTIME_REBIND = re.compile(
+    r"""(?:^\s*|[;&|(){}!`]\s*|\b(?:then|do|else|elif|time|command|builtin|eval)\s+)"""
+    r"""(?:alias|unalias|unset|(?:declare|typeset|readonly|export)\s+-[A-Za-z]*f[A-Za-z]*)\b[^;&|]*?[$`{}*?\[]""")
+
+
+def dequoted(text: str) -> str:
+    """A shell text with its quotes and backslashes removed, as bash reads a word: `sh''own`, `"sh"own`, `\\shown`."""
+    return re.sub(r"""\$(?=['"])|["'\\]""", "", text)
+
+
+def rebinds(text: str, pattern: re.Pattern) -> bool:
+    """A shell line defines, aliases, unsets or rebinds a helper `pattern` names (#513, #515).
+
+    Read on the text and on it with its quotes and backslashes removed, since
+    bash removes them from the name (`alias sh''own=...`, `alias "sh"own=...`,
+    `alias \\shown=...`, `unset -f 'sh'own`, `eval "sh""own() { :; }"`), and
+    failing closed on one whose name is built at run time (`RUNTIME_REBIND`).
+    """
+    plain = dequoted(text)
+    return bool(pattern.search(text) or pattern.search(plain) or RUNTIME_REBIND.search(plain))
+
+
 # Python and Node: any mention of a helper's name that is not a call of it.
 PY_MD_NAME = re.compile(r"\bmd_(?:enc|code|pre)\b(?!\s*\()|\bdef\s+md_(?:enc|code|pre)\b")
 JS_MD_NAME = re.compile(r"\bmd(?:Enc|Code|Pre)\b(?!\s*\()")
@@ -1909,7 +2017,7 @@ SHELL_WORD = re.compile(r"[^\s;&|()<>]+")
 HERE_STRING = re.compile(r"<<<")
 
 
-def print_words(text: str, a: int = 0, b: int | None = None) -> list[PrintWord]:
+def print_words(text: str, a: int = 0, b: int | None = None, assigning: bool = False) -> list[PrintWord]:
     """Every word of `text[a:b]` that runs `echo`, `printf` or a `cat <<<` here-string, failing closed (#513).
 
     Read word by word, not by command position, so a prefix doesn't hide one
@@ -1918,7 +2026,7 @@ def print_words(text: str, a: int = 0, b: int | None = None) -> list[PrintWord]:
     quotes and backslashes removed and its path cut off, is `echo` or
     `printf` (`/bin/echo`, `"echo"`, `'echo'`, `\\echo`, `e\\cho`) is read as
     a print from there -- an argument word `echo` too. A `printf -v` assigns
-    and prints nothing. A `cat` word followed by `<<<` on the segment prints
+    and prints nothing (read with `assigning`). A `cat` word followed by `<<<` on the segment prints
     the here-string: read as an `echo` of the text after the `<<<`.
     """
     b = len(text) if b is None else b
@@ -1929,7 +2037,7 @@ def print_words(text: str, a: int = 0, b: int | None = None) -> list[PrintWord]:
         plain = re.sub(r"""\$(?=['"])""", "", text[w.start():w.end()])
         plain = re.sub(r"\\(.)", r"\1", plain).replace('"', "").replace("'", "")
         name = plain.rsplit("/", 1)[-1]
-        if name == "printf" and re.match(r"\s+-v\b", text[w.end():b]):
+        if name == "printf" and not assigning and re.match(r"\s+-v\b", text[w.end():b]):
             continue
         if name in ("echo", "printf"):
             out.append(PrintWord(name, w.start(), w.end()))
@@ -2001,13 +2109,113 @@ def logged_prints(text: str) -> list[tuple[re.Match | PrintWord, int]]:
     like a `$(...)` (`` echo `true | tee f` "$V" ``: its pipe is not the
     print's, `` echo `true > f` "$V" ``: nor its redirect). A print either
     reading finds is logged, to the later of its two ends.
+
+    A print inside a `$(...)` or backtick substitution that sends its own
+    stdout to stderr or a standard stream counts as well
+    (`substituted_log_prints`, #515).
     """
     merged: dict[int, tuple[re.Match | PrintWord, int]] = {}
     for backticks in (False, True):
         for m, end in _logged_prints(text, backticks):
             if m.start(1) not in merged or merged[m.start(1)][1] < end:
                 merged[m.start(1)] = (m, end)
+    for m, end in substituted_log_prints(text):
+        merged.setdefault(m.start(1), (m, end))
     return [merged[i] for i in sorted(merged)]
+
+
+def substitutions(text: str, heredoc: bool = False) -> list[tuple[str, int, int]]:
+    """(kind, start, end) of the body of every outermost substitution of a shell line (#515).
+
+    `kind` is `$` for a `$(...)` (a `$((...))` too, failing closed), a
+    backtick for a backtick substitution -- both inside double quotes as
+    well -- and `<` or `>` for a process substitution outside quotes. Not one
+    in single quotes, but on a line of an unquoted heredoc (`heredoc`),
+    where a quote outside a substitution is a literal character. An unclosed
+    one runs to the end of the line.
+    """
+    out = []
+    i, quote = 0, None
+    while i < len(text):
+        c = text[i]
+        if c == "\\" and quote != "'":
+            i += 2
+            continue
+        if quote == "'":
+            quote = None if c == "'" else quote
+        elif text.startswith("$(", i) or (quote is None and text.startswith(("<(", ">("), i)):
+            stop = _skip_balanced(text, i + 2, "(", ")")
+            closed = text[stop - 1:stop] == ")" and stop > i + 2
+            out.append((c if c in "<>" else "$", i + 2, stop - 1 if closed else stop))
+            i = stop
+            continue
+        elif c == "`":
+            stop = _backtick_end(text, i)
+            closed = text[stop - 1:stop] == "`" and stop - 1 > i
+            out.append(("`", i + 1, stop - 1 if closed else stop))
+            i = stop
+            continue
+        elif quote == '"':
+            quote = None if c == '"' else quote
+        elif c in "'\"" and not heredoc:
+            quote = c
+        i += 1
+    return out
+
+
+def substitution_bodies(text: str, heredoc: bool = False, kinds: str = "$`<>") -> list[str]:
+    """The body of every substitution of a shell line of `kinds`, nested ones included, outermost first (#515)."""
+    out = []
+    for kind, start, stop in substitutions(text, heredoc):
+        body = text[start:stop]
+        if kind in kinds:
+            out.append(body)
+        out += substitution_bodies(body, kinds=kinds)
+    return out
+
+
+def summary_substitutions(text: str, heredoc: bool = False) -> list[str]:
+    """The body of every substitution of a shell line that writes the step summary itself (#515).
+
+    `x=$(echo "$V" >> "$GITHUB_STEP_SUMMARY")`, `` `... | tee -a
+    "$GITHUB_STEP_SUMMARY"` ``, `cat <(echo "$V" >> ...)`: the line's own
+    reading blanks a substitution, so its body is read as a line of its
+    own. A `>(tee ...)` the line's output feeds is the line's write, read
+    with it; only what follows the `tee` in it is the body's.
+    """
+    out = []
+    for kind, start, stop in substitutions(text, heredoc):
+        body = text[start:stop]
+        own = re.sub(r"^\s*tee\b[^;&|]*", " ", body) if kind == ">" else body
+        if writes_summary(own):
+            out.append(own)
+        out += summary_substitutions(body)
+    return out
+
+
+def substituted_log_prints(text: str, heredoc: bool = False) -> list[tuple[PrintWord, int]]:
+    """(print, end) of every print inside a `$(...)` or backtick substitution whose text reaches the log (#515).
+
+    A command substitution captures stdout only: a print in one that sends
+    its own stdout to stderr, another descriptor or a standard stream
+    (`x=$(echo "$V" >&2)`, ``x=`printf '%s' "$V" > /dev/stderr` ``) prints
+    to the log. Failing closed, every print the body reads as reaching its
+    stdout counts where the body sends anything there (`to_std_stream`,
+    anywhere in it: `x=$(echo "$V"; true >&2)`), and so does one found that
+    way in a substitution nested in it. Offsets are the line's.
+    """
+    out: dict[int, tuple[PrintWord, int]] = {}
+    for kind, start, stop in substitutions(text, heredoc):
+        if kind not in "$`":
+            continue
+        body = text[start:stop]
+        stderr = to_std_stream(body)
+        deeper = {m.start(1) for m, _ in substituted_log_prints(body)}
+        for m, end in logged_prints(body):
+            if stderr or m.start(1) in deeper:
+                out.setdefault(start + m.start(1), (PrintWord(m.group(1), start + m.start(1), start + m.end()),
+                                                    start + end))
+    return [out[i] for i in sorted(out)]
 
 
 def _logged_prints(text: str, backticks: bool, extended: bool = True) -> list[tuple[re.Match | PrintWord, int]]:
@@ -2194,9 +2402,11 @@ def redirected_groups(units: list[Logical]) -> tuple[set[int], set[int], set[int
                 last = not any(seg[1].strip() for seg in segments[i + 1:])
                 redirected.update(m for m in members if (m != opened or first) and (m != k or last))
     # A line inside such a group that sends its own stdout to stderr prints to
-    # the log after all: the log rule keeps reading it.
+    # the log after all: the log rule keeps reading it -- also one with such
+    # a print inside a command substitution (`x=$(echo "$V" >&2)`, #515).
     redirected = {i for i in redirected
-                  if not (TO_STDERR.search(unquoted(units[i].text)) or to_std_stream(units[i].text))}
+                  if not (TO_STDERR.search(unquoted(units[i].text)) or to_std_stream(units[i].text)
+                          or substituted_log_prints(units[i].text))}
     return redirected, envfile, summary, piped
 
 
@@ -2470,6 +2680,12 @@ def sink_units(units: list[Logical]) -> set[int]:
             opener = units[unit.origin].text
             if unit.dest in ("envfile", "log") or (
                     unit.dest == "pipe" and (pipes_to_log(HEREDOC.sub(" ", opener)) or heredoc_pipe_logs(opener))):
+                sinks.add(k)
+            elif unit.expands and (substituted_log_prints(text, heredoc=True) or any(
+                    ENV_FILE.search(body) for body in substitution_bodies(text, heredoc=True))):
+                # A substitution on a line the shell expands runs wherever the
+                # heredoc goes: a print in it to stderr, or an env-file write
+                # in it, makes the line a sink, read whole (#515).
                 sinks.add(k)
         elif unit.lang in ("py", "js") and unit.dest == "envfile":
             # Every line of a heredoc whose stdout goes to an env file (#507),
@@ -3269,7 +3485,7 @@ class Checker:
                 self.assigned.setdefault(name, []).append((j, rhs))
         self.shell_shown = any(u.lang == "sh" and u.text.strip() == SHELL_SHOWN for u in self.units) \
             and not any(u.lang == "sh" and u.text.strip() != SHELL_SHOWN and not is_comment(u.text)
-                        and SHELL_SHOWN_REBIND.search(u.text) for u in self.units)
+                        and rebinds(u.text, SHELL_SHOWN_REBIND) for u in self.units)
         self.blocks = blocks_of(self.units)
         self._mask_paths: dict[tuple[str, int], tuple[int, ...] | None] = {}
         self._events: dict[str, tuple[list[tuple[int, bool]], set[int]]] = {}
@@ -3298,7 +3514,7 @@ class Checker:
         # (shell) or in the same heredoc (Python, Node).
         self.shell_md = all(any(u.lang == "sh" and u.text.strip() == line for u in self.units) for line in SHELL_MD) \
             and not any(u.lang == "sh" and u.text.strip() not in SHELL_MD and not is_comment(u.text)
-                        and SHELL_MD_REBIND.search(u.text) for u in self.units)
+                        and rebinds(u.text, SHELL_MD_REBIND) for u in self.units)
         self.md: dict[int, bool] = {}
         heredocs: dict[int, list[str]] = {}
         for k, unit in enumerate(self.units):
@@ -3631,6 +3847,52 @@ class Checker:
                     return False
         return True
 
+    def constant_shell(self, name: str, k: int, depth: int = 0) -> bool:
+        """A name constant by construction, or on ALLOWED: nothing else holds as shell code (`eval`, #515).
+
+        A mask or a refusal leaves `;`, `$(...)` and a quote in a value, which
+        `eval` runs. An assignment's single-quoted text is read as expanded
+        too: eval expands it (`cmd='echo "$V"'; eval "$cmd"`).
+        """
+        if self.allowed(name, k, shell=True):
+            return True
+        everywhere = self.assigned.get(name, [])
+        if name in self.body.env:
+            return not everywhere and "$" not in self.body.env[name]
+        if not everywhere or depth > 5:
+            return False
+        for j, rhs in everywhere:
+            if rhs is None or "$(" in rhs or re.search(r"(?<!\\)`", rhs) or self.in_subshell(name, j):
+                return False
+            for ref, masked, numeric in shell_refs(rhs, heredoc=True):
+                if masked or not (numeric or (ref != name and self.constant_shell(ref, j, depth + 1))):
+                    return False
+        return True
+
+    def eval_names(self, k: int) -> list[str]:
+        """Names on a line that runs `eval` that aren't constant (#515).
+
+        `eval` reads its arguments as shell code again, so a value there runs
+        as code -- a line end, `;` or `$(...)` in it prints what it likes --,
+        masked or refused before or not, and in single quotes too (`eval 'echo
+        "x $V"'`). Every expansion on the line counts, failing closed, an
+        indirect one (`${!n}`) too.
+        """
+        unit = self.units[k]
+        if is_comment_unit(unit) or self.helper_line(k) or not runs_eval(unit):
+            return []
+        names = [name for name, masked, numeric in shell_refs(unit.text, heredoc=True)
+                 if masked or not (numeric or self.constant_shell(name, k))]
+        return names + (["${!...}"] if "${!" in unit.text else [])
+
+    def numeric_names(self, k: int) -> list[str]:
+        """Unclean names in a numeric conversion's argument of a shell printf (`numeric_printf_args`, #515)."""
+        unit = self.units[k]
+        if is_comment_unit(unit) or self.helper_line(k):
+            return []
+        return [name for arg in numeric_printf_args(unit) for name, masked, numeric in shell_refs(arg)
+                if not ((masked and self.shell_shown) or numeric or self.clean_shell(name, k))]
+
     def clean_summary(self, name: str, k: int, depth: int = 0) -> bool:
         """A shell name is safe in the step summary's Markdown where it stands.
 
@@ -3671,9 +3933,13 @@ class Checker:
         for k, unit in enumerate(self.units):
             if is_comment_unit(unit) or not unit.text.strip() or self.helper_line(k):
                 continue
-            if unit.lang == "sh" and (k in grouped or writes_summary(unit.text)):
+            if unit.lang == "sh" and (k in grouped or writes_summary(unit.text) or summary_substitutions(unit.text)):
                 out.append(k)
             elif unit.lang in ("sh-heredoc", "py", "js") and (unit.dest == "summary" or unit.summary):
+                out.append(k)
+            elif unit.lang == "sh-heredoc" and unit.expands and summary_substitutions(unit.text, heredoc=True):
+                # A substitution on a line the shell expands runs, wherever
+                # the heredoc goes: the line is read as a summary line (#515).
                 out.append(k)
         return out
 
@@ -3692,8 +3958,17 @@ class Checker:
             # ${V}` (whose `}` a statement's reading drops) (#513).
             text = SUMMARY_FILE.sub("", unit.text).replace("'", " ")
             return self.summary_statements([("echo", f'echo "{text}"')], k)
-        text = unit.text
+        # A summary write inside a substitution: its body read as a line of
+        # its own, outside any group (#515).
+        names = [name for body in summary_substitutions(unit.text) for name in self.summary_text(body, k, False)]
         _, _, grouped, _ = redirected_groups(self.units)
+        return names + self.summary_text(unit.text, k, k in grouped)
+
+    def summary_text(self, text: str, k: int, in_group: bool) -> list[str]:
+        """Unclean names of shell text (unit k's, or a substitution's body) whose output reaches the summary.
+
+        `in_group`: the text stands in a group or compound redirected there.
+        """
         heredoc = HEREDOC.search(text)
         if heredoc:
             # The heredoc's own lines are read where they stand; a bare `cat`
@@ -3730,7 +4005,7 @@ class Checker:
             if not statement.strip():
                 continue
             here = SUMMARY_FILE.search(statement) or SUMMARY_TEE.search(statement)
-            grouped_here = k in grouped or i in inline
+            grouped_here = in_group or i in inline
             # Inside the group, stdout sent to stderr or a standard stream
             # may still reach the summary (`>&`/`&>` on the closer sends
             # stderr there too; `> /dev/stdout` and `> >(cat)` print to the
@@ -4013,6 +4288,11 @@ def leading_value(unit: Logical) -> bool:
     "$x=1" | tee ...`, #513).
     """
     text = unit.text
+    if unit.lang == "sh-heredoc" and unit.expands:
+        # A print inside a substitution of a line the shell expands, to
+        # stderr or a standard stream (#515): the shell runs it, wherever
+        # the heredoc goes.
+        return any(_leads(text, m) or _shell_leads(text, m) for m, _ in substituted_log_prints(text, heredoc=True))
     if unit.lang != "sh" or COMMAND.search(text):
         return False
     prints = [m for m, _ in logged_prints(text)]
@@ -4151,7 +4431,7 @@ def _double_quoted(text: str, j: int, word: list[str]) -> int:
     return j + 1
 
 
-def shell_print_words(text: str, i: int) -> list[str]:
+def shell_print_words(text: str, i: int, raw: list[str] | None = None) -> list[str]:
     """The argument words of a shell command from `i`, as bash passes them (#515).
 
     Quotes and backslashes are removed, every expansion -- `$name`, `${...}`,
@@ -4159,11 +4439,13 @@ def shell_print_words(text: str, i: int) -> list[str]:
     expanded, and a redirect is dropped with its target wherever it stands
     (`echo >&2 "$V"`, `echo >> "$GITHUB_ENV" "$V"`), as bash does. Read up to
     the end of the statement -- an unquoted `;`, `&`, `|`, `(` or `)` -- or a
-    comment, or the end of the text.
+    comment, or the end of the text. `raw` gets each word's text as it
+    stands on the line.
     """
     words: list[str] = []
     word: list[str] | None = None
     target = False  # the next word is a redirect's target
+    begin = i  # where the word being read starts
 
     def finish() -> None:
         nonlocal word, target
@@ -4172,6 +4454,8 @@ def shell_print_words(text: str, i: int) -> list[str]:
                 target = False
             else:
                 words.append("".join(word))
+                if raw is not None:
+                    raw.append(text[begin:i])
         word = None
 
     n = len(text)
@@ -4187,6 +4471,7 @@ def shell_print_words(text: str, i: int) -> list[str]:
             break  # a comment
         elif redirect and text.startswith(("<(", ">("), i):
             # A process substitution is a word: a path such as /dev/fd/63.
+            begin = i if word is None else begin
             word = (word or []) + ["/dev/fd/63"]
             i = _skip_balanced(text, i + 2, "(", ")")
         elif redirect:
@@ -4202,7 +4487,8 @@ def shell_print_words(text: str, i: int) -> list[str]:
                 while i < n and text[i] in " \t":
                     i += 1
         else:
-            word = [] if word is None else word
+            if word is None:
+                word, begin = [], i
             if c == "\\":
                 word.append("" if text[i + 1:i + 2] == "\n" else text[i + 1:i + 2])
                 i += 2
@@ -4393,9 +4679,118 @@ def escape_expansion(unit: Logical) -> bool:
     into `?`, but leaves `\\n` -- a backslash and a letter -- for printf to
     turn into one.
     """
-    if unit.lang != "sh":
+    if unit.lang == "sh":
+        pieces = [unit.text, *substitution_bodies(unit.text)]
+    elif unit.lang == "sh-heredoc" and unit.expands:
+        pieces = substitution_bodies(unit.text, heredoc=True)
+    else:
         return False
-    return any((read := printed_text(unit.text, m)) is not None and read[1] for m in shell_prints(unit.text))
+    # A print inside a substitution too (#515): what printf makes of a `\n`
+    # there is captured into the line's text, or printed where its own
+    # redirect sends it (`echo "x $(printf "$(shown "$V")")"`).
+    return any((read := printed_text(piece, m)) is not None and read[1]
+               for piece in pieces for m in shell_prints(piece))
+
+
+NUMERIC_NAME = "numeric printf"  # in the finding's text, not a name
+
+
+def numeric_positions(fmt: str, count: int) -> list[int]:
+    """The indexes of printf's `count` arguments that a numeric conversion of `fmt` reads (#515).
+
+    The format is read again while arguments are left, as printf does. A
+    `*` width or precision reads a number, and so does every conversion but
+    `%s`, `%q` and `%b` -- `%d`, `%x`, `%f`, `%c`, `%(...)T` and one the
+    guard can't read, failing closed.
+    """
+    out: list[int] = []
+    at = 0
+    for _ in range(count + 1):
+        consumed = False
+        i = 0
+        while i < len(fmt):
+            if fmt.startswith("\\\\", i) or fmt.startswith("%%", i):
+                i += 2
+                continue
+            if fmt[i] != "%":
+                i += 1
+                continue
+            m = PRINTF_CONVERSION.match(fmt, i)
+            for star in m.groups()[:2]:
+                if star == "*":
+                    out.append(at)
+                    at += 1
+            if m.group(3) not in ("s", "q", "b"):
+                out.append(at)
+            at += 1
+            consumed = True
+            i = max(m.end(), i + 1)
+        if at >= count or not consumed:
+            break
+    return [n for n in out if n < count]
+
+
+def numeric_printf_args(unit: Logical) -> list[str]:
+    """The argument words, as they stand on the line, that a numeric conversion of a shell printf reads (#515).
+
+    bash's printf names a word it can't read as a number in its error, on
+    stderr -- the log --, whatever its own output does: `printf '%d' "$V" >
+    f` prints `printf: Z` and, after the value's line end, `::error::...`.
+    Every printf word of a shell line is read (`printf -v` too), and of every
+    substitution on it or on a line of an unquoted shell heredoc, which the
+    shell runs; where the format holds a value, every argument is read,
+    failing closed.
+    """
+    if unit.lang == "sh":
+        pieces = [unit.text, *substitution_bodies(unit.text)]
+    elif unit.lang == "sh-heredoc" and unit.expands:
+        pieces = substitution_bodies(unit.text, heredoc=True)
+    else:
+        return []
+    out: list[str] = []
+    for piece in pieces:
+        for m in print_words(piece, assigning=True):
+            if m.group(1) != "printf":
+                continue
+            raw: list[str] = []
+            words = shell_print_words(piece, m.end(), raw)
+            if words[:1] == ["-v"]:
+                words, raw = words[2:], raw[2:]
+            if words[:1] == ["--"]:
+                words, raw = words[1:], raw[1:]
+            if not words:
+                continue
+            args = raw[1:len(words)]
+            if VALUE in words[0]:
+                out += args
+            else:
+                out += [args[n] for n in numeric_positions(words[0], len(args))]
+    return out
+
+
+EVAL_NAME = "<eval>"
+EVAL_WORDS = ("eval",)
+
+
+def runs_eval(unit: Logical) -> bool:
+    """A shell line runs `eval`, on the line or in a substitution of it or of an unquoted shell heredoc's line (#515).
+
+    A word that, with its quotes and backslashes removed and its path cut
+    off, is `eval` -- after a prefix too (`command eval`, `builtin eval`),
+    or an argument word (`echo eval`), failing closed.
+    """
+    if unit.lang == "sh":
+        pieces = [unit.text, *substitution_bodies(unit.text)]
+    elif unit.lang == "sh-heredoc" and unit.expands:
+        pieces = substitution_bodies(unit.text, heredoc=True)
+    else:
+        return False
+    for piece in pieces:
+        words = unquoted(piece, "x")
+        for w in SHELL_WORD.finditer(words):
+            if dequoted(piece[w.start():w.end()]).rsplit("/", 1)[-1] in EVAL_WORDS:
+                return True
+    return False
 
 
 def env_line_leads(checker: "Checker", k: int, envfile: set[int]) -> bool:
@@ -4415,6 +4810,13 @@ def env_line_leads(checker: "Checker", k: int, envfile: set[int]) -> bool:
     unit = checker.units[k]
     if is_comment_unit(unit) or checker.helper_line(k):
         return False
+    if unit.lang in ("sh", "sh-heredoc") and (unit.lang == "sh" or unit.expands):
+        # A print inside a substitution that writes an env file itself
+        # (`x=$(echo "$(shown "$V")" >> "$GITHUB_ENV")`, #515), on a shell
+        # line or a line of an unquoted shell heredoc, wherever that goes.
+        bodies = substitution_bodies(unit.text, heredoc=unit.lang == "sh-heredoc")
+        if any(_shell_leads(body, m) for body in bodies if ENV_FILE.search(body) for m in shell_prints(body)):
+            return True
     if unit.lang == "sh":
         if not (ENV_FILE.search(unit.text) or k in envfile):
             return False
@@ -4457,12 +4859,13 @@ def audit_body(body: Body, siblings: list[Body] | None = None, entries: tuple[Al
                 "'##[' can re-form across the seam. Put a space or another character between them."))
         lang = checker.units[k].lang
         leads = checker.leading_print(k) if lang in ("py", "js") else leading_value(checker.units[k])
-        if k not in redirected and leads and not checker.allowed(LEADING, k, shell=lang == "sh"):
+        if k not in redirected and leads and not checker.allowed(LEADING, k, shell=lang in ("sh", "sh-heredoc")):
             findings.append(finding(
                 body.path, line, body.step,
                 f"`{LEADING}`: this log line begins with an interpolated value. No mask touches a "
                 "leading '::', so put a literal in front of it."))
-        if lang == "sh" and escape_expansion(checker.units[k]) and not checker.allowed(ESCAPE_NAME, k, shell=True):
+        if lang in ("sh", "sh-heredoc") and escape_expansion(checker.units[k]) \
+                and not checker.allowed(ESCAPE_NAME, k, shell=True):
             findings.append(finding(
                 body.path, line, body.step,
                 f"`{ESCAPE_NAME}`: printf or echo -e reads backslash escapes in an interpolated value here -- in "
@@ -4474,6 +4877,23 @@ def audit_body(body: Body, siblings: list[Body] | None = None, entries: tuple[Al
                 f"`{ENV_LEADING}`: this env-file line begins with an interpolated value, masked or not, so the "
                 "value names the entry (BASH_ENV, NODE_OPTIONS, another output) or the path, or ends a multi-line "
                 "value early. Write the literal name first (name=$(shown \"$value\"))."))
+    for k, unit in enumerate(checker.units):
+        line = body.first_line + unit.index
+        for name in dict.fromkeys(checker.numeric_names(k)):
+            findings.append(finding(
+                body.path, line, body.step,
+                f"`{capped(name)}` reaches a {NUMERIC_NAME} conversion unmasked (%d, %x, %f, %c, a * width, ...): "
+                "printf names an argument it can't read as a number in its error, on stderr, so the value reaches "
+                "the log wherever printf's output goes. Mask it, refuse a control character and '##[' before it, "
+                "or add it to ALLOWED with the reason it is constrained."))
+        evaluated = checker.eval_names(k)
+        if evaluated and not checker.allowed(EVAL_NAME, k, shell=True):
+            findings.append(finding(
+                body.path, line, body.step,
+                f"`{EVAL_NAME}`: this line runs eval with an interpolated value "
+                f"({', '.join(capped(n) for n in dict.fromkeys(evaluated))}), which eval reads as shell code -- a "
+                "line end, ';' or '$(...)' in it prints what it likes, masked or not. Keep values out of eval, "
+                "or add the line to ALLOWED with the reason it is constrained."))
     for unit in checker.units:
         if unit.lang == "sh" and not is_comment(unit.text) and ambiguous_heredoc_opener(unit.text):
             findings.append(finding(

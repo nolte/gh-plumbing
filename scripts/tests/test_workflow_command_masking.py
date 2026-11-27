@@ -3044,8 +3044,10 @@ def test_issue_513_a_prefixed_pathed_or_quoted_print_is_read_as_a_log_print(tmp_
     assert "VALUE" in check(tmp_path, f"{HELPER}\n{before}{command} {value}{sink}")
 
 
+# `eval echo` is not: eval runs a masked `;echo ::error::x` as code (#515).
 @pytest.mark.parametrize("before", ["", "echo a & "])
-@pytest.mark.parametrize("command", [c for c in PREFIXED_PRINTS if "'%s" not in c and '"%s' not in c])
+@pytest.mark.parametrize("command", [c for c in PREFIXED_PRINTS
+                                     if "'%s" not in c and '"%s' not in c and c != "eval echo"])
 def test_issue_513_a_prefixed_print_of_a_masked_value_is_clean(tmp_path, command, before):
     value = '"x $(shown "$VALUE")"'
     assert check(tmp_path, f"{HELPER}\n{before}{command} {value}") == []
@@ -3798,3 +3800,331 @@ def test_issue_515_shell_print_words_reads_words_as_bash_passes_them(line, words
 ])
 def test_issue_515_printf_output_formats_its_arguments_as_printf_does(fmt, args, printed, escaped):
     assert guard._printf_output(fmt, args) == (printed, escaped)
+
+
+# --- #515 P5: substitutions, numeric printf, eval, a quoted alias ------------
+
+
+@pytest.mark.parametrize("line", [
+    # A command substitution captures stdout only: a print in it to stderr
+    # or a standard stream prints to the log.
+    'x=$(echo "x $VALUE" >&2)',
+    "x=$(printf 'x %s' \"$VALUE\" > /dev/stderr)",
+    'x=`echo "x $VALUE" 1>&2`',
+    'x="$(echo "x $VALUE" >&2)"',
+    'echo "a $(echo "x $VALUE" >&2)" > f',
+    'x=$(true; echo "x $VALUE" >/dev/fd/2)',
+    'x=$(echo "x $VALUE" | cat >&2)',
+    'x=$(echo "x $VALUE" | tee /dev/stderr)',
+    'x=$(echo "x $VALUE" > >(cat >&2))',
+    'x=$(y=$(echo "x $VALUE" >&2))',
+    'x=$(echo "x $VALUE" >&3)',
+    'x=$({ echo "x $VALUE"; } >&2)',
+    '{ x=$(echo "x $VALUE" >&2); } > f',
+    '{\nx=$(echo "x $VALUE" >&2)\n} > f',
+    'cat <(x=$(echo "x $VALUE" >&2)) > f',
+    # bash applies the command's redirect after the substitution ran.
+    'x=$(echo "x $VALUE" >&2) 2> f',
+    'true "$(echo "x $VALUE" >&2)" 2> /dev/null',
+])
+def test_issue_515_a_stderr_print_inside_a_command_substitution_is_a_log_print(tmp_path, line):
+    assert "VALUE" in check(tmp_path, f"{HELPER}\n{line}")
+
+
+@pytest.mark.parametrize("line", [
+    'x=$(echo "x $VALUE")',
+    'x=$(echo "x $VALUE" 2>&1)',
+    'x=$(echo "x $VALUE" | tr a b)',
+    'x=$(echo "x $(shown "$VALUE")" >&2)',
+    'x=$(echo "x $VALUE" >&2 > f)',
+    "x='$(echo \"x $VALUE\" >&2)'",
+])
+def test_issue_515_a_captured_or_masked_print_inside_a_command_substitution_is_clean(tmp_path, line):
+    assert check(tmp_path, f"{HELPER}\n{line}") == []
+
+
+def test_issue_515_a_leading_value_inside_a_command_substitution_to_stderr_is_refused(tmp_path):
+    assert guard.LEADING in check(tmp_path, f'{HELPER}\nx=$(echo "$(shown "$VALUE")" >&2)')
+
+
+@pytest.mark.parametrize("text, spans", [
+    ('x=$(a) "$(b)" `c` <(d) ">(e)"', [("$", 4, 5), ("$", 10, 11), ("`", 15, 16), ("<", 20, 21)]),
+    ("'$(a)' $(b $(c))", [("$", 9, 15)]),
+    ("x $(a", [("$", 4, 5)]),
+    ("'$(a)'", []),
+])
+def test_issue_515_substitutions_are_found_outside_single_quotes(text, spans):
+    assert guard.substitutions(text) == spans
+
+
+def test_issue_515_substitutions_on_a_heredoc_line_ignore_its_quotes():
+    assert guard.substitutions("don't $(a)", heredoc=True) == [("$", 8, 9)]
+    assert guard.substitution_bodies("$(a $(b) `c`)") == ["a $(b) `c`", "b", "c"]
+
+
+@pytest.mark.parametrize("line", [
+    'x=$(echo "x $VALUE" >> "$GITHUB_STEP_SUMMARY")',
+    'x=$(echo "x $VALUE" | tee -a "$GITHUB_STEP_SUMMARY")',
+    'x=`echo "x $VALUE" >> "$GITHUB_STEP_SUMMARY"`',
+    'x="$(echo "x $VALUE" >> "$GITHUB_STEP_SUMMARY")"',
+    'cat <(echo "x $VALUE" >> "$GITHUB_STEP_SUMMARY") > f',
+    'echo a > >(tee -a "$GITHUB_STEP_SUMMARY"; echo "x $VALUE" >> "$GITHUB_STEP_SUMMARY")',
+    'x=$(y=$(echo "x $VALUE" >> "$GITHUB_STEP_SUMMARY"))',
+    'x=$(echo "x $(shown "$VALUE")" >> "$GITHUB_STEP_SUMMARY")',
+])
+def test_issue_515_a_summary_write_inside_a_substitution_is_read(tmp_path, line):
+    assert "VALUE" in check(tmp_path, f"{HELPER}\n{MD}\n{line}")
+
+
+@pytest.mark.parametrize("line", [
+    'x=$(echo "x $(md_code "$VALUE")" >> "$GITHUB_STEP_SUMMARY")',
+    'echo "x $(md_code "$VALUE")" > >(tee -a "$GITHUB_STEP_SUMMARY")',
+])
+def test_issue_515_an_encoded_summary_write_inside_a_substitution_is_clean(tmp_path, line):
+    assert check(tmp_path, f"{HELPER}\n{MD}\n{line}") == []
+
+
+@pytest.mark.parametrize("opener", ["cat > f <<EOF", "cat <<EOF", "cat > /dev/null <<-EOF"])
+@pytest.mark.parametrize("body, found", [
+    ('$(echo "x $VALUE" >&2)', "VALUE"),
+    ('$(echo "k=$VALUE" >> "$GITHUB_OUTPUT")', "VALUE"),
+    ('$(echo "x $VALUE" >> "$GITHUB_STEP_SUMMARY")', "VALUE"),
+    ("don't $(echo \"x $VALUE\" >&2)", "VALUE"),
+    ('$(echo "$(shown "$VALUE")" >> "$GITHUB_ENV")', guard.ENV_LEADING),
+])
+def test_issue_515_a_substitution_on_an_unquoted_shell_heredoc_line_runs(tmp_path, opener, body, found):
+    # The shell runs a substitution on a line of an unquoted heredoc,
+    # wherever the heredoc goes: a print to stderr, an env-file or summary
+    # write in it is read (#515).
+    assert found in check(tmp_path, f"{HELPER}\n{MD}\n{opener}\n{body}\nEOF")
+
+
+@pytest.mark.parametrize("opener", ["cat <<EOF", 'cat >> "$GITHUB_OUTPUT" <<EOF'])
+def test_issue_515_printf_escapes_in_a_substitution_on_a_heredoc_sink_line_are_refused(tmp_path, opener):
+    # What printf makes of a masked `\n` is captured into the line.
+    run = f'{HELPER}\n{opener}\nk=$(printf "$(shown "$VALUE")")\nEOF'
+    assert guard.ESCAPE_NAME in check(tmp_path, run)
+
+
+def test_issue_515_a_substitution_on_a_quoted_shell_heredoc_line_is_data(tmp_path):
+    run = f"{HELPER}\ncat > f <<'EOF'\n$(echo \"x $VALUE\" >&2)\n$(printf '%d' \"$VALUE\")\nEOF"
+    assert check(tmp_path, run) == []
+
+
+@pytest.mark.parametrize("line, found", [
+    ('x=$(echo "$(shown "$VALUE")" >> "$GITHUB_ENV")', guard.ENV_LEADING),
+    ('x=`printf \'%s\\n\' "$(shown "$VALUE")" >> "$GITHUB_OUTPUT"`', guard.ENV_LEADING),
+    ('echo "x $(printf "$(shown "$VALUE")")"', guard.ESCAPE_NAME),
+    ('echo "k=$(echo -e "$(shown "$VALUE")")" >> "$GITHUB_ENV"', guard.ESCAPE_NAME),
+])
+def test_issue_515_a_print_inside_a_substitution_is_read_by_the_line_start_and_escape_rules(tmp_path, line, found):
+    assert found in check(tmp_path, f"{HELPER}\n{line}")
+
+
+def test_issue_515_a_named_env_entry_inside_a_substitution_is_clean(tmp_path):
+    assert check(tmp_path, f'{HELPER}\nx=$(echo "k=$(shown "$VALUE")" >> "$GITHUB_ENV")') == []
+
+
+@pytest.mark.parametrize("line", [
+    "printf '%d\\n' \"$VALUE\" > f",
+    "printf '%d' \"$VALUE\" > /dev/null 2>&1; printf '%d' \"$VALUE\" > f",
+    "printf -v out '%d' \"$VALUE\"",
+    "printf -- '%x' \"$VALUE\" > f",
+    "command printf '%5.2f' \"$VALUE\" > f",
+    "/usr/bin/printf '%i' \"$VALUE\" > f",
+    "\"printf\" '%c' \"$VALUE\" > f",
+    "printf '%s %d\\n' a \"$VALUE\" > f",
+    "printf '%s\\n%d\\n' a 1 b \"$VALUE\" > f",
+    "printf '%*s' \"$VALUE\" x > f",
+    "printf '%.*s' \"$VALUE\" x > f",
+    "printf '%(%Y)T' \"$VALUE\" > f",
+    "printf \"$FMT\" \"$VALUE\" > f",
+    "x=$(printf '%d' \"$VALUE\")",
+    "echo \"n=$(printf '%d' \"$VALUE\")\" >> \"$GITHUB_OUTPUT\"",
+    "printf '%d' \"$VALUE\" >> \"$GITHUB_OUTPUT\"",
+])
+def test_issue_515_a_raw_value_in_a_numeric_printf_conversion_is_refused(tmp_path, line):
+    # bash's printf names the word in its error on stderr -- `printf: Z` and,
+    # after the value's line end, `::error::...` -- wherever its output goes.
+    found = names_from(tmp_path, f"FMT='%d'\n{HELPER}\n{line}")
+    assert any("numeric printf" in message for message in found)
+
+
+def names_from(tmp_path, run):
+    write(tmp_path, ".github/workflows/reusable-w.yaml", workflow(run))
+    findings, _ = guard.audit(tmp_path, ())
+    return [f["message"] for f in findings]
+
+
+@pytest.mark.parametrize("line", [
+    "printf '%s\\n' \"$VALUE\" > f",
+    "printf '%q\\n' \"$VALUE\" > f",
+    "printf '%d\\n' \"${#VALUE}\" > f",
+    "printf '%d\\n' \"$(shown \"$VALUE\")\" > f",
+    "printf '%s %d\\n' \"$VALUE\" 3 > f",
+    "printf '%%d %s\\n' \"$VALUE\" > f",
+    "printf '%d\\n' '$VALUE' > f",
+    "N=5\nprintf '%d\\n' \"$N\" > f",
+    "printf '%s' \"$(printf '%s' \"$VALUE\")\" > f",
+])
+def test_issue_515_a_numeric_printf_conversion_of_a_string_or_masked_value_is_clean(tmp_path, line):
+    assert not any("numeric printf" in message for message in names_from(tmp_path, f"{HELPER}\n{line}"))
+
+
+@pytest.mark.parametrize("fmt, count, positions", [
+    ("%d", 1, [0]),
+    ("%s %d", 3, [1]),
+    ("%s %d", 4, [1, 3]),
+    ("%*s", 2, [0]),
+    ("%.*d", 2, [0, 1]),
+    ("%%d %s", 1, []),
+    ("%q %b %s", 3, []),
+    ("%(%Y)T", 1, [0]),
+    ("x", 2, []),
+])
+def test_issue_515_numeric_positions_reads_the_format_as_printf_does(fmt, count, positions):
+    assert guard.numeric_positions(fmt, count) == positions
+
+
+def test_issue_515_a_numeric_printf_finding_is_lifted_by_an_allowed_entry_for_the_name(tmp_path):
+    run = f"{HELPER}\nprintf '%d' \"$VALUE\" > f"
+    write(tmp_path, REL, workflow(run))
+    findings, stale = guard.audit(tmp_path, (guard.Allowed(REL, "VALUE", reason="test"),))
+    assert findings == [] and stale == []
+
+
+def test_issue_515_a_numeric_printf_of_a_loop_variable_is_refused_although_harmless(tmp_path):
+    run = f"{HELPER}\nfor n in 1 2; do printf '%d' \"$n\" > f; done"
+    assert any("numeric printf" in message for message in names_from(tmp_path, run))
+
+
+@pytest.mark.parametrize("line", [
+    "eval 'echo \"x $VALUE\"'",
+    'eval "echo x $VALUE"',
+    'eval "$VALUE"',
+    'eval "echo \\"x $(shown "$VALUE")\\""',
+    'eval echo "x $(shown "$VALUE")"',
+    'command eval "echo x $VALUE"',
+    '"eval" "echo x $VALUE"',
+    "e''val \"echo x $VALUE\"",
+    '\\eval "echo x $VALUE"',
+    'x=$(eval "echo x $VALUE")',
+    "eval 'echo x $VALUE' > f",
+    'eval "x=$VALUE"',
+    'cat > f <<EOF\n$(eval "echo x $VALUE")\nEOF',
+])
+def test_issue_515_eval_of_a_value_is_refused(tmp_path, line):
+    # eval reads its words as code again: a masked `;echo ::error::x` runs.
+    assert guard.EVAL_NAME in check(tmp_path, f"{HELPER}\n{line}")
+
+
+@pytest.mark.parametrize("line", [
+    'eval "$(ssh-agent -s)"',
+    "LIT=abc\neval \"echo x $LIT\"",
+    'eval "echo x ${#VALUE}"',
+    "echo 'eval it' \"x $(shown \"$VALUE\")\"",
+    "cat > f <<'EOF'\n$(eval \"echo x $VALUE\")\nEOF",
+])
+def test_issue_515_eval_of_constants_only_is_not_refused(tmp_path, line):
+    assert guard.EVAL_NAME not in check(tmp_path, f"{HELPER}\n{line}")
+
+
+def test_issue_515_an_eval_finding_is_lifted_by_an_allowed_entry(tmp_path):
+    run = f'{HELPER}\neval "echo x $VALUE"'
+    write(tmp_path, REL, workflow(run))
+    findings, stale = guard.audit(tmp_path, (guard.Allowed(REL, guard.EVAL_NAME, reason="test"),))
+    assert findings == [] and stale == []
+
+
+@pytest.mark.parametrize("line", [
+    # Refused although harmless: a value anywhere on a line that runs eval,
+    # masked in single quotes too; an argument word `eval`.
+    "eval 'echo \"x $(shown \"$VALUE\")\"'",
+    'x="$VALUE"; eval "echo x"',
+    'echo eval "x $(shown "$VALUE")"',
+])
+def test_issue_515_eval_lines_refused_although_harmless(tmp_path, line):
+    assert guard.EVAL_NAME in check(tmp_path, f"{HELPER}\n{line}")
+
+
+@pytest.mark.parametrize("rebind", [
+    "alias sh''own='printf %s'",
+    "alias 'shown'='printf %s'",
+    "alias \"sh\"own='printf %s'",
+    "alias \\shown='printf %s'",
+    "alias s'h'own='printf %s'",
+    "alias sh\\own='printf %s'",
+    "alias $'shown'='printf %s'",
+    "alias s{h,}own='printf %s'",
+    "n=shown; alias \"$n\"='printf %s'",
+    "command alias sh''own='printf %s'",
+    "eval \"alias sh''own='printf %s'\"",
+    "unalias sh''own",
+    "unset -f sh''own",
+    "unset -f \"$n\"",
+    "declare -f sh''own",
+    "export -f \"sh\"own",
+    'eval "sh""own() { printf %s \\"$1\\"; }"',
+])
+def test_issue_515_a_quoted_or_built_helper_name_voids_the_mask(tmp_path, rebind):
+    run = f'{HELPER}\nshopt -s expand_aliases\n{rebind}\necho "x $(shown "$VALUE")"'
+    assert "VALUE" in check(tmp_path, run)
+
+
+@pytest.mark.parametrize("rebind", ["alias md_c''ode='printf %s'", "unset -f 'md'_pre"])
+def test_issue_515_a_quoted_summary_helper_name_voids_the_encoding(tmp_path, rebind):
+    run = f'{MD}\n{rebind}\necho "x $(md_code "$VALUE")" >> "$GITHUB_STEP_SUMMARY"'
+    assert "VALUE" in check(tmp_path, run)
+
+
+@pytest.mark.parametrize("line", [
+    "alias ll='ls -l'",
+    "unset x",
+    "echo 'do not alias it'",
+    "export FOO=\"$RUNNER_TEMP\"",
+])
+def test_issue_515_an_alias_or_unset_of_another_name_keeps_the_mask(tmp_path, line):
+    run = f'{HELPER}\n{line}\necho "x $(shown "$VALUE")"'
+    assert "VALUE" not in check(tmp_path, run)
+
+
+@pytest.mark.parametrize("line", [
+    # Refused although harmless: an alias or unset whose words hold an
+    # expansion, a brace or a glob, whatever name it binds.
+    'alias ll="ls $RUNNER_TEMP"',
+    "unset 'arr[1]'",
+])
+def test_issue_515_an_alias_or_unset_built_at_run_time_voids_the_mask_although_harmless(tmp_path, line):
+    run = f'{HELPER}\n{line}\necho "x $(shown "$VALUE")"'
+    assert "VALUE" in check(tmp_path, run)
+
+
+def test_issue_515_a_stderr_print_with_another_stderr_write_in_its_substitution_is_refused_although_harmless(tmp_path):
+    # Every print of a substitution counts where it sends anything to stderr.
+    assert "VALUE" in check(tmp_path, f'{HELPER}\nx=$(echo "x $VALUE"; echo done >&2)')
+
+
+@pytest.mark.parametrize("run", [
+    "cmd='echo \"x $VALUE\"'\neval \"$cmd\"",
+    'n=VALUE\neval "echo x ${!n}"',
+])
+def test_issue_515_eval_of_a_constant_holding_a_value_or_an_indirect_one_is_refused(tmp_path, run):
+    assert guard.EVAL_NAME in check(tmp_path, f"{HELPER}\n{run}")
+
+
+@pytest.mark.parametrize("line", [
+    'x=$(echo "x $VALUE" > /dev/stdout)',
+    '{ x=$(echo "x $VALUE" >&2); } 2> f',
+])
+def test_issue_515_a_captured_print_beside_a_stream_redirect_is_refused_although_harmless(tmp_path, line):
+    assert "VALUE" in check(tmp_path, f"{HELPER}\n{line}")
+
+
+@pytest.mark.parametrize("opener", ["cat > f <<EOF", "cat <<EOF", 'cat >> "$GITHUB_OUTPUT" <<EOF'])
+@pytest.mark.parametrize("body", ['$(echo "$(shown "$VALUE")" >&2)', 'k=$(echo "$(shown "$VALUE")" | cat >&2)'])
+def test_issue_515_a_stderr_print_on_a_heredoc_line_that_begins_with_a_value_leads(tmp_path, opener, body):
+    assert guard.LEADING in check(tmp_path, f"{HELPER}\n{opener}\n{body}\nEOF")
+
+
+def test_issue_515_a_masked_stderr_print_after_a_literal_on_a_heredoc_line_is_clean(tmp_path):
+    assert check(tmp_path, f'{HELPER}\ncat > f <<EOF\n$(echo "x $(shown "$VALUE")" >&2)\nEOF') == []
