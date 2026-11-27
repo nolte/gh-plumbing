@@ -71,6 +71,12 @@ jobs:
       # `github.job_workflow_sha` elsewhere is still reported. Drop it once
       # actionlint knows them.
       actionlint_flags: -ignore="workflow_(repository|sha)"\sis\snot\sdefined\sin\sobject\stype\s\{check_run_id
+  # actionlint's ShellCheck pass covers `run:` blocks only; this one covers the
+  # script files, such as actions/setup-vale/*.sh. Not a required context.
+  shellcheck:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-shellcheck.yaml
   static:
     uses: ./.github/workflows/reusable-pre-commit.yaml
   docs:

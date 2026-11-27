@@ -112,6 +112,49 @@ jobs:
 
 ---
 
+## Shell-Lint
+
+`reusable-shellcheck.yaml` prüft Shell-Skripte mit [ShellCheck](https://www.shellcheck.net/) über [reviewdog/action-shellcheck](https://github.com/reviewdog/action-shellcheck), auf einen vollständigen Commit-SHA gepinnt. Die Action legt die ShellCheck-Version fest, sie ändert sich also nur mit einem Release dieses Repositorys. Der Workflow prüft jede passende Datei, nicht nur die in einem Pull-Request geänderten, und meldet Befunde als Annotationen. Er braucht nur `contents: read`.
+
+```yaml title=".github/workflows/build-static-tests.yaml"
+jobs:
+  shellcheck:
+    permissions:
+      contents: read
+    uses: nolte/gh-plumbing/.github/workflows/reusable-shellcheck.yaml@<tag>
+```
+
+| Input | Standard | Zweck |
+| --- | --- | --- |
+| `fail_level` | `error` | Schweregrad, ab dem der Job fehlschlägt: `error`, `warning`, `info`, `any` oder `none`. Befunde darunter annotiert der Job, ohne fehlzuschlagen. |
+| `path` | `.` | Basisverzeichnis der Suche, eines pro Zeile. |
+| `pattern` | `*.sh` | Dateinamensmuster der Skripte, eines pro Zeile. |
+| `exclude` | `*/.git/*` | Pfadmuster, das ausgelassen wird, eines pro Zeile. Ein Wert ersetzt den Standard. |
+| `check_all_files_with_shebangs` | `false` | Prüft zusätzlich jede Datei, deren erste Zeile eine Shell nennt, unabhängig vom Dateinamen. |
+| `shellcheck_flags` | `--external-sources` | Flags für ShellCheck. |
+
+Der Job ist grün, wenn keine Datei passt. Ein Repository ohne Shell-Skripte kann den Workflow daher schon aufrufen, bevor es welche hat.
+
+Der Workflow liefert kein Artefakt, derselbe Aufruf funktioniert also als Gate in einem Release-Pfad. Mit `needs:` vor den veröffentlichenden Job gesetzt, stoppt ein Befund ab `fail_level` die Veröffentlichung:
+
+```yaml title=".github/workflows/release-publish.yml"
+jobs:
+  shellcheck:
+    permissions:
+      contents: read
+    uses: nolte/gh-plumbing/.github/workflows/reusable-shellcheck.yaml@<tag>
+  publish:
+    needs: shellcheck
+    permissions:
+      contents: write
+    uses: nolte/gh-plumbing/.github/workflows/reusable-release-publish.yml@<tag>
+```
+
+!!! info "Skripte in Workflow-Dateien"
+    Der Workflow liest nur Skriptdateien. Die Shell in den `run:`-Blöcken von Workflow-Dateien deckt `reusable-actionlint.yaml` ab.
+
+---
+
 ## Zentrale Konfiguration
 
 ```yaml title=".github/workflows/reusable-pre-commit.yaml"

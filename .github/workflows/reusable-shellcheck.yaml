@@ -1,0 +1,100 @@
+name: Reusable — Shell Lint
+
+# Lints shell scripts with ShellCheck. `reusable-actionlint.yaml` already runs
+# ShellCheck, but only over the `run:` blocks of workflow files; a `*.sh` file
+# in the repository is never seen by it.
+#
+# The workflow delivers no artifact, so it fits two call sites unchanged: a
+# pre-merge job, and a `needs:` gate in front of the publishing job of a
+# release path.
+
+on:
+  workflow_call:
+    inputs:
+      fail_level:
+        description: |
+          Severity at which the job fails: `error`, `warning`, `info`, `any`
+          or `none`. Defaults to `error`; findings below it are annotated
+          without failing the job. Raise it to `warning` once a repository is
+          clean at that level.
+        required: false
+        type: string
+        default: error
+      path:
+        description: |
+          Base directory to search for scripts, as in `find <path>`. One path
+          per line.
+        required: false
+        type: string
+        default: .
+      pattern:
+        description: |
+          File name pattern of the scripts, as in `find -name <pattern>`. One
+          pattern per line.
+        required: false
+        type: string
+        default: "*.sh"
+      exclude:
+        description: |
+          Path pattern to leave out, as in `find -not -path <exclude>`. One
+          pattern per line. Setting it replaces the default, so keep
+          `*/.git/*` in the list.
+        required: false
+        type: string
+        default: "*/.git/*"
+      check_all_files_with_shebangs:
+        description: |
+          Also lint every file whose first line is a shell shebang, whatever
+          its name. Off by default: it reaches files a repository merely
+          carries, such as vendored scripts.
+        required: false
+        type: boolean
+        default: false
+      shellcheck_flags:
+        description: |
+          Flags for ShellCheck. The default follows `source` statements into
+          the files they name. Prefer a `# shellcheck disable=` comment next
+          to the code over an `--exclude` here, which is invisible to the
+          reader of the script it applies to.
+        required: false
+        type: string
+        default: --external-sources
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    name: Shell Lint
+    runs-on: ubuntu-latest
+    # No `checks: write` and no `pull-requests: write`: findings are reported
+    # as workflow-command annotations, which need no API scope.
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      # The action pins ShellCheck (0.11.0) and reviewdog itself, so the
+      # version a consumer runs changes only with this pin.
+      - name: Run ShellCheck
+        uses: reviewdog/action-shellcheck@950c9d71535c8c49e5c029c33a438ade63b9009c # v1.35.1
+        with:
+          # `nofilter`, not the `file` default: the default reports only on
+          # changed files, so a script that was already broken before this
+          # pull request would pass silently, and a release gate would have
+          # no changed files to look at.
+          filter_mode: nofilter
+          # `github-annotations`, not the `github-pr-check` default: see
+          # reusable-actionlint.yaml (#458). Annotations need no API scope.
+          # They appear inline only on files a pull request changes, and
+          # GitHub shows at most 10 per step; the job log lists every finding.
+          reporter: github-annotations
+          fail_level: ${{ inputs.fail_level }}
+          path: ${{ inputs.path }}
+          pattern: ${{ inputs.pattern }}
+          exclude: ${{ inputs.exclude }}
+          check_all_files_with_shebangs: ${{ inputs.check_all_files_with_shebangs }}
+          shellcheck_flags: ${{ inputs.shellcheck_flags }}
