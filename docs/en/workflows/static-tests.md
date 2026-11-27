@@ -112,6 +112,49 @@ jobs:
 
 ---
 
+## Shell lint
+
+`reusable-shellcheck.yaml` lints shell scripts with [ShellCheck](https://www.shellcheck.net/). The workflow installs one fixed ShellCheck release and verifies its checksum before running it, so the version changes only with a release of this repository. It checks every matching file, not only the files a pull request changes, and reports each finding as an annotation: an error, a warning, or a notice for the `info` and `style` levels. It needs `contents: read` only and writes nothing to the pull request.
+
+```yaml title=".github/workflows/build-static-tests.yaml"
+jobs:
+  shellcheck:
+    permissions:
+      contents: read
+    uses: nolte/gh-plumbing/.github/workflows/reusable-shellcheck.yaml@<tag>
+```
+
+| Input | Default | Purpose |
+| --- | --- | --- |
+| `fail_level` | `error` | Severity at which the job fails: `error`, `warning`, `info`, `any`, or `none`. The job annotates findings below it without failing. |
+| `path` | `.` | Base directory to search, one per line. A path that doesn't exist fails the job. |
+| `pattern` | `*.sh` | File name pattern of the scripts, one per line. |
+| `exclude` | `*/.git/*` | Path pattern to leave out, one per line. A value replaces the default. |
+| `check_all_files_with_shebangs` | `false` | Also lint every file whose first line names `sh`, `bash`, `dash`, or `ksh` as its interpreter, whatever the file's name. |
+| `shellcheck_flags` | `--external-sources` | Flags for ShellCheck, split on spaces and line ends. The workflow sets the output format itself. |
+
+The job passes when no file matches. A repository without shell scripts can therefore call the workflow before it has any.
+
+The workflow delivers no artifact, so the same call works as a gate in a release path. Put it in front of the publishing job with `needs:`, and a finding at or above `fail_level` stops the publication:
+
+```yaml title=".github/workflows/release-publish.yml"
+jobs:
+  shellcheck:
+    permissions:
+      contents: read
+    uses: nolte/gh-plumbing/.github/workflows/reusable-shellcheck.yaml@<tag>
+  publish:
+    needs: shellcheck
+    permissions:
+      contents: write
+    uses: nolte/gh-plumbing/.github/workflows/reusable-release-publish.yml@<tag>
+```
+
+!!! info "Scripts in workflow files"
+    The workflow reads script files only. `reusable-actionlint.yaml` covers the shell in the `run:` blocks of workflow files.
+
+---
+
 ## Central configuration
 
 ```yaml title=".github/workflows/reusable-pre-commit.yaml"

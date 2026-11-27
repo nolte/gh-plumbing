@@ -71,6 +71,12 @@ jobs:
       # `github.job_workflow_sha` elsewhere is still reported. Drop it once
       # actionlint knows them.
       actionlint_flags: -ignore="workflow_(repository|sha)"\sis\snot\sdefined\sin\sobject\stype\s\{check_run_id
+  # actionlint's ShellCheck pass covers `run:` blocks only; this one covers the
+  # script files, such as actions/setup-vale/*.sh. Not a required context.
+  shellcheck:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-shellcheck.yaml
   static:
     uses: ./.github/workflows/reusable-pre-commit.yaml
   docs:
@@ -148,13 +154,17 @@ jobs:
   # adds no coverage line. tests/test_step_summary_markdown.py runs the step
   # summary's encoders (#506) as the workflows and scripts ship them, for the
   # same reason without a coverage line of its own.
+  # tests/test_reusable_shellcheck.py runs the lint step of
+  # reusable-shellcheck.yaml against a stub ShellCheck, so the job keeps
+  # failing exactly at or above `fail_level` (#519); shell again, no coverage
+  # line.
   required-check-triggers-tests:
     uses: ./.github/workflows/reusable-python-coverage.yaml
     with:
       working-directory: scripts
       install-command: pip install --require-hashes --no-deps -r requirements-audit.txt && pip install pytest==9.1.1 pytest-cov==7.1.0
       coverage-source: required_check_triggers
-      pytest-args: --cov=checkout_credentials tests/test_required_check_triggers.py tests/test_checkout_credentials.py tests/test_setup_vale.py tests/test_release_publish_vale.py --cov=vale_version tests/test_vale_version.py --cov=builtin_action_cache tests/test_builtin_action_cache.py --cov=workflow_command_masking tests/test_workflow_command_masking.py tests/test_workflow_command_injection.py tests/test_step_summary_markdown.py
+      pytest-args: --cov=checkout_credentials tests/test_required_check_triggers.py tests/test_checkout_credentials.py tests/test_setup_vale.py tests/test_release_publish_vale.py --cov=vale_version tests/test_vale_version.py --cov=builtin_action_cache tests/test_builtin_action_cache.py --cov=workflow_command_masking tests/test_workflow_command_masking.py tests/test_workflow_command_injection.py tests/test_step_summary_markdown.py tests/test_reusable_shellcheck.py
   # The check itself, not its tests. It runs on the pull request so a page
   # added in one language only, or a reference to a workflow that no longer
   # exists, fails here rather than reaching a release.
