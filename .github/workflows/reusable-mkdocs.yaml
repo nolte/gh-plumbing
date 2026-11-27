@@ -99,6 +99,9 @@ jobs:
         with:
           # Persisted for the `git push` that `mkdocs gh-deploy` runs.
           token: ${{ steps.app-token.outputs.token || secrets.token }}
+          # Kept: the "Deploy docs" step's `mkdocs gh-deploy` pushes
+          # to gh-pages with this credential.
+          persist-credentials: true
 
       # The site is built and deployed on the runner, with the interpreter
       # the caller chose. Until v2.2.0 the deploy ran inside

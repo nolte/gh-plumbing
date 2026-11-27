@@ -125,19 +125,20 @@ jobs:
           # missed this hardcoded one.
           python-version: '3.14'
 
-      # The three steps below and `Run pre-commit` at the end replace
-      # `pre-commit/action` v3.0.1, a composite action whose own cache step
-      # references `actions/cache@v4` by tag. The repository setting
+      # The install, freeze and cache steps below and `Run pre-commit` at the
+      # end replace `pre-commit/action` v3.0.1, a composite action whose own
+      # cache step references `actions/cache@v4` by tag. The repository setting
       # `sha_pinning_required` checks nested references as well, so a single
-      # tag two levels down fails the whole job. Inlining the composite keeps
-      # its behaviour and puts every `uses:` under this file's control, where it
-      # is pinned to a full commit SHA. The hook-environment install and the
-      # Docker Hub login sit between the cache and the run; see the next step.
+      # tag two levels down fails the whole job. Inlining the composite puts
+      # every `uses:` under this file's control, where it is pinned to a full
+      # commit SHA. The hook-environment install and the Docker Hub login sit
+      # between the cache restore and the run; see `Install hook environments`.
       - name: Install pre-commit
         # Inline rather than `-r requirements-dev.txt`: this reusable runs in
         # the consumer's checkout, where no gh-plumbing requirements file
-        # exists. Same version as `requirements-dev.txt`. Renovate does not
-        # track this inline pin yet -- see #467.
+        # exists. Same version as `requirements-dev.txt`: the preset's inline
+        # pip pin manager tracks this line, and its `pre-commit` group bumps
+        # both pins on one branch (#467).
         run: |
           set -euo pipefail
           python -m pip install pre-commit==4.7.0
@@ -149,14 +150,62 @@ jobs:
           set -euo pipefail
           python -m pip freeze --local
 
-      - name: Cache pre-commit hook environments
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      - name: Compute the hook-environment cache key
+        id: cache-key
+        # The hook environments hold binaries built against the runner's system
+        # libraries (wheels, nodeenv) and are laid out by one pre-commit
+        # version, so the key carries both (#468). `pythonLocation` alone does
+        # not move when `ubuntu-latest` switches to a new Ubuntu release. The
+        # pre-commit version is read from the installed package rather than
+        # repeated here, so the key follows the pin above without a second
+        # copy of it. The `pre-commit-4` prefix retires every key built under
+        # `pre-commit/action`'s `pre-commit-3` layout; consumers take one cold
+        # cache, once.
+        env:
+          CONFIG_HASH: ${{ hashFiles('.pre-commit-config.yaml') }}
+        run: |
+          set -euo pipefail
+          os="$(. /etc/os-release && printf '%s-%s' "${ID}" "${VERSION_ID}")"
+          version="$(pre-commit --version | awk '{print $2}')"
+          key="pre-commit-4|${os}|${version}|${pythonLocation}|${CONFIG_HASH}"
+          echo "Cache key: ${key}"
+          echo "key=${key}" >> "${GITHUB_OUTPUT}"
+
+      # Restore and save are separate steps rather than one `actions/cache`
+      # step whose post step saves after the job (#472). `pre-commit run`
+      # executes third-party hook code, which can rewrite
+      # `~/.cache/pre-commit`; a combined step would then save the modified
+      # directory. Run on the default branch, that save lands in the
+      # default-branch cache scope, which every branch of the consumer
+      # restores from. Hence:
+      #
+      # - the save runs only for `pull_request` events, whose cache scope is
+      #   `refs/pull/N/merge` and is readable by that pull request alone. A
+      #   default-branch run, a push to any other branch, a merge-queue run
+      #   and `pull_request_target` (which runs in the base branch's scope)
+      #   restore at most and never save;
+      # - the save runs right after `install-hooks` and before
+      #   `pre-commit run`, so hook execution can no longer reach the saved
+      #   directory. Install-time code of the hook repositories (pip build
+      #   backends, npm scripts) still runs before it, but only within the
+      #   pull request's own scope.
+      #
+      # Cost: nothing is saved into the default-branch scope any more, so
+      # default-branch runs and the first run of each pull request install
+      # cold; the second run of a pull request restores. A consumer that calls
+      # this workflow only on `push` never caches.
+      #
+      # Accepted residual risk: hook code can read `ACTIONS_RUNTIME_TOKEN` from
+      # runner memory (passwordless sudo) and write any cache key in the run's
+      # own scope, the default branch's on a default-branch run. Splitting the
+      # steps cannot close that path; only running the hooks isolated from the
+      # runner context can.
+      - name: Restore pre-commit hook environments
+        id: cache-restore
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/pre-commit
-          # Copied verbatim from `pre-commit/action` v3.0.1, prefix and
-          # separators included, so caches consumers already built under the
-          # composite action keep hitting after the switch.
-          key: pre-commit-3|${{ env.pythonLocation }}|${{ hashFiles('.pre-commit-config.yaml') }}
+          key: ${{ steps.cache-key.outputs.key }}
 
       - name: Install hook environments
         # Every hook environment -- the pip/npm/... install of each third-party
@@ -175,6 +224,16 @@ jobs:
         run: |
           set -euo pipefail
           pre-commit install-hooks
+
+      - name: Save pre-commit hook environments
+        # See the comment above `Restore pre-commit hook environments`. Only on
+        # a miss: a cache entry is immutable, so saving over a hit would only
+        # emit a "cache already exists" warning.
+        if: ${{ github.event_name == 'pull_request' && steps.cache-restore.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/pre-commit
+          key: ${{ steps.cache-key.outputs.key }}
 
       - name: Log in to Docker Hub
         id: dockerhub-login

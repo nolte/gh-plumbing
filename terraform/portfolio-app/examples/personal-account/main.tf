@@ -4,15 +4,14 @@ terraform {
   required_providers {
     github = {
       source  = "integrations/github"
-      version = "~> 6.6"
+      version = "~> 6.12"
     }
   }
 }
 
 # Personal-account authentication. The token needs `repo` scope (to
-# create repository-level Actions variables / secrets and to manage
-# branch protection); no `admin:org` needed because there is no
-# organisation.
+# create repository-level Actions variables / secrets); no `admin:org`
+# needed because there is no organisation.
 provider "github" {
   owner = "octocat"
   # token = read from GITHUB_TOKEN env var by default
@@ -33,16 +32,17 @@ module "portfolio_app" {
   # User mode — set `user` instead of `organization`.
   user            = "octocat"
   app_id          = var.portfolio_app_id
-  app_slug        = "octocat-portfolio-bot"
+  app_slug        = "octocat-portfolio-bot" # optional, no longer read by the module
   app_private_key = var.portfolio_app_private_key
 
   consumer_repositories = [
     "my-repo-with-gh-plumbing-wrappers",
   ]
 
-  # Phase 0: leave bypass off until every consumer in the list above
-  # has the App installed AND its wrappers updated. Flip to true in a
-  # follow-up apply once both are confirmed.
+  # Keep bypass off in user mode. GitHub documents push restrictions
+  # for users, teams and apps as available only on organisation-owned
+  # repositories, so the module fails at plan time when `user` is set
+  # and this is true.
   enable_branch_bypass = false
 }
 

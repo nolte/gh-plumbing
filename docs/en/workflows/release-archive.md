@@ -52,6 +52,7 @@ jobs:
     uses: nolte/gh-plumbing/.github/workflows/reusable-release-publish.yml@<tag>
     with:
       tag: ${{ needs.archive.outputs.tag }}
+      expected-target-sha: ${{ needs.archive.outputs.target-sha }}
       dry_run: ${{ inputs.dry_run }}
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}
@@ -116,12 +117,28 @@ the attached file names as `assets`.
     isn't reachable from `develop`. That gate runs in the publish job, after
     this one.
 
-!!! warning "Don't combine this workflow with `auto-align: true`"
+## Publish exactly the commit the archive came from
+
+Pass `target-sha` to the publish workflow as `expected-target-sha`, as the
+usage example does. The publish workflow then compares the draft target with
+that commit twice: right after it resolves the draft, and again right before
+it publishes. If the target differs, it refuses to publish, for example when
+someone merged to `develop` after this workflow built the archive. Rebuild the archive
+from the new commit and publish again.
+
+When it publishes, the workflow also pins the draft target to that commit. A
+draft that targets a branch can then no longer move between the check and the
+publish.
+
+!!! warning "`expected-target-sha` refuses `auto-align: true`"
 
     With `auto-align: true`, the publish workflow commits the version bump on
-    `develop` and moves the draft target to that commit. The tag then points at
-    a commit the archive wasn't built from, and the archive misses the aligned
-    version files.
+    `develop` and moves the draft target to that commit. The tag would then
+    point at a commit the archive wasn't built from, and the archive would
+    miss the aligned version files. The publish workflow therefore refuses the
+    combination before it writes anything. Align the version files first
+    through a `chore(release): <tag>` pull request, then run the archive and
+    the publish without `auto-align`.
 
 ## Remote Taskfile includes
 

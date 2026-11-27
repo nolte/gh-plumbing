@@ -33,6 +33,17 @@
       "groupName": null,
       "groupSlug": null,
       "automerge": false
+    },
+    {
+      "description": "Keep a Vale binary bump off automerge. The custom manager for .vale-version below rewrites VALE_VERSION but can't recompute VALE_SHA256, so the bump pull request needs a human to copy the Linux_64-bit line of the new release's vale_<version>_checksums.txt into the file, and to move the vale line of .tool-versions where one exists. Until then the action refuses the stale checksum line (nolte/gh-plumbing#488). A consumer's own packageRules can still override this.",
+      "matchPackageNames": ["vale-cli/vale"],
+      "automerge": false
+    },
+    {
+      "description": "Keep every pre-commit pin in lockstep. A repository typically pins the pre-commit package twice: once in a requirements file, read by the pip_requirements manager, and once inline in a workflow run: line, read by the inline pip pin manager below. Two managers propose two pull requests, and merging one leaves the pins apart. One group puts both bumps on a single branch (nolte/gh-plumbing#467). matchDatasources keeps the hook repositories of the pre-commit manager out: those resolve through git tags, not PyPI.",
+      "matchDatasources": ["pypi"],
+      "matchPackageNames": ["pre-commit"],
+      "groupName": "pre-commit"
     }
   ],
   "customManagers": [
@@ -60,6 +71,28 @@
       "matchStrings": ["nolte/vale-style/releases/download/(?<currentValue>v[0-9.]+)/"],
       "depNameTemplate": "nolte/vale-style",
       "datasourceTemplate": "github-releases"
+    },
+    {
+      "customType": "regex",
+      "description": "Bump the Vale binary pinned in .vale-version, the file actions/setup-vale reads (nolte/gh-plumbing#488). Tags are v-prefixed (v3.15.2) and the file holds the bare version, hence extractVersionTemplate. errata-ai/vale redirects to vale-cli/vale, the name the download URL uses. Renovate can't recompute VALE_SHA256, so the action refuses the bumped file until a human replaces that line; see the vale-cli/vale packageRules entry.",
+      "managerFilePatterns": ["/(^|/)\\.vale-version$/"],
+      "matchStrings": ["VALE_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)"],
+      "depNameTemplate": "vale-cli/vale",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.+)$",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Age the PyPI pins a workflow installs inline, for example pip install pytest==9.1.1 in a run: line or an input value. A reusable workflow runs in the consumer's checkout and can't read a requirements file of its own repository, so the pin has to stay inline, where no built-in manager reads it (nolte/gh-plumbing#467). The first expression takes one pip install command up to a shell separator, the second each name==version inside it. Only exact == pins match, so ranges, extras, and -r files stay out. Scoped to .github/workflows. The depType workflow-pip-pin lets a consumer opt out with a packageRules entry that matches it and sets enabled: false.",
+      "managerFilePatterns": ["/(^|/)\\.github/workflows/[^/]+\\.ya?ml$/"],
+      "matchStringsStrategy": "recursive",
+      "matchStrings": [
+        "pip3? install(?:[ \\t]+[^\\s;&|#]+)+",
+        "(?:^|[\\s'\"])(?<depName>[A-Za-z0-9][A-Za-z0-9._-]*)==(?<currentValue>[0-9][0-9A-Za-z.!+-]*)"
+      ],
+      "datasourceTemplate": "pypi",
+      "depTypeTemplate": "workflow-pip-pin"
     }
   ]
 }

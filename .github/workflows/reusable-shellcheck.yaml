@@ -1,0 +1,222 @@
+name: Reusable — Shell Lint
+
+# Lints shell scripts with ShellCheck. `reusable-actionlint.yaml` already runs
+# ShellCheck, but only over the `run:` blocks of workflow files; a `*.sh` file
+# in the repository is never seen by it.
+#
+# The workflow delivers no artifact, so it fits two call sites unchanged: a
+# pre-merge job, and a `needs:` gate in front of the publishing job of a
+# release path.
+
+on:
+  workflow_call:
+    inputs:
+      fail_level:
+        description: |
+          Severity at which the job fails: `error`, `warning`, `info`, `any`
+          or `none`. Defaults to `error`; findings below it are annotated
+          without failing the job. Raise it to `warning` once a repository is
+          clean at that level.
+        required: false
+        type: string
+        default: error
+      path:
+        description: |
+          Base directory to search for scripts, as in `find <path>`. One path
+          per line. A path that does not exist fails the job, so a typing
+          error can't pass as "nothing to check".
+        required: false
+        type: string
+        default: .
+      pattern:
+        description: |
+          File name pattern of the scripts, as in `find -name <pattern>`. One
+          pattern per line.
+        required: false
+        type: string
+        default: "*.sh"
+      exclude:
+        description: |
+          Path pattern to leave out, as in `find -not -path <exclude>`. One
+          pattern per line. Setting it replaces the default, so keep
+          `*/.git/*` in the list.
+        required: false
+        type: string
+        default: "*/.git/*"
+      check_all_files_with_shebangs:
+        description: |
+          Also lint every file whose first line is a shebang for `sh`,
+          `bash`, `dash` or `ksh`, the shells ShellCheck reads, whatever the
+          file's name. Off by default: it reaches files a repository merely
+          carries, such as vendored scripts.
+        required: false
+        type: boolean
+        default: false
+      shellcheck_flags:
+        description: |
+          Flags for ShellCheck, split on spaces and line ends. The default follows `source`
+          statements into the files they name. Prefer a `# shellcheck
+          disable=` comment next to the code over an `--exclude` here, which
+          is invisible to the reader of the script it applies to. The output
+          format is fixed by the workflow.
+        required: false
+        type: string
+        default: --external-sources
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    name: Shell Lint
+    runs-on: ubuntu-latest
+    # No `checks: write` and no `pull-requests: write`: findings are reported
+    # as workflow-command annotations, which need no API scope.
+    permissions:
+      contents: read
+    env:
+      # The release asset this workflow installs, and the SHA-256 GitHub lists
+      # for it (`gh api repos/koalaman/shellcheck/releases/tags/v<version>`,
+      # field `digest` of the asset). Bump both together.
+      SHELLCHECK_VERSION: "0.11.0"
+      SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      # ShellCheck runs directly, not through reviewdog/action-shellcheck. That
+      # action adds a second pass that feeds `shellcheck -f diff` to reviewdog
+      # with a fixed `github-pr-review` reporter. Its diagnostics carry no
+      # severity, so on a pull request any finding ShellCheck can fix failed
+      # the job whatever `fail_level` said, and the pass tried to post a
+      # review (run 46065761938 on #519). The action has no input to turn it
+      # off.
+      #
+      # The asset is downloaded to a file, checked with `sha256sum -c`, and
+      # only then unpacked, so an asset replaced under the same tag never runs.
+      - name: Install ShellCheck
+        run: |
+          set -euo pipefail
+          asset="shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 3 -o "$asset" \
+            "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/${asset}"
+          sha256sum -c - <<<"${SHELLCHECK_SHA256}  ${asset}"
+          tar -xJf "$asset"
+          "./shellcheck-v${SHELLCHECK_VERSION}/shellcheck" --version
+
+      - name: Run ShellCheck
+        env:
+          # Inputs reach the script through the environment, never by
+          # interpolation into it.
+          INPUT_FAIL_LEVEL: ${{ inputs.fail_level }}
+          INPUT_PATH: ${{ inputs.path }}
+          INPUT_PATTERN: ${{ inputs.pattern }}
+          INPUT_EXCLUDE: ${{ inputs.exclude }}
+          INPUT_SHEBANGS: ${{ inputs.check_all_files_with_shebangs }}
+          INPUT_SHELLCHECK_FLAGS: ${{ inputs.shellcheck_flags }}
+        run: |
+          set -euo pipefail
+          shellcheck="${RUNNER_TEMP}/shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
+
+          # The lowest severity that fails the job, as a rank:
+          # style 0, info 1, warning 2, error 3.
+          case "$INPUT_FAIL_LEVEL" in
+            any) threshold=0 ;;
+            info) threshold=1 ;;
+            warning) threshold=2 ;;
+            error) threshold=3 ;;
+            none) threshold=4 ;;
+            *)
+              echo "::error title=ShellCheck::Input 'fail_level' must be one of error, warning, info, any, none."
+              exit 2
+              ;;
+          esac
+
+          # One entry per line; a carriage return before the line end is
+          # dropped. A path is anchored so `find` can't read it as an option,
+          # and it has to exist: `find` on a missing path would report an
+          # error, list nothing, and leave the job green with nothing checked.
+          paths=()
+          while IFS= read -r line; do
+            line="${line%$'\r'}"
+            [[ -n "$line" ]] || continue
+            [[ "$line" == /* || "$line" == . || "$line" == ./* ]] || line="./${line}"
+            if [[ ! -e "$line" ]]; then
+              echo "::error title=ShellCheck::An entry of input 'path' does not exist in the checkout."
+              exit 2
+            fi
+            paths+=("$line")
+          done <<<"$INPUT_PATH"
+          (( ${#paths[@]} )) || paths=(.)
+
+          names=()
+          while IFS= read -r line; do
+            line="${line%$'\r'}"
+            [[ -n "$line" ]] && names+=(-o -name "$line")
+          done <<<"$INPUT_PATTERN"
+          (( ${#names[@]} )) && { names[0]='('; names+=(')'); }
+
+          excludes=()
+          while IFS= read -r line; do
+            line="${line%$'\r'}"
+            [[ -n "$line" ]] && excludes+=(-not -path "$line")
+          done <<<"$INPUT_EXCLUDE"
+
+          # NUL-separated, so a file name with whitespace or a line end in it
+          # stays one file.
+          files=()
+          while IFS= read -r -d '' file; do
+            files+=("$file")
+          done < <(find "${paths[@]}" "${excludes[@]}" -type f "${names[@]}" -print0)
+
+          # With no pattern every file is in the list already. The shebang
+          # has to name a shell ShellCheck reads as its interpreter, directly
+          # or through `env` (`#!/bin/sh`, `#!/usr/bin/env bash`); zsh or fish
+          # would only earn an error for a dialect it doesn't support.
+          if [[ "$INPUT_SHEBANGS" == "true" ]] && (( ${#names[@]} )); then
+            while IFS= read -r -d '' file; do
+              files+=("$file")
+            done < <(find "${paths[@]}" "${excludes[@]}" -type f -not "${names[@]}" -print0 \
+              | xargs -0 -r awk 'FNR == 1 { if (/^#![ \t]*([^ \t]*\/)?(env[ \t]+(-S[ \t]*)?([^ \t]*\/)?)?(sh|bash|dash|ksh)([ \t]|\r?$)/) printf "%s%c", FILENAME, 0; nextfile }')
+          fi
+
+          if (( ${#files[@]} == 0 )); then
+            echo "No matching files found to check."
+            exit 0
+          fi
+
+          read -r -a flags <<<"${INPUT_SHELLCHECK_FLAGS//[$'\r\n']/ }"
+          report="${RUNNER_TEMP}/shellcheck-report.json"
+          # 0: no findings, 1: findings. Anything else means ShellCheck itself
+          # could not do its work (a bad flag, an unreadable file).
+          status=0
+          "$shellcheck" "${flags[@]}" --format=json1 -- "${files[@]}" > "$report" || status=$?
+          if (( status > 1 )); then
+            echo "::error title=ShellCheck::ShellCheck could not run; see its message above."
+            exit "$status"
+          fi
+
+          # One annotation per finding. File names and, through quoted
+          # identifiers, messages are repository content: line ends and '%'
+          # are encoded as the runner expects, ':' and ',' too in a property,
+          # and other control characters become '?', so a finding stays one
+          # workflow command and can't start a second (#492).
+          jq -r '
+            def data: gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A") | gsub("[[:cntrl:]]"; "?");
+            def prop: data | gsub(":"; "%3A") | gsub(","; "%2C");
+            .comments[]
+            | (if .level == "error" then "error" elif .level == "warning" then "warning" else "notice" end) as $kind
+            | "::\($kind) file=\(.file | sub("^\\./"; "") | prop),line=\(.line),col=\(.column),title=ShellCheck SC\(.code) (\(.level | prop))::\(.message | data)"
+          ' "$report"
+
+          failing=$(jq --argjson threshold "$threshold" '
+            {"style": 0, "info": 1, "warning": 2, "error": 3} as $rank
+            | [.comments[] | select(($rank[.level] // 3) >= $threshold)] | length
+          ' "$report")
+          if [[ "$failing" != "0" ]]; then
+            echo "::error title=ShellCheck::Findings at or above the fail level; see the annotations of this step."
+            exit 1
+          fi

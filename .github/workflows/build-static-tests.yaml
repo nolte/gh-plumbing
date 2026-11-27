@@ -9,7 +9,9 @@ name: Static CI Tests
 # deliberately NOT used: by default it checks out the base ref, so the checks
 # would go green without testing the pull request's changes, and checking out
 # the head explicitly would run fork code with the base repository's write
-# token and secrets.
+# token and secrets. The flip side -- under `pull_request` a fork runs its own
+# copy of this file and could edit the jobs until they pass -- is what the
+# required `fork-guard` commit status refuses (fork-guard.yaml, #465).
 on:
   pull_request:
   push:
@@ -69,6 +71,12 @@ jobs:
       # `github.job_workflow_sha` elsewhere is still reported. Drop it once
       # actionlint knows them.
       actionlint_flags: -ignore="workflow_(repository|sha)"\sis\snot\sdefined\sin\sobject\stype\s\{check_run_id
+  # actionlint's ShellCheck pass covers `run:` blocks only; this one covers the
+  # script files, such as actions/setup-vale/*.sh. Not a required context.
+  shellcheck:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-shellcheck.yaml
   static:
     uses: ./.github/workflows/reusable-pre-commit.yaml
   docs:
@@ -118,13 +126,45 @@ jobs:
   # workflows, so a push-only or write-scoped producer fails here. PyYAML comes
   # from the hash-pinned requirements-audit.txt, the same artefact the audit
   # workflow installs, rather than from a second, unhashed pin.
+  #
+  # The same job runs the guard behind #471: every actions/checkout step must
+  # decide `persist-credentials` explicitly, and a `true` must name the later
+  # step that needs the token. It shares this job because the job is a required
+  # context (`required-check-triggers-tests / Python Coverage`), so the guard
+  # blocks a merge without a new context in settings.yml. The second `--cov`
+  # keeps a separate coverage line per script.
+  #
+  # tests/test_setup_vale.py and tests/test_release_publish_vale.py ride along
+  # for the same reason (#488): the first drives actions/setup-vale's shell,
+  # which downloads and runs a binary, through its refusals offline; the second
+  # runs the release-notes step of reusable-release-publish.yml against stubs,
+  # so a download failure keeps warning and a checksum mismatch keeps failing
+  # the publish. Coverage can't measure shell, so they add no coverage line,
+  # only the verdict. tests/test_vale_version.py covers the pre-commit guard
+  # that keeps .vale-version and .tool-versions in agreement, with its own
+  # coverage line. tests/test_builtin_action_cache.py does the same for the
+  # pre-commit guard behind #494, which refuses a setup action whose built-in
+  # cache would save in its post step.
+  #
+  # The guard behind #492 rides along for the same reason as #471's: every
+  # workflow command, log line and env-file write in a reusable workflow or
+  # composite action must print only masked or constrained values, with its own
+  # coverage line. tests/test_workflow_command_injection.py runs the repaired
+  # steps against hostile values; like the Vale steps it drives shell, so it
+  # adds no coverage line. tests/test_step_summary_markdown.py runs the step
+  # summary's encoders (#506) as the workflows and scripts ship them, for the
+  # same reason without a coverage line of its own.
+  # tests/test_reusable_shellcheck.py runs the lint step of
+  # reusable-shellcheck.yaml against a stub ShellCheck, so the job keeps
+  # failing exactly at or above `fail_level` (#519); shell again, no coverage
+  # line.
   required-check-triggers-tests:
     uses: ./.github/workflows/reusable-python-coverage.yaml
     with:
       working-directory: scripts
       install-command: pip install --require-hashes --no-deps -r requirements-audit.txt && pip install pytest==9.1.1 pytest-cov==7.1.0
       coverage-source: required_check_triggers
-      pytest-args: tests/test_required_check_triggers.py
+      pytest-args: --cov=checkout_credentials tests/test_required_check_triggers.py tests/test_checkout_credentials.py tests/test_setup_vale.py tests/test_release_publish_vale.py --cov=vale_version tests/test_vale_version.py --cov=builtin_action_cache tests/test_builtin_action_cache.py --cov=workflow_command_masking tests/test_workflow_command_masking.py tests/test_workflow_command_injection.py tests/test_step_summary_markdown.py tests/test_reusable_shellcheck.py
   # The check itself, not its tests. It runs on the pull request so a page
   # added in one language only, or a reference to a workflow that no longer
   # exists, fails here rather than reaching a release.

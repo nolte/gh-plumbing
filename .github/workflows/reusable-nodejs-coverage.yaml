@@ -54,10 +54,21 @@ jobs:
     steps:
       - name: Checkout sources
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: ${{ inputs.node-version }}
+          # Off, not left to the default (#494): when the caller's package.json
+          # names npm as its package manager, setup-node restores npm's cache
+          # here and saves it again in its post step -- after the install and
+          # test commands, and whatever they ran, could rewrite it. On a
+          # default-branch run that save lands in the default branch's cache
+          # scope, which every branch restores from.
+          # scripts/builtin_action_cache.py refuses a setup-node step without
+          # this line.
+          package-manager-cache: false
 
       - name: Install dependencies
         run: ${{ inputs.install-command }}
@@ -72,18 +83,41 @@ jobs:
         run: |
           node <<'NODE' >> "$GITHUB_STEP_SUMMARY"
           const fs = require('fs');
+          // The path is a caller input and the file is test output. Messages
+          // print them through shown() (#492): control characters become '?'
+          // and '##[' becomes '#?[', so neither a line end nor the runner's
+          // older '##[command]' syntax can start a workflow command.
+          const shown = (value) => String(value).replace(/[\u0000-\u001f\u007f-\u009f]/g, '?').replace(/##\[/g, '#?[');
           const path = process.env.SUMMARY_PATH;
           if (!fs.existsSync(path)) {
-            console.error(`::error::Coverage summary not found at ${path}`);
+            console.error(`::error::Coverage summary not found at ${shown(path)}`);
             process.exit(1);
           }
-          const total = JSON.parse(fs.readFileSync(path, 'utf8')).total;
-          const rows = ['lines', 'statements', 'functions', 'branches']
-            .map((k) => `| ${k} | ${total[k].pct}% | ${total[k].covered}/${total[k].total} |`)
-            .join('\n');
-          process.stdout.write(
-            `## Test coverage\n\n| Metric | % | Covered / Total |\n| --- | --- | --- |\n${rows}\n`
-          );
+          // Node's own report of a parse error quotes the file; caught so the
+          // message goes through shown() instead (#492).
+          let total;
+          try {
+            total = JSON.parse(fs.readFileSync(path, 'utf8')).total;
+          } catch (err) {
+            console.error(`::error::Could not read the coverage summary at ${shown(path)}: ${shown(err.message)}`);
+            process.exit(1);
+          }
+          // The figures come from the caller's test output, which a string can
+          // stand in for: encoded, then wrapped, before they reach the summary's
+          // Markdown (#506) -- a control character becomes a question mark and
+          // an ASCII punctuation character its numeric HTML entity (`@` also gets
+          // an empty comment after it, so no e-mail autolink forms), inside
+          // <code>.
+          const mdEnc = (value) => String(value).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, '?').replace(/[\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e]/g, (c) => (c === '@' ? '&#64;<!-- -->' : `&#${c.charCodeAt(0)};`));
+          const mdCode = (value) => `<code>${mdEnc(value)}</code>`;
+          const mdPre = (value) => `<pre>${String(value).replace(/\r\n/g, '\n').split('\n').map(mdEnc).join('\n')}\n</pre>`;
+          console.log('## Test coverage');
+          console.log('');
+          console.log('| Metric | % | Covered / Total |');
+          console.log('| --- | --- | --- |');
+          for (const k of ['lines', 'statements', 'functions', 'branches']) {
+            console.log(`| ${mdCode(k)} | ${mdCode(total[k].pct)}% | ${mdCode(total[k].covered)}/${mdCode(total[k].total)} |`);
+          }
           NODE
 
       - name: Enforce coverage threshold
@@ -94,12 +128,22 @@ jobs:
         run: |
           node <<'NODE'
           const fs = require('fs');
-          const total = JSON.parse(fs.readFileSync(process.env.SUMMARY_PATH, 'utf8')).total;
+          // The path and pct come from the caller and the test run; masked as
+          // above (#492). A missing or broken file is caught for the same
+          // reason: Node's own report prints the path and quotes the content.
+          const shown = (value) => String(value).replace(/[\u0000-\u001f\u007f-\u009f]/g, '?').replace(/##\[/g, '#?[');
+          let total;
+          try {
+            total = JSON.parse(fs.readFileSync(process.env.SUMMARY_PATH, 'utf8')).total;
+          } catch (err) {
+            console.error(`::error::Could not read the coverage summary at ${shown(process.env.SUMMARY_PATH)}: ${shown(err.message)}`);
+            process.exit(1);
+          }
           const pct = total.lines.pct;
           const threshold = Number(process.env.FAIL_UNDER);
           if (pct < threshold) {
-            console.error(`::error::Line coverage ${pct}% is below the required ${threshold}%`);
+            console.error(`::error::Line coverage ${shown(pct)}% is below the required ${threshold}%`);
             process.exit(1);
           }
-          console.log(`Line coverage ${pct}% meets the required ${threshold}%.`);
+          console.log(`Line coverage ${shown(pct)}% meets the required ${threshold}%.`);
           NODE

@@ -2,7 +2,7 @@
 
 Führt ein minimales Bündel statischer Analyse bei jedem Pull-Request und bei jedem Push auf den Default-Branch aus und liefert schnelles Feedback ohne externe Dienste.
 
-- [`pre-commit`](https://pre-commit.com), in einer festgelegten Version installiert, führt die in `.pre-commit-config.yaml` definierten Hooks auf allen Dateien aus; [`actions/cache`](https://github.com/actions/cache), auf einen vollständigen Commit-SHA gepinnt, cacht die Hook-Umgebungen
+- [`pre-commit`](https://pre-commit.com), in einer festgelegten Version installiert, führt die in `.pre-commit-config.yaml` definierten Hooks auf allen Dateien aus; [`actions/cache`](https://github.com/actions/cache), auf einen vollständigen Commit-SHA gepinnt, cacht die Hook-Umgebungen (siehe [Cache der Hook-Umgebungen](#cache-der-hook-umgebungen))
 
 ---
 
@@ -24,6 +24,55 @@ jobs:
 
 !!! warning "Fork-Pull-Requests brauchen den Trigger `pull_request`"
     Ein Fork pusht nie in das Basis-Repository. Mit einem reinen Push-Trigger meldet sich der erforderliche Check bei einem Pull-Request aus einem Fork nie, und dieser Pull-Request bleibt blockiert. `pull_request_target` ist keine Alternative. Standardmäßig checkt es den Basis-Branch aus, der erforderliche Check wird also grün, ohne die Änderungen des Pull-Requests zu testen. Checkt man stattdessen den Head des Pull-Requests aus, läuft der Code des Forks mit dem Schreib-Token und den Secrets des Basis-Repositorys. Bei einem Fork-Pull-Request überspringt `reusable-trivy.yaml` den Upload seines Scan-Berichts in den Security-Tab, weil das Token dort nur Leserechte hat.
+
+---
+
+## Fork-Wächter
+
+Erforderliche Checks wie `static / Static CI Tests` laufen bei `pull_request`, und GitHub führt einen `pull_request`-Workflow aus dem Merge-Commit des Pull-Requests aus. Bei einem Fork-Pull-Request stammen die Workflow-Dateien und die Skripte, die sie aufrufen, aus dem Fork. Ein Fork kann sie also so lange ändern, bis jeder Job durchläuft. Ein erforderlicher Kontext nennt nur die App und den Check, daher erfüllt ihn auch ein Check, den der Fork definiert.
+
+`reusable-fork-guard.yaml` ist der Check, den ein Fork nicht umschreiben kann. Rufe ihn aus einem `pull_request_target`-Workflow auf und verlange seinen Kontext neben den anderen:
+
+```yaml title=".github/workflows/fork-guard.yaml"
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  fork-guard:
+    permissions:
+      contents: read
+      statuses: write
+    uses: nolte/gh-plumbing/.github/workflows/reusable-fork-guard.yaml@<tag>
+```
+
+Der Workflow meldet sein Ergebnis als Commit-Status `fork-guard`, und diesen Status verlangst du als Kontext. Der Check schlägt fehl, wenn der Pull-Request aus einem Fork stammt und einen geschützten Pfad hinzufügt, ändert, entfernt oder umbenennt. Standardmäßig sind das `.github/*`, `scripts/*`, `actions/*`, das Taskfile und `taskfiles/*`, `.pre-commit-config.yaml`, jede `requirements*.txt`, die Konfigurationsdateien von pytest und coverage sowie `mkdocs.yml`. Mit `protected-paths` ersetzt du die Liste. Jede Zeile ist ein Bash-Muster, und `*` passt auch auf `/`. Ein Pull-Request aus einem Branch desselben Repositorys besteht den Check. Um eine berechtigte Fork-Änderung an einem geschützten Pfad zu übernehmen, pusht ein Maintainer sie erneut auf einen Branch des Repositorys.
+
+!!! warning "Warum `pull_request_target` hier sicher ist"
+    `pull_request_target` führt die Definition aus dem Default-Branch aus, der Pull-Request kann also weder den Check noch seine Liste ändern. Der Workflow checkt nichts aus und liest keinen Dateiinhalt. Er listet die geänderten Dateinamen über die Compare-API und vergleicht sie als reine Zeichenketten. Sein einziges Schreibrecht ist `statuses`, um das Ergebnis zu melden. Füge ihm keinen Checkout hinzu.
+
+!!! warning "Den Status verlangen, nicht den Check-Run"
+    Der Check-Run des Jobs heißt `fork-guard / Protected Paths`. Verlange diesen Namen nicht: Ein Fork kann einen Workflow mit einem gleichnamigen Job hinzufügen, der durchläuft, und dieselbe App meldet dann beide Check-Runs. Einen Commit-Status kann ein Fork nicht setzen, weil das Token seines `pull_request`-Laufs nur Leserechte hat.
+
+!!! info "Den Kontext einführen"
+    `pull_request_target` führt die Workflow-Datei aus dem Basis-Branch aus. Merge den Workflow vor oder zusammen mit der Änderung, die seinen Kontext verlangt. Die Branch-Protection ändert sich erst, wenn die Settings den Default-Branch erreichen, und dann liegt der Workflow schon dort.
+
+---
+
+## Cache der Hook-Umgebungen
+
+Der Workflow cacht `~/.cache/pre-commit`, wo pre-commit die Hook-Umgebungen installiert. Der Cache-Key setzt sich aus dem Betriebssystem-Release des Runners, der installierten pre-commit-Version, dem Python-Installationspfad und einem Hash der `.pre-commit-config.yaml` zusammen. Ein neues Ubuntu-Image hinter `ubuntu-latest` oder eine neue pre-commit-Version startet deshalb einen frischen Cache, statt Umgebungen wiederherzustellen, die für ein anderes System gebaut wurden.
+
+Wiederherstellen und Speichern sind getrennte Schritte. Der Workflow speichert den Cache nur in einem `pull_request`-Lauf, nur bei einem Cache-Miss und bevor `pre-commit run` irgendeinen Hook ausführt. Einen Cache, den ein Pull-Request-Lauf speichert, sieht nur dieser Pull-Request. Läufe auf dem Default-Branch, Pushes auf andere Branches und `pull_request_target`-Läufe stellen höchstens wieder her und speichern nie. So kann Hook-Code keine Hook-Umgebungen in den Cache des Default-Branches schreiben, aus dem jeder Branch des Repositorys wiederherstellt.
+
+!!! info "Weniger Cache-Treffer"
+    Der Default-Branch erhält nie einen gespeicherten Cache. Läufe auf dem Default-Branch und der erste Lauf jedes Pull-Requests installieren die Hook-Umgebungen von Grund auf, der nächste Lauf desselben Pull-Requests stellt sie wieder her. Ein Aufrufer, der den Workflow nur bei `push` auslöst, nutzt den Cache nie.
+
+!!! warning "Restrisiko"
+    Hook-Code läuft auf dem Runner und kann das Token lesen, mit dem der Runner den Cache-Dienst anspricht. Damit kann Hook-Code weiterhin jeden Cache-Eintrag im Scope des aktuellen Laufs schreiben, auf dem Default-Branch also im Scope des Default-Branches. Die Trennung von Wiederherstellen und Speichern schließt diesen Weg nicht. Das gelingt nur, wenn die Hooks isoliert vom Runner laufen, zum Beispiel in einem Container ohne den Runner-Kontext.
 
 ---
 
@@ -60,6 +109,49 @@ jobs:
 
 !!! question "Warum kein GHCR-Mirror?"
     Die Hooks auf einen Mirror zu zeigen, braucht ein `entry:`-Override und entkoppelt damit den Image-Tag vom `rev:` des Hooks. Genau dieses `rev:` beobachtet die Update-Automatisierung — der Mirror würde unbeobachtet altern.
+
+---
+
+## Shell-Lint
+
+`reusable-shellcheck.yaml` prüft Shell-Skripte mit [ShellCheck](https://www.shellcheck.net/). Der Workflow installiert ein festgelegtes ShellCheck-Release und prüft dessen Prüfsumme, bevor er es ausführt; die Version ändert sich also nur mit einem Release dieses Repositorys. Er prüft jede passende Datei, nicht nur die in einem Pull-Request geänderten, und meldet jeden Befund als Annotation: als Fehler, als Warnung oder, für die Stufen `info` und `style`, als Hinweis. Er braucht nur `contents: read` und schreibt nichts in den Pull-Request.
+
+```yaml title=".github/workflows/build-static-tests.yaml"
+jobs:
+  shellcheck:
+    permissions:
+      contents: read
+    uses: nolte/gh-plumbing/.github/workflows/reusable-shellcheck.yaml@<tag>
+```
+
+| Input | Standard | Zweck |
+| --- | --- | --- |
+| `fail_level` | `error` | Schweregrad, ab dem der Job fehlschlägt: `error`, `warning`, `info`, `any` oder `none`. Befunde darunter annotiert der Job, ohne fehlzuschlagen. |
+| `path` | `.` | Basisverzeichnis der Suche, eines pro Zeile. Ein Pfad, den es nicht gibt, lässt den Job fehlschlagen. |
+| `pattern` | `*.sh` | Dateinamensmuster der Skripte, eines pro Zeile. |
+| `exclude` | `*/.git/*` | Pfadmuster, das ausgelassen wird, eines pro Zeile. Ein Wert ersetzt den Standard. |
+| `check_all_files_with_shebangs` | `false` | Prüft zusätzlich jede Datei, deren erste Zeile `sh`, `bash`, `dash` oder `ksh` als Interpreter nennt, unabhängig vom Dateinamen. |
+| `shellcheck_flags` | `--external-sources` | Flags für ShellCheck, an Leerzeichen und Zeilenenden getrennt. Das Ausgabeformat setzt der Workflow selbst. |
+
+Der Job ist grün, wenn keine Datei passt. Ein Repository ohne Shell-Skripte kann den Workflow daher schon aufrufen, bevor es welche hat.
+
+Der Workflow liefert kein Artefakt, derselbe Aufruf funktioniert also als Gate in einem Release-Pfad. Mit `needs:` vor den veröffentlichenden Job gesetzt, stoppt ein Befund ab `fail_level` die Veröffentlichung:
+
+```yaml title=".github/workflows/release-publish.yml"
+jobs:
+  shellcheck:
+    permissions:
+      contents: read
+    uses: nolte/gh-plumbing/.github/workflows/reusable-shellcheck.yaml@<tag>
+  publish:
+    needs: shellcheck
+    permissions:
+      contents: write
+    uses: nolte/gh-plumbing/.github/workflows/reusable-release-publish.yml@<tag>
+```
+
+!!! info "Skripte in Workflow-Dateien"
+    Der Workflow liest nur Skriptdateien. Die Shell in den `run:`-Blöcken von Workflow-Dateien deckt `reusable-actionlint.yaml` ab.
 
 ---
 

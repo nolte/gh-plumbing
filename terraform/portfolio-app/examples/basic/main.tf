@@ -4,7 +4,7 @@ terraform {
   required_providers {
     github = {
       source  = "integrations/github"
-      version = "~> 6.6"
+      version = "~> 6.12"
     }
   }
 }
@@ -32,7 +32,7 @@ module "portfolio_app" {
 
   organization    = "nolte"
   app_id          = var.portfolio_app_id
-  app_slug        = "nolte-portfolio-bot"
+  app_slug        = "nolte-portfolio-bot" # optional, no longer read by the module
   app_private_key = var.portfolio_app_private_key
 
   consumer_repositories = [
@@ -41,8 +41,10 @@ module "portfolio_app" {
 
   # Phase 0: leave bypass off until every consumer in the list above
   # has the App installed AND its wrappers updated. Flip to true in a
-  # follow-up apply once both are confirmed.
+  # follow-up apply once both are confirmed. The bypass then needs the
+  # App node ID; see "Find the App node identifier" in the module README.
   enable_branch_bypass = false
+  # app_node_id        = "A_kwDO..."
 }
 
 output "configured" {

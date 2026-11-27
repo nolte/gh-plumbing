@@ -84,6 +84,10 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          # Masks $1 for a log line (#492): control characters become '?' and
+          # '##[' becomes '#?[', so the value can neither end the line nor open
+          # the runner's older '##[command]' syntax in the middle of one.
+          shown() { local v="${1//[[:cntrl:]]/?}"; printf '%s' "${v//\#\#\[/#?[}"; }
           start_marker='<!-- release-skill-layer:project-context-start -->'
           end_marker='<!-- release-skill-layer:project-context-end -->'
 
@@ -100,6 +104,25 @@ jobs:
           fi
 
           captured_tag=$(echo "$draft" | jq -r '.tagName')
+          # A draft's tag name is editable text, and the restore step reads it
+          # from this step's output. A line end in it could start a workflow
+          # command in the messages below or add an entry to $GITHUB_OUTPUT,
+          # and '##[' opens the runner's older command syntax anywhere in a log
+          # line. Such a draft is skipped like the other unusable ones here,
+          # before the first message that prints the tag, so no later
+          # '$captured_tag' carries either (#492).
+          #
+          # Git refuses ASCII control characters, DEL and '[' in a ref name.
+          # The control-character rule is deliberately wider: in a UTF-8 locale
+          # [[:cntrl:]] also matches C1 (U+0080-U+009F) and U+2028/U+2029,
+          # which git allows -- see the tag check in "Resolve draft" of
+          # reusable-release-publish.yml for why and what the runner source
+          # shows.
+          if [[ "$captured_tag" == *[[:cntrl:]]* || "$captured_tag" == *'##['* ]]; then
+            echo "::warning::Draft tag '$(shown "$captured_tag")' contains a control character or '##[' (shown as '?' and '#?['); not capturing its project-context block."
+            echo "had_markers=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           body=$(gh release view "$captured_tag" --repo "$REPO" --json body --jq .body)
 
           if ! grep -qF "$start_marker" <<< "$body" || ! grep -qF "$end_marker" <<< "$body"; then
@@ -140,6 +163,10 @@ jobs:
           CAPTURED_TAG: ${{ steps.capture.outputs.captured_tag }}
         run: |
           set -euo pipefail
+          # Masks $1 for a log line (#492): control characters become '?' and
+          # '##[' becomes '#?[', so the value can neither end the line nor open
+          # the runner's older '##[command]' syntax in the middle of one.
+          shown() { local v="${1//[[:cntrl:]]/?}"; printf '%s' "${v//\#\#\[/#?[}"; }
           start_marker='<!-- release-skill-layer:project-context-start -->'
           end_marker='<!-- release-skill-layer:project-context-end -->'
 
@@ -155,7 +182,8 @@ jobs:
           new_tag=$(echo "$draft" | jq -r '.tagName')
 
           if [[ "$new_tag" != "$CAPTURED_TAG" ]]; then
-            echo "::warning::Draft tag changed from '$CAPTURED_TAG' to '$new_tag' — captured markers may be stale; not restoring. Re-run release-notes-curate to regenerate the project-context block."
+            # new_tag is a draft's tag name, not yet checked: masked (#492).
+            echo "::warning::Draft tag changed from '$CAPTURED_TAG' to '$(shown "$new_tag")' — captured markers may be stale; not restoring. Re-run release-notes-curate to regenerate the project-context block."
             exit 0
           fi
 

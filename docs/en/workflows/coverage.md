@@ -5,7 +5,9 @@ Runs a project's tests and surfaces the coverage report in the GitHub Actions jo
 - [`reusable-python-coverage.yaml`](#python): `pytest` with `pytest-cov`
 - [`reusable-nodejs-coverage.yaml`](#nodejs): `Vitest` or Jest via the Istanbul `json-summary` report
 
-Both render a Markdown table into `$GITHUB_STEP_SUMMARY` (even when the tests fail) and expose an optional `fail-under` gate.
+Both write the coverage into `$GITHUB_STEP_SUMMARY`, even when the tests fail, and expose an optional `fail-under` gate. The Python variant shows the coverage report as one block of plain text. The Node.js variant shows a table with each figure as inline code. Both encode the text from the test run first, so a file name or a figure can't add a link, an image or a table cell to the summary.
+
+Neither workflow persists the checkout token (`persist-credentials: false`), so the install and test commands can't read it. A command that fetches from `origin` therefore works only in a public repository.
 
 ---
 
@@ -21,7 +23,7 @@ jobs:
 ```
 
 !!! tip "Requirements"
-    The `install-command` (default `pip install -e .[test]`) must pull in `pytest` and `pytest-cov`. Coverage is rendered via `coverage report --format=markdown`, which needs Coverage.py ≥ 7.0 (shipped with current `pytest-cov`).
+    The `install-command` (default `pip install -e .[test]`) must pull in `pytest` and `pytest-cov`. The summary shows the output of `coverage report --format=text`, which needs Coverage.py ≥ 7.0 (shipped with current `pytest-cov`).
 
 ---
 
@@ -34,6 +36,8 @@ jobs:
     with:
       fail-under: 80
 ```
+
+The workflow turns off the built-in npm cache of `actions/setup-node` (`package-manager-cache: false`). Left on, the action uses that cache when the caller's `package.json` names npm as its package manager. It then saves the cache after the install and test commands ran, so those commands could change what later runs restore, on the default branch included. Each run installs the dependencies without a restored npm cache.
 
 !!! tip "json-summary report"
     The `test-command` (default `npm test`) must write an Istanbul `json-summary` report to `coverage-summary-path` (default `coverage/coverage-summary.json`). Both `Vitest` (`--coverage.reporter=json-summary`) and Jest (`--coverageReporters=json-summary`) emit this format.

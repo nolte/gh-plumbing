@@ -37,6 +37,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -44,6 +45,52 @@ import urllib.request
 API = "https://api.github.com"
 COMMONS_REPO = "nolte/gh-plumbing"
 COMMONS_PATH = ".github/commons-settings.yml"
+
+# The step summary is Markdown that GitHub renders (#506). Repository names,
+# branch names, context names and `_extends` values are repository content or
+# API responses, so the summary writes each one encoded, then wrapped: a
+# control character becomes a question mark and an ASCII punctuation
+# character its numeric HTML entity (`@` also gets an empty comment after it,
+# so no e-mail autolink forms), inside <code> (md_code) or <pre> (md_pre). The same helpers as
+# scripts/workflow_command_masking.py's PY_MD, which a test holds this copy to.
+def md_enc(value):
+    return re.sub(r"[\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e]",
+                  lambda m: "&#64;<!-- -->" if m.group() == "@" else f"&#{ord(m.group())};",
+                  re.sub(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]", "?", str(value)))
+
+
+def md_code(value):
+    return f"<code>{md_enc(value)}</code>"
+
+
+def md_pre(value):
+    lines = str(value).replace("\r\n", "\n").split("\n")
+    return "<pre>" + "\n".join(md_enc(line) for line in lines) + "\n</pre>"
+
+
+class Note(str):
+    """A detail line: the str is the plain text, `markdown` the same line for the step summary."""
+
+    markdown: str
+
+
+def note(template: str, *values) -> Note:
+    """A Note whose `{}` slots take values: as given in the text, md_code() in the Markdown.
+
+    A slot written as `` `{}` `` is a code span in the text; in the Markdown
+    the backticks go, since md_code() already wraps the value.
+    """
+    pieces = template.split("{}")
+    assert len(pieces) == len(values) + 1, template
+    plain, markdown = pieces[0], pieces[0]
+    for i, value in enumerate(values):
+        quoted = pieces[i].endswith("`") and pieces[i + 1].startswith("`")
+        plain += str(value) + pieces[i + 1]
+        markdown = (markdown[:-1] if quoted else markdown) + md_code(value) \
+            + (pieces[i + 1][1:] if quoted else pieces[i + 1])
+    result = Note(plain)
+    result.markdown = markdown
+    return result
 
 
 class Forbidden(Exception):
@@ -97,8 +144,11 @@ def read_yaml_file(repo: str, path: str, token: str):
 def declared_contexts(settings, commons, branch: str):
     """Resolve the contexts a repository declares for one branch.
 
-    The Probot Settings App merges `branches:` entries by `name`, so a per-repo
-    entry overrides the commons entry of the same name field by field.
+    A per-repo entry wins over the commons entry of the same name. That is the
+    behaviour the hosted Probot Settings App shows; its current source
+    concatenates `_extends` arrays instead (#442). Both readings agree as long
+    as the commons and the repository don't declare the same branch, which is
+    why the commons no longer declare `develop`.
     """
     def contexts_from(doc):
         if not isinstance(doc, dict):
@@ -121,6 +171,55 @@ def declared_contexts(settings, commons, branch: str):
     return []
 
 
+# The fields GitHub's "Update branch protection" endpoint requires (each may be
+# null, none may be absent). The Settings App PUTs a branch entry as it stands,
+# so an entry missing one is rejected with 422 and nothing in it applies.
+REQUIRED_PROTECTION_FIELDS = (
+    "required_status_checks",
+    "enforce_admins",
+    "required_pull_request_reviews",
+    "restrictions",
+)
+
+
+def _entry(doc, branch: str):
+    """The `branches:` entry named `branch` in `doc`, or None."""
+    if not isinstance(doc, dict):
+        return None
+    for entry in doc.get("branches") or []:
+        if isinstance(entry, dict) and entry.get("name") == branch:
+            return entry
+    return None
+
+
+def entry_findings(settings, commons, branch: str) -> list[Note]:
+    """Declaration faults that make a branch entry apply nothing, or race (#442).
+
+    Both are silent: the Settings App reports neither, and the live protection
+    simply stops following the declaration.
+    """
+    findings = []
+    own = _entry(settings, branch)
+    protection = (own or {}).get("protection")
+    if isinstance(protection, dict):
+        absent = [f for f in REQUIRED_PROTECTION_FIELDS if f not in protection]
+        if absent:
+            # The field names are this script's own constants: kept as code spans.
+            findings.append(note(
+                "the `{}` entry omits " + ", ".join(f"`{f}`" for f in absent) + "; "
+                "the branch-protection API requires every one of them, so the "
+                "Settings App update for this branch fails and later changes to "
+                "it stop applying (#442)", branch,
+            ))
+    if own is not None and settings.get("_extends") and _entry(commons, branch) is not None:
+        findings.append(note(
+            "both this repository and the commons declare `{}`; the "
+            "Settings App source concatenates `_extends` arrays, so the two "
+            "entries can be applied in parallel and the last write wins (#442)", branch,
+        ))
+    return findings
+
+
 def audit_repo(repo: str, branch: str, commons, token: str) -> dict:
     result = {"repo": repo, "branch": branch, "notes": []}
 
@@ -128,16 +227,17 @@ def audit_repo(repo: str, branch: str, commons, token: str) -> dict:
         settings = read_yaml_file(repo, ".github/settings.yml", token)
     except Forbidden:
         result["status"] = "unreadable"
-        result["notes"].append("the token may not read this repository's contents")
+        result["notes"].append(note("the token may not read this repository's contents"))
         return result
     if settings is None:
         result["status"] = "no-settings"
-        result["notes"].append("no .github/settings.yml")
+        result["notes"].append(note("no .github/settings.yml"))
         return result
 
     result["extends"] = settings.get("_extends") or "(none)"
     declared = declared_contexts(settings, commons, branch)
     result["declared"] = declared
+    result["notes"].extend(entry_findings(settings, commons, branch))
 
     # Read rulesets FIRST. A repository with no classic branch protection can
     # still be fully protected by one, so returning early on a 404 from the
@@ -149,10 +249,10 @@ def audit_repo(repo: str, branch: str, commons, token: str) -> dict:
         rules = api(f"repos/{repo}/rules/branches/{branch}", token) or []
     except Forbidden:
         rules = []
-        result["notes"].append(
+        result["notes"].append(note(
             "the token may not read rulesets here; enforcement may be "
             "under-reported"
-        )
+        ))
     ruleset_ctx = sorted({
         c["context"]
         for rule in rules
@@ -177,29 +277,29 @@ def audit_repo(repo: str, branch: str, commons, token: str) -> dict:
         result["live"] = ruleset_ctx
         missing = [c for c in declared if c not in ruleset_ctx]
         result["missing"] = missing
-        result["notes"].append(
+        result["notes"].append(note(
             "the token may not read classic branch protection here; the ruleset "
             "read succeeded and its contexts are counted as enforced"
-        )
+        ))
         if not missing:
             # Every declared context is already enforced by a ruleset. Classic
             # protection can only add to that, so the answer is complete even
             # though half of it is unreadable, and the audit must not fail.
             result["status"] = "ok"
             if declared:
-                result["notes"].append(
+                result["notes"].append(note(
                     "every declared context is enforced by a ruleset -- protected, "
                     "just not by the Settings App"
-                )
+                ))
         else:
             # The gap may or may not be covered by the classic protection that
             # could not be read. That is unknown, and `drift` would assert
             # something stronger than the evidence supports.
             result["status"] = "unreadable"
-            result["notes"].append(
-                f"no ruleset enforces: {', '.join(missing)} -- classic protection "
-                "could not be read, so this is unknown rather than proven drift"
-            )
+            result["notes"].append(note(
+                "no ruleset enforces: {} -- classic protection "
+                "could not be read, so this is unknown rather than proven drift", ", ".join(missing),
+            ))
         return result
     if protection is None:
         result["classic"] = []
@@ -207,25 +307,23 @@ def audit_repo(repo: str, branch: str, commons, token: str) -> dict:
         missing = [c for c in declared if c not in ruleset_ctx]
         if declared and not ruleset_ctx:
             result["status"] = "unprotected"
-            result["notes"].append(
+            result["notes"].append(note(
                 f"{len(declared)} context(s) declared, and neither classic "
                 "protection nor a ruleset enforces anything"
-            )
+            ))
         elif missing:
             result["status"] = "drift"
-            result["notes"].append(
-                f"declared but not enforced: {', '.join(missing)}"
-            )
-            result["notes"].append(
+            result["notes"].append(note("declared but not enforced: {}", ", ".join(missing)))
+            result["notes"].append(note(
                 "no classic branch protection; a ruleset enforces the rest"
-            )
+            ))
         else:
             result["status"] = "ok"
             if declared:
-                result["notes"].append(
+                result["notes"].append(note(
                     "no classic branch protection, but a ruleset enforces every "
                     "declared context -- protected, just not by the Settings App"
-                )
+                ))
         return result
 
     checks = protection.get("required_status_checks") or {}
@@ -239,21 +337,26 @@ def audit_repo(repo: str, branch: str, commons, token: str) -> dict:
     live = sorted(set(classic) | set(ruleset_ctx))
     result["live"] = live
 
-    # Distinguish "the commons were applied and something was dropped" from
-    # "the commons were never applied". The commons declare enforce_admins and
-    # strict for develop; a repository that extends them and reports neither is
-    # a different fault from one that reports both and is missing a context.
+    # Distinguish "the declared block was applied and something was dropped"
+    # from "the declared block was never applied". A branch entry that declares
+    # enforce_admins and reports none is a different fault from one that
+    # reports it and is missing a context. The repository's own entry wins;
+    # the commons only count when the repository extends them and declares
+    # no entry of that name (the commons no longer declare `develop`, #442).
+    sources = [settings]
     if settings.get("_extends") and isinstance(commons, dict):
-        for entry in commons.get("branches") or []:
-            if entry.get("name") != branch:
-                continue
-            wanted = entry.get("protection") or {}
-            if wanted.get("enforce_admins") and not result["enforce_admins"]:
-                result["notes"].append(
-                    "extends the commons but `enforce_admins` is not enforced -- "
-                    "the commons block looks unapplied, not merely incomplete"
-                )
-            break
+        sources.append(commons)
+    for doc in sources:
+        entry = _entry(doc, branch)
+        if entry is None:
+            continue
+        wanted = entry.get("protection") or {}
+        if wanted.get("enforce_admins") and not result["enforce_admins"]:
+            result["notes"].append(note(
+                "declares `enforce_admins` but it is not enforced -- "
+                "the declared block looks unapplied, not merely incomplete"
+            ))
+        break
 
     missing = [c for c in declared if c not in live]
     extra = [c for c in live if c not in declared]
@@ -262,17 +365,34 @@ def audit_repo(repo: str, branch: str, commons, token: str) -> dict:
 
     if missing:
         result["status"] = "drift"
-        result["notes"].append(f"declared but not enforced: {', '.join(missing)}")
+        result["notes"].append(note("declared but not enforced: {}", ", ".join(missing)))
     else:
         result["status"] = "ok"
     if extra:
-        result["notes"].append(f"enforced but not declared: {', '.join(extra)}")
+        result["notes"].append(note("enforced but not declared: {}", ", ".join(extra)))
     return result
 
 
-def render(results: list[dict]) -> str:
+def render(results: list[dict], markdown: bool = True) -> str:
+    """The report: for the step summary (`markdown`), or as plain text for the log.
+
+    In the Markdown every repository-, settings- or API-supplied value is
+    md_code() (#506); the plain text keeps the code spans it always had.
+    """
     order = {"drift": 0, "unprotected": 1, "unreadable": 2, "no-settings": 3, "ok": 4}
     results = sorted(results, key=lambda r: (order.get(r["status"], 9), r["repo"]))
+
+    def code(value) -> str:
+        return md_code(value) if markdown else f"`{value}`"
+
+    def codes(values) -> str:
+        return ", ".join(code(v) for v in values)
+
+    def text(item) -> str:
+        if not markdown:
+            return str(item)
+        # A note built without note() carries no Markdown form: encoded whole.
+        return item.markdown if isinstance(item, Note) else md_code(item)
 
     lines = ["# Branch protection: declared versus enforced", ""]
     drift = [r for r in results if r["status"] in ("drift", "unprotected", "unreadable")]
@@ -285,7 +405,7 @@ def render(results: list[dict]) -> str:
     lines.append("|---|---|---|---:|---|")
     for r in results:
         lines.append(
-            f"| `{r['repo']}` | `{r['branch']}` | {len(r.get('declared', []))} "
+            f"| {code(r['repo'])} | {code(r['branch'])} | {len(r.get('declared', []))} "
             f"| {len(r.get('live', []))} | {r['status']} |"
         )
 
@@ -293,14 +413,14 @@ def render(results: list[dict]) -> str:
     if detail:
         lines += ["", "## Detail", ""]
         for r in detail:
-            lines.append(f"### `{r['repo']}`")
+            lines.append(f"### {code(r['repo'])}")
             lines.append("")
-            for note in r["notes"]:
-                lines.append(f"- {note}")
+            for item in r["notes"]:
+                lines.append(f"- {text(item)}")
             if r.get("declared"):
-                lines.append(f"- declared: `{'`, `'.join(r['declared'])}`")
+                lines.append(f"- declared: {codes(r['declared'])}")
             if r.get("live"):
-                lines.append(f"- enforced: `{'`, `'.join(r['live'])}`")
+                lines.append(f"- enforced: {codes(r['live'])}")
             if "classic" in r or r.get("ruleset"):
                 if r.get("classic") is None and "classic" in r:
                     # Distinct from `(none)`: the endpoint refused the read, so
@@ -308,21 +428,25 @@ def render(results: list[dict]) -> str:
                     # that as "none" is what made the audit look self-contradictory.
                     classic_repr = "(not readable with this token)"
                 elif r.get("classic"):
-                    classic_repr = "`" + "`, `".join(r["classic"]) + "`"
+                    classic_repr = codes(r["classic"])
                 else:
                     classic_repr = "(none)"
                 lines.append(f"  - via classic protection: {classic_repr}")
                 lines.append(
                     f"  - via ruleset: "
-                    f"{'`' + '`, `'.join(r['ruleset']) + '`' if r.get('ruleset') else '(none)'}"
+                    f"{codes(r['ruleset']) if r.get('ruleset') else '(none)'}"
                 )
             if r.get("restrictions"):
+                # restrictions is one of two literals; the other two are what
+                # the API returned.
+                admins = md_code(r.get("enforce_admins")) if markdown else r.get("enforce_admins")
+                strict = md_code(r.get("strict")) if markdown else r.get("strict")
                 lines.append(
                     f"- `restrictions`: {r['restrictions']}, "
-                    f"`enforce_admins`: {r.get('enforce_admins')}, "
-                    f"`strict`: {r.get('strict')}"
+                    f"`enforce_admins`: {admins}, "
+                    f"`strict`: {strict}"
                 )
-            lines.append(f"- `_extends`: `{r.get('extends', '(unknown)')}`")
+            lines.append(f"- `_extends`: {code(r.get('extends', '(unknown)'))}")
             lines.append("")
     return "\n".join(lines)
 
@@ -364,13 +488,12 @@ def main() -> int:
     commons = read_yaml_file(COMMONS_REPO, COMMONS_PATH, token)
 
     results = [audit_repo(repo, args.branch, commons, token) for repo in repos]
-    report = render(results)
-    print(report)
+    print(render(results, markdown=False))
 
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as handle:
-            handle.write(report + "\n")
+            handle.write(render(results) + "\n")
 
     drift = [r for r in results if r["status"] in ("drift", "unprotected", "unreadable")]
     if drift and not args.exit_zero:

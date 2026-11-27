@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
+import re
 
 import pytest
 
@@ -193,3 +194,107 @@ def test_render_counts_enforced_from_live(stub):
     report = audit.render([audit.audit_repo(REPO, BRANCH, {}, "t")])
 
     assert "| 3 | 2 |" in report, "declared 3, enforced 2 -- never `| 3 | 0 |` (#421)"
+
+
+# --- #442: entries that apply nothing, or race the commons -------------------
+
+COMPLETE = {
+    "required_pull_request_reviews": None,
+    "required_status_checks": {"strict": True, "contexts": ["static / Static CI Tests"]},
+    "enforce_admins": True,
+    "restrictions": None,
+}
+
+
+def settings_with(protection, extends=True):
+    doc = {"branches": [{"name": BRANCH, "protection": protection}]}
+    if extends:
+        doc["_extends"] = "gh-plumbing:.github/commons-settings.yml"
+    return doc
+
+
+def test_complete_entry_has_no_findings():
+    assert audit.entry_findings(settings_with(dict(COMPLETE)), {"branches": []}, BRANCH) == []
+
+
+@pytest.mark.parametrize("field", audit.REQUIRED_PROTECTION_FIELDS)
+def test_each_absent_required_field_is_named(field):
+    protection = {k: v for k, v in COMPLETE.items() if k != field}
+    findings = audit.entry_findings(settings_with(protection), {"branches": []}, BRANCH)
+    assert len(findings) == 1
+    assert f"`{field}`" in findings[0]
+
+
+def test_null_counts_as_present():
+    protection = dict(COMPLETE, required_status_checks=None)
+    assert audit.entry_findings(settings_with(protection), {"branches": []}, BRANCH) == []
+
+
+def test_same_branch_in_commons_and_repository_is_a_race():
+    commons = {"branches": [{"name": BRANCH, "protection": dict(COMPLETE)}]}
+    findings = audit.entry_findings(settings_with(dict(COMPLETE)), commons, BRANCH)
+    assert len(findings) == 1
+    assert "concatenates" in findings[0]
+
+
+def test_commons_entry_alone_is_no_race():
+    commons = {"branches": [{"name": BRANCH, "protection": dict(COMPLETE)}]}
+    assert audit.entry_findings({"_extends": "x"}, commons, BRANCH) == []
+
+
+def test_commons_are_ignored_without_extends():
+    commons = {"branches": [{"name": BRANCH, "protection": dict(COMPLETE)}]}
+    assert audit.entry_findings(settings_with(dict(COMPLETE), extends=False), commons, BRANCH) == []
+
+
+def test_incomplete_entry_is_reported_by_the_audit(stub):
+    stub(ruleset_payload(), classic_payload("static / Static CI Tests"),
+         settings=settings_with({"required_status_checks": {"contexts": ["static / Static CI Tests"]}}))
+    result = audit.audit_repo(REPO, BRANCH, {"branches": []}, "token")
+    assert result["status"] == "ok"
+    assert any("omits" in n for n in result["notes"])
+
+
+def test_enforce_admins_note_reads_the_repository_entry(stub):
+    unapplied = dict(classic_payload("static / Static CI Tests"), enforce_admins={"enabled": False})
+    stub(ruleset_payload(), unapplied, settings=settings_with(dict(COMPLETE)))
+    result = audit.audit_repo(REPO, BRANCH, {"branches": []}, "token")
+    assert any("looks unapplied" in n for n in result["notes"])
+
+
+# --- the step summary (#506) ----------------------------------------------------
+
+HOSTILE = "[x](u) @user #1 <img src=x> |b| `c`"
+
+
+def test_the_summary_encodes_settings_and_api_text(stub):
+    """Context names, the branch and `_extends` come from settings.yml or the API.
+
+    The summary is Markdown: each such value is entity-encoded inside <code>,
+    so none adds a link, an image, a mention or a table cell. The plain report
+    for the log is the one it always was.
+    """
+    settings = {
+        "_extends": HOSTILE,
+        "branches": [{"name": BRANCH, "protection": {"required_status_checks": {"contexts": [HOSTILE, "ok"]}}}],
+    }
+    stub(ruleset_payload("ok"), classic_payload(HOSTILE + " live"), settings=settings)
+    result = audit.audit_repo(REPO + HOSTILE, BRANCH, {}, "t")
+    assert any(HOSTILE in n for n in result["notes"]), "a note quotes a context"
+
+    markdown = audit.render([result]).replace("&#64;<!-- -->", "&#64;")
+    rest = re.sub(r"<code>[^<]*</code>", "", markdown)
+    for fragment in ("[x](", "<img", "@user", "#1", "|b|", "`c`"):
+        assert fragment not in rest, fragment
+    for element in re.findall(r"<code>([^<]*)</code>", markdown):
+        assert not re.search(r"[\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e]", re.sub(r"&#[0-9]+;", "", element))
+    table = [line for line in markdown.splitlines() if line.startswith("| <code>")]
+    assert len(table) == 1 and table[0].count("|") == 6, "one row, five cells"
+
+    plain = audit.render([result], markdown=False)
+    assert f"`{REPO + HOSTILE}`" in plain and f"declared but not enforced: {HOSTILE}" in plain
+
+
+def test_a_note_without_a_markdown_form_is_encoded_whole():
+    result = {"repo": REPO, "branch": BRANCH, "status": "drift", "notes": [f"raw {HOSTILE}"]}
+    assert f"- {audit.md_code('raw ' + HOSTILE)}" in audit.render([result])
