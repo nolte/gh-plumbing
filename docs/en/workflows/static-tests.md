@@ -127,11 +127,11 @@ jobs:
 | Input | Default | Purpose |
 | --- | --- | --- |
 | `fail_level` | `error` | Severity at which the job fails: `error`, `warning`, `info`, `any`, or `none`. The job annotates findings below it without failing. |
-| `path` | `.` | Base directory to search, one per line. |
+| `path` | `.` | Base directory to search, one per line. A path that doesn't exist fails the job. |
 | `pattern` | `*.sh` | File name pattern of the scripts, one per line. |
 | `exclude` | `*/.git/*` | Path pattern to leave out, one per line. A value replaces the default. |
-| `check_all_files_with_shebangs` | `false` | Also lint every file whose first line names a shell, whatever the file's name. |
-| `shellcheck_flags` | `--external-sources` | Flags for ShellCheck, split on spaces. The workflow sets the output format itself. |
+| `check_all_files_with_shebangs` | `false` | Also lint every file whose first line names `sh`, `bash`, `dash`, or `ksh` as its interpreter, whatever the file's name. |
+| `shellcheck_flags` | `--external-sources` | Flags for ShellCheck, split on spaces and line ends. The workflow sets the output format itself. |
 
 The job passes when no file matches. A repository without shell scripts can therefore call the workflow before it has any.
 

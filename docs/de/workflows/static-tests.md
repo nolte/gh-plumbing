@@ -127,11 +127,11 @@ jobs:
 | Input | Standard | Zweck |
 | --- | --- | --- |
 | `fail_level` | `error` | Schweregrad, ab dem der Job fehlschlägt: `error`, `warning`, `info`, `any` oder `none`. Befunde darunter annotiert der Job, ohne fehlzuschlagen. |
-| `path` | `.` | Basisverzeichnis der Suche, eines pro Zeile. |
+| `path` | `.` | Basisverzeichnis der Suche, eines pro Zeile. Ein Pfad, den es nicht gibt, lässt den Job fehlschlagen. |
 | `pattern` | `*.sh` | Dateinamensmuster der Skripte, eines pro Zeile. |
 | `exclude` | `*/.git/*` | Pfadmuster, das ausgelassen wird, eines pro Zeile. Ein Wert ersetzt den Standard. |
-| `check_all_files_with_shebangs` | `false` | Prüft zusätzlich jede Datei, deren erste Zeile eine Shell nennt, unabhängig vom Dateinamen. |
-| `shellcheck_flags` | `--external-sources` | Flags für ShellCheck, an Leerzeichen getrennt. Das Ausgabeformat setzt der Workflow selbst. |
+| `check_all_files_with_shebangs` | `false` | Prüft zusätzlich jede Datei, deren erste Zeile `sh`, `bash`, `dash` oder `ksh` als Interpreter nennt, unabhängig vom Dateinamen. |
+| `shellcheck_flags` | `--external-sources` | Flags für ShellCheck, an Leerzeichen und Zeilenenden getrennt. Das Ausgabeformat setzt der Workflow selbst. |
 
 Der Job ist grün, wenn keine Datei passt. Ein Repository ohne Shell-Skripte kann den Workflow daher schon aufrufen, bevor es welche hat.
 

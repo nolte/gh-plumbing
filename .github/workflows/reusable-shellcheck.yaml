@@ -23,7 +23,8 @@ on:
       path:
         description: |
           Base directory to search for scripts, as in `find <path>`. One path
-          per line.
+          per line. A path that does not exist fails the job, so a typing
+          error can't pass as "nothing to check".
         required: false
         type: string
         default: .
@@ -44,15 +45,16 @@ on:
         default: "*/.git/*"
       check_all_files_with_shebangs:
         description: |
-          Also lint every file whose first line is a shell shebang, whatever
-          its name. Off by default: it reaches files a repository merely
+          Also lint every file whose first line is a shebang for `sh`,
+          `bash`, `dash` or `ksh`, the shells ShellCheck reads, whatever the
+          file's name. Off by default: it reaches files a repository merely
           carries, such as vendored scripts.
         required: false
         type: boolean
         default: false
       shellcheck_flags:
         description: |
-          Flags for ShellCheck, split on spaces. The default follows `source`
+          Flags for ShellCheck, split on spaces and line ends. The default follows `source`
           statements into the files they name. Prefer a `# shellcheck
           disable=` comment next to the code over an `--exclude` here, which
           is invisible to the reader of the script it applies to. The output
@@ -133,24 +135,33 @@ jobs:
               ;;
           esac
 
-          # One entry per line. A path is anchored so `find` can't read it as
-          # an option.
+          # One entry per line; a carriage return before the line end is
+          # dropped. A path is anchored so `find` can't read it as an option,
+          # and it has to exist: `find` on a missing path would report an
+          # error, list nothing, and leave the job green with nothing checked.
           paths=()
           while IFS= read -r line; do
+            line="${line%$'\r'}"
             [[ -n "$line" ]] || continue
             [[ "$line" == /* || "$line" == . || "$line" == ./* ]] || line="./${line}"
+            if [[ ! -e "$line" ]]; then
+              echo "::error title=ShellCheck::An entry of input 'path' does not exist in the checkout."
+              exit 2
+            fi
             paths+=("$line")
           done <<<"$INPUT_PATH"
           (( ${#paths[@]} )) || paths=(.)
 
           names=()
           while IFS= read -r line; do
+            line="${line%$'\r'}"
             [[ -n "$line" ]] && names+=(-o -name "$line")
           done <<<"$INPUT_PATTERN"
           (( ${#names[@]} )) && { names[0]='('; names+=(')'); }
 
           excludes=()
           while IFS= read -r line; do
+            line="${line%$'\r'}"
             [[ -n "$line" ]] && excludes+=(-not -path "$line")
           done <<<"$INPUT_EXCLUDE"
 
@@ -161,12 +172,15 @@ jobs:
             files+=("$file")
           done < <(find "${paths[@]}" "${excludes[@]}" -type f "${names[@]}" -print0)
 
-          # With no pattern every file is in the list already.
+          # With no pattern every file is in the list already. The shebang
+          # has to name a shell ShellCheck reads as its interpreter, directly
+          # or through `env` (`#!/bin/sh`, `#!/usr/bin/env bash`); zsh or fish
+          # would only earn an error for a dialect it doesn't support.
           if [[ "$INPUT_SHEBANGS" == "true" ]] && (( ${#names[@]} )); then
             while IFS= read -r -d '' file; do
               files+=("$file")
             done < <(find "${paths[@]}" "${excludes[@]}" -type f -not "${names[@]}" -print0 \
-              | xargs -0 -r awk 'FNR == 1 { if (/^#!.*sh/) printf "%s%c", FILENAME, 0; nextfile }')
+              | xargs -0 -r awk 'FNR == 1 { if (/^#![ \t]*([^ \t]*\/)?(env[ \t]+(-S[ \t]*)?([^ \t]*\/)?)?(sh|bash|dash|ksh)([ \t]|\r?$)/) printf "%s%c", FILENAME, 0; nextfile }')
           fi
 
           if (( ${#files[@]} == 0 )); then
@@ -174,7 +188,7 @@ jobs:
             exit 0
           fi
 
-          read -r -a flags <<<"$INPUT_SHELLCHECK_FLAGS"
+          read -r -a flags <<<"${INPUT_SHELLCHECK_FLAGS//[$'\r\n']/ }"
           report="${RUNNER_TEMP}/shellcheck-report.json"
           # 0: no findings, 1: findings. Anything else means ShellCheck itself
           # could not do its work (a bad flag, an unreadable file).

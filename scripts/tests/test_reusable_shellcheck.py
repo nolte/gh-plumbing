@@ -162,6 +162,34 @@ def test_path_limits_the_search_and_is_not_read_as_an_option(run):
     assert (run.work / "a.sh").exists()
 
 
+@pytest.mark.parametrize("path", ["nope", "sub\nnope", "  sub"])
+def test_a_path_that_does_not_exist_fails_instead_of_passing_empty(run, path):
+    proc = run(files=("a.sh", "sub/b.sh"), path=path)
+    assert proc.returncode == 2
+    assert proc.stdout == "::error title=ShellCheck::An entry of input 'path' does not exist in the checkout.\n"
+    assert proc.args_seen == []
+
+
+def test_multi_line_inputs_from_a_yaml_block_keep_working(run):
+    """A `|` block ends in a line end; a file edited on Windows adds `\\r`."""
+    proc = run(files=("a.sh", "sub/b.bash", "vendor/c.sh"), path=".\r\n",
+               pattern="*.sh\r\n*.bash\r\n", exclude="*/.git/*\r\n*/vendor/*\r\n",
+               flags="--external-sources\n--severity=warning\n")
+    assert proc.linted == ["./a.sh", "./sub/b.bash"]
+    assert proc.args_seen[:3] == ["--external-sources", "--severity=warning", "--format=json1"]
+
+
+@pytest.mark.parametrize("shebang, linted", [
+    ("#!/bin/sh", True), ("#!/usr/bin/env bash", True), ("#!/bin/bash -eu", True),
+    ("#! /bin/dash", True), ("#!/usr/bin/env -S ksh", True), ("#!/bin/sh\r", True),
+    ("#!/usr/bin/env zsh", False), ("#!/usr/bin/fish", False),
+    ("#!/usr/bin/env python3 # sh", False), ("#!/usr/bin/env python3", False),
+])
+def test_shebang_has_to_name_a_shell_shellcheck_reads(run, shebang, linted):
+    (run.work / "tool").write_text(shebang + "\necho hi\n", encoding="utf-8")
+    assert ("./tool" in run(shebangs="true").linted) is linted
+
+
 def test_shebang_files_are_linted_only_when_asked(run):
     work = run.work
     (work / "bin").mkdir()
